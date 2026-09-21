@@ -277,6 +277,54 @@ def _camera_present() -> bool:
         return False
 
 
+WEB_SEARCH_TOOL_NAME: str = "web_search"
+WEB_SEARCH_TOOL_DESCRIPTION: str = (
+    "Look up a PUBLIC, CURRENT fact on the web and get a short grounded answer "
+    "back: weather, news, sports scores, prices, exchange rates, opening hours, "
+    "release dates, anything that changes over time and is not already in your "
+    "context. Unlike delegate_to_main this does NOT hand off — call it with the "
+    "question, the answer is added to your context, then you immediately SPEAK "
+    "it in this same turn, in the user's language. Do NOT use it for general "
+    "knowledge you already hold, for casual conversation, for the user's own "
+    "private data (their calendar, messages, devices, memories — delegate "
+    "those), or for any action. Call it at most once per question. If the "
+    "result is an error, say briefly that you could not check right now — "
+    "never guess a live fact."
+)
+
+WEB_SEARCH_TOOL: dict[str, Any] = {
+    "type": "function",
+    "name": WEB_SEARCH_TOOL_NAME,
+    "description": WEB_SEARCH_TOOL_DESCRIPTION,
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": (
+                    "The question to answer, self-contained (resolve 'there', "
+                    "'it', 'tomorrow' from the conversation into explicit "
+                    "places, names and dates), in the user's spoken language. "
+                    "Must not be empty."
+                ),
+            },
+        },
+        "required": ["query"],
+    },
+}
+
+
+def _web_search_available() -> bool:
+    """True when the client-side `web_search` tool should be registered: the
+    provider is the on-device Pipecat pipeline (the only one without a hosted
+    search of its own — Gemini grounds, GPT-Live's backend searches) and the
+    flag is on. Read at construction, like the vision gate."""
+    return (
+        config.REALTIME_PIPECAT_WEB_SEARCH
+        and config.REALTIME_PROVIDER.strip().lower() == "pipecat_v1"
+    )
+
+
 class RealtimeOrchestrator:
     """Manages a single realtime voice agent session.
 
@@ -358,6 +406,12 @@ class RealtimeOrchestrator:
         )
         if self._vision_enabled:
             tools.append(LOOK_TOOL)
+        # `web_search` (grounded public lookups) is registered only for the
+        # pipecat provider, whose relay LLM has no hosted search; Gemini and
+        # GPT-Live ground on their own side. See _handle_web_search_call.
+        self._web_search_enabled: bool = _web_search_available()
+        if self._web_search_enabled:
+            tools.append(WEB_SEARCH_TOOL)
         self._tools: list[dict[str, Any]] = tools + (extra_tools or [])
         # `look` cost guards: at most ONE image sent per turn, and no fresh image
         # within VISION_MIN_INTERVAL_S of the last send (the recent frame is still
@@ -1162,6 +1216,17 @@ class RealtimeOrchestrator:
                 continue
             if (
                 isinstance(output, FunctionCallOutput)
+                and output.name == WEB_SEARCH_TOOL_NAME
+            ):
+                # Blocking lookup (~4 s), answered with trigger_response=True:
+                # the model's follow-up reply is the spoken answer and is
+                # yielded by the branches below. Counts as produced — a turn
+                # that searched is neither silent nor rejectable.
+                self._handle_web_search_call(output)
+                produced = True
+                continue
+            if (
+                isinstance(output, FunctionCallOutput)
                 and output.name == EMOTION_TOOL_NAME
             ):
                 # `produced` decides whether the ack is safe to send — see
@@ -1383,6 +1448,69 @@ class RealtimeOrchestrator:
             self._idle_reset_pending = False
             self._turns_since_recycle = 0
             self._force_rebuild()
+
+    def _handle_web_search_call(self, output: FunctionCallOutput) -> None:
+        """Answer the model's `web_search` call with a grounded result.
+
+        Runs the lookup synchronously on this (turn output) thread: the
+        pipeline's tool handler is parked on its future meanwhile, bounded by
+        HAL_PIPECAT_TOOL_RESULT_TIMEOUT_S, and the turn-based path's dead-air
+        filler + thinking cue already cover the wait audibly and visually.
+        Every outcome is acknowledged with trigger_response=True — the model
+        must speak either the answer or a short "couldn't check", and an
+        unanswered call would only ever time out into the bridge's generic
+        error. On failure the payload also points the model at
+        delegate_to_main so the question still reaches the main agent, which
+        is where it went before this tool existed.
+        """
+        if self._agent is None:
+            return
+        query: str = ""
+        try:
+            args: dict[str, Any] = (
+                json.loads(output.arguments) if output.arguments else {}
+            )
+            query = str(args.get("query", "")).strip()
+        except (ValueError, TypeError):
+            pass
+
+        if not query:
+            logger.warning("[realtime][web_search] called with empty query — ignoring")
+            result_json = '{"error": "query must not be empty"}'
+        else:
+            from hal.realtime.web_search import WebSearchError, grounded_search
+
+            logger.info("[realtime][web_search] searching: %r", query[:200])
+            try:
+                res = grounded_search(
+                    query,
+                    url=config.REALTIME_PIPECAT_SEARCH_URL,
+                    api_key=config.REALTIME_PIPECAT_SEARCH_API_KEY,
+                    model=config.REALTIME_PIPECAT_SEARCH_MODEL,
+                    timeout_s=config.REALTIME_PIPECAT_SEARCH_TIMEOUT_S,
+                )
+            except WebSearchError as e:
+                logger.warning("[realtime][web_search] failed: %s", e)
+                result_json = json.dumps(
+                    {
+                        "error": str(e),
+                        "hint": "Tell the user you could not check right now, or "
+                        "call delegate_to_main with their words.",
+                    }
+                )
+            else:
+                logger.info(
+                    "[realtime][web_search] answered in %.2fs (queries=%s sources=%s): %r",
+                    res.elapsed_s, res.queries, res.sources, res.answer[:120],
+                )
+                result_json = json.dumps(
+                    {"result": res.answer, "sources": res.sources},
+                    ensure_ascii=False,
+                )
+
+        self._agent.send(
+            [FunctionCallResultInput(call_id=output.call_id, output=result_json)]
+        )
 
     def _handle_emotion_call(self, output: FunctionCallOutput, *, spoken: bool) -> None:
         """Fire the device's emotion expression without blocking the spoken turn.

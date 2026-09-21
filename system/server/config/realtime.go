@@ -104,6 +104,12 @@ type PipecatV1Realtime struct {
 	APIKey  string `json:"api_key,omitempty" yaml:"apiKey"`
 	BaseURL string `json:"base_url,omitempty" yaml:"baseURL"`
 	Model   string `json:"model,omitempty" yaml:"model"`
+	// WebSearch toggles the client-side `web_search` tool (pipecat_v1-only): the
+	// orchestrator answers public live-fact questions through the campaign-api
+	// Google-Search relay in-session instead of delegating to main. nil → HAL
+	// default (on). Kept here so an operator's explicit override survives config
+	// re-saves instead of being silently dropped on the next marshal.
+	WebSearch *bool `json:"web_search,omitempty" yaml:"webSearch"`
 }
 
 // Realtime per-provider defaults — what os-server resolves (and pushes) when the
