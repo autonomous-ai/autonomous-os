@@ -2109,17 +2109,21 @@ liên tục đồng ý.
    reject vẫn nhận cùng một kết quả identity duy nhất trước khi đi hạ nguồn. Bỏ qua
    khi context đã mang đúng tên, hoặc khi lượt đó là noise.
 
-   **Prepass không còn chặn model.** Trước đây nó chạy nội tuyến, ngay trước khi
-   mở lượt realtime, nên trọn vòng gọi ra ngoài nằm giữa lúc user dứt lời và lúc
-   model nhận được câu nói — đo trên lamp-0c89 (03/09/2026): 1.49s trong khoảng
-   trống 3.0s, phần còn lại là cú reconnect Gemini trước turn. Giờ nó chạy trên
-   thread riêng song song với cú reconnect đó, và lượt nói chỉ join lại
-   (`SPEAKER_PREPASS_JOIN_S`, `HAL_SPEAKER_PREPASS_JOIN_S`, mặc định 2.0s) ở đúng
-   chỗ đầu tiên cần tới tên người nói. Thời gian chờ là **trần**, không phải độ
-   trễ: prepass xong trong lúc reconnect thì không tốn gì, còn chạm trần chỉ có
-   nghĩa là context lượt này gửi đi khi chưa biết người nói — đúng bằng những gì
-   dòng always-listening ở trên vẫn làm, và correction `[TURN CONTEXT UPDATE]` vẫn
-   phủ được. Đường deferred cho transcript ngắn giữ nguyên.
+   **Giới hạn chờ identity.** Nhận diện người nói chạy trên thread riêng.
+   Realtime theo lượt chỉ chờ tối đa `HAL_SPEAKER_PREPASS_COMMIT_JOIN_S`
+   (mặc định **0.2s**) trước commit, tránh thêm tới 2s chờ embedding trước khi
+   Gemini phản hồi. Kết quả có trước commit vẫn cập nhật context của lượt;
+   kết quả muộn dùng để gắn danh tính khi gửi downstream, không chèn vào lời
+   đang sinh. Trước dispatch, HAL join cùng worker bằng
+   `HAL_SPEAKER_PREPASS_JOIN_S` (mặc định **2.0s**). Live và đường không qua
+   realtime giữ thời gian chờ identity thông thường. Transcript ngắn mơ hồ
+   giữ nguyên chính sách trì hoãn nhận diện.
+
+   Với lượt hợp lệ, không phải noise, timer filler trung tính được bật trước
+   khoảng chờ pre-commit, kể cả khi realtime đã stream audio trong lúc thu.
+   Cùng timer được truyền cho bộ nhận phản hồi, không tạo thêm timer filler.
+   Delay và ownership giữ nguyên; endpoint im lặng vẫn là 0.8s sau STT final,
+   cùng ngưỡng fallback được cấu hình riêng.
 
    **Kết quả được cache.** Trước đây nhận dạng chạy mỗi lượt, lượt nào cũng chạy:
    một cuộc mười lượt trả tiền mười lần gọi ra ngoài để nghe đúng một cái tên.

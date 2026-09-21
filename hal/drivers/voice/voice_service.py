@@ -2822,19 +2822,16 @@ class VoiceService:
                 )
                 speaker_prepass_thread.start()
 
-            def join_speaker_prepass() -> None:
-                """Wait for the backgrounded prepass, bounded.
+            def join_speaker_prepass(wait_s: float = voice_cfg.SPEAKER_PREPASS_JOIN_S) -> None:
+                """Wait within the commit or downstream identity budget.
 
-                Called once the realtime turn is open, which is the first point
-                the speaker's name is needed. A prepass that finished during the
-                connect costs nothing here. Hitting the ceiling only means this
-                turn's context goes out with the speaker unresolved, which the
-                late-correction path below already handles.
+                A completed prepass costs nothing. Results ready before commit
+                correct realtime context; later results decorate main dispatch.
                 """
                 if speaker_prepass_thread is None or not speaker_prepass_thread.is_alive():
                     return
                 waited_from = time.time()
-                speaker_prepass_thread.join(voice_cfg.SPEAKER_PREPASS_JOIN_S)
+                speaker_prepass_thread.join(max(0.0, wait_s))
                 logger.info(
                     "[realtime] waited %.2fs for speaker-ID prepass (resolved=%s)",
                     time.time() - waited_from,
@@ -2862,7 +2859,7 @@ class VoiceService:
                         buf_duration,
                     )
             else:
-                if not realtime_turn_started and realtime_allowed:
+                if realtime_allowed and not voice_cfg.LIVE_MODE:
                     post_capture_wait_filler = _WaitFiller(owner=interaction_id)
                     if should_arm_realtime_wait_filler(combined):
                         post_capture_wait_filler.arm()
@@ -2871,9 +2868,14 @@ class VoiceService:
                     post_capture_wait_filler.cancel()
                     post_capture_wait_filler = None
 
-            # Everything below reads the resolved speaker, so the parallel
-            # window ends here.
-            join_speaker_prepass()
+            # Acknowledge promptly and let slow speaker recognition overlap the
+            # model reply. Only identities ready now enter pre-commit context;
+            # main-agent dispatch below still waits for the identity result.
+            join_speaker_prepass(
+                voice_cfg.SPEAKER_PREPASS_COMMIT_JOIN_S
+                if realtime_turn_started and not voice_cfg.LIVE_MODE
+                else voice_cfg.SPEAKER_PREPASS_JOIN_S
+            )
 
             # `discard_open_activity()` starts its replacement session in the
             # background. A user can begin the next utterance before that
@@ -3018,6 +3020,9 @@ class VoiceService:
                 # Heard, but not addressed to us (no wake word, outside the
                 # follow-up window). Not a missed response — an excluded one.
                 voice_metrics.exclude(interaction_id, voice_metrics.EXCL_NOT_ADDRESSED)
+            if (dispatch_to_main and not downstream_dropped and not live_opener_consumed
+                    and speaker_prepass_thread is not None):
+                join_speaker_prepass()
             if (defer_speaker_prepass and dispatch_to_main and not downstream_dropped
                     and not live_opener_consumed):
                 resolve_turn_speaker_identity(after_realtime_decision=True)

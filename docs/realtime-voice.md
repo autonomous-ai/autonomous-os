@@ -2160,18 +2160,21 @@ Read the counters in the session-END log line: `substituted` at ~100 % of
    the same one-time identity result. It is skipped when the context already carried
    the right name, or when the turn is noise.
 
-   **The prepass no longer blocks the model.** It used to run inline, strictly
-   before the realtime turn opened, so its whole external round trip sat between
-   the user falling silent and the model receiving the utterance — measured on
-   lamp-0c89 (03/09/2026): 1.49s of a 3.0s gap, the rest being the Gemini
-   pre-turn reconnect. It now runs on its own thread while that reconnect
-   happens, and the turn joins it (`SPEAKER_PREPASS_JOIN_S`, `HAL_SPEAKER_PREPASS_JOIN_S`,
-   default 2.0s) at the first point the name is needed. The wait is a ceiling,
-   not a delay: a prepass that finished during the reconnect costs nothing, and
-   reaching the ceiling only means this turn's context goes out with the speaker
-   unresolved — exactly what the always-listening row above already does, and the
-   `[TURN CONTEXT UPDATE]` correction still covers it. The deferred short-transcript
-   path is unchanged.
+   **Bounded identity waits.** Speaker recognition runs on its own thread.
+   Turn-based realtime waits at most `HAL_SPEAKER_PREPASS_COMMIT_JOIN_S`
+   (default **0.2s**) before commit, so an external embedding call no longer adds
+   up to 2s before Gemini can respond. A result ready before commit still updates
+   this turn's context; a later result is used for downstream speaker decoration,
+   not injected into an already-generating reply. Before downstream dispatch,
+   HAL joins the same worker with `HAL_SPEAKER_PREPASS_JOIN_S` (default **2.0s**).
+   Live and non-realtime paths retain that normal identity wait. Short ambiguous
+   transcripts retain their deferred identity policy.
+
+   For an authorized, non-noise turn, the existing neutral filler timer is armed
+   before the pre-commit wait, even when realtime already started streaming during
+   capture. The same timer is passed to the response consumer, preventing a second
+   filler timer. Its delay and ownership remain unchanged; silence endpointing
+   remains 0.8s after STT final, with the separately configured fallback clock.
 
    **The verdict is cached.** Recognition used to run once per turn, every turn:
    a ten-turn conversation paid for ten external calls to be told the same name.
