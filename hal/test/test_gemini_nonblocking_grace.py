@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from google.genai.live import AsyncSession
 
-from hal.realtime.models import FunctionCallOutput, OutputEvent, TextOutput, TurnDoneEvent
+from hal.realtime.models import AudioOutput, FunctionCallOutput, OutputEvent, TextOutput, TurnDoneEvent
 from hal.realtime.voice_agent import gemini_live
 from hal.realtime.voice_agent.gemini_live import GeminiLiveAgent
 
@@ -24,10 +24,14 @@ class _Session:
             self.messages.put_nowait(message)
         self.reads = 0
         self.tool_responses = []
+        self.control_turns = []
 
     async def _receive(self):
         self.reads += 1
         return await self.messages.get()
+
+    async def send_client_content(self, **kwargs):
+        self.control_turns.append(kwargs)
 
     async def send_tool_response(self, *, function_responses):
         self.tool_responses.extend(function_responses)
@@ -59,6 +63,8 @@ def _agent(messages, model="gemini-3.8-live-extended-thinking"):
     agent._recv_queue = queue.Queue()
     agent._turn_done = threading.Event()
     agent._first_audio_received = False
+    agent._last_audio_sent_at = None
+    agent._activity_end_sent_at = None
     agent._pending_tool_calls = set()
     agent._turn_gen = 0
     agent._live_user_turn_id = "user-1"
@@ -70,6 +76,7 @@ def _agent(messages, model="gemini-3.8-live-extended-thinking"):
 @pytest.fixture(autouse=True)
 def _short_grace(monkeypatch):
     monkeypatch.setattr(gemini_live.app_config, "REALTIME_NONBLOCKING_TOOL_GRACE_S", 0.02)
+    monkeypatch.setattr(gemini_live.app_config, "REALTIME_OUTCOME_TIMEOUT_S", 0.03)
 
 
 def _receive(agent):
@@ -240,6 +247,47 @@ def test_completion_ack_does_not_repeat_spoken_answer_or_hide_later_delegate():
     _assert_done(agent, events)
 
 
+@pytest.mark.parametrize("generation", [False, True])
+@pytest.mark.parametrize("outcome", ["complete_response", "delegate_to_main", None])
+def test_first_terminal_stops_extra_speech_and_audio_but_keeps_routing(generation, outcome):
+    direct_answer = outcome == "complete_response"
+    initial_text = "Two plus two is four." if direct_answer else "I can help with that."
+    extra_text = "Sorry, there was a system error." if direct_answer else "I cannot access your email."
+    request = "What is two plus two?" if direct_answer else "Read my newest email."
+
+    def spoken(text):
+        message = _terminal()
+        message.server_content.turn_complete = False
+        message.server_content.output_transcription = SimpleNamespace(text=text)
+        message.server_content.model_turn = SimpleNamespace(parts=[
+            SimpleNamespace(thought=False, text=None,
+                            inline_data=SimpleNamespace(data=b"\x00\x00" * 4)),
+        ])
+        return message
+
+    messages = [spoken(initial_text), _terminal(generation=generation), spoken(extra_text)]
+    if outcome is not None:
+        tool = _tool(outcome)
+        tool.tool_call.function_calls[0].args = {} if direct_answer else {"message": request}
+        messages.append(tool)
+    agent = _agent(messages)
+    agent._user_transcript = request
+    events = _receive(agent)
+    outputs = [event.output for event in events if isinstance(event, OutputEvent)]
+    assert [output.text for output in outputs if isinstance(output, TextOutput)] == [initial_text]
+    assert len([output for output in outputs if isinstance(output, AudioOutput)]) == 1
+    assert events[-1].fallback_to_main is (outcome is None)
+    assert events[-1].execution_completed is (outcome is not None)
+    assert events[-1].user_transcript == request
+    if outcome == "delegate_to_main":
+        call, = _calls(events)
+        assert call.name == outcome
+        assert call.user_transcript == request
+    else:
+        assert not _calls(events)
+    _assert_done(agent, events)
+
+
 @pytest.mark.parametrize("extended", [False, True])
 def test_fail_fast_preserves_request_and_explicitly_falls_back_for_extended(extended):
     model = "gemini-3.8-live-extended-thinking" if extended else "gemini-3.1-flash-live-preview"
@@ -335,3 +383,84 @@ def test_filler_is_emitted_immediately_while_waiting_for_delayed_delegate(monkey
                 await asyncio.gather(task, return_exceptions=True)
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('complete', [True, False])
+@pytest.mark.parametrize('generation', [True, False])
+def test_independent_outcome_preserves_spoken_turn_and_route(monkeypatch, complete, generation):
+    from hal.realtime import response_outcome
+    observed = []
+
+    async def check(request, answer, **kwargs):
+        observed.append((request, answer))
+        return complete
+
+    monkeypatch.setattr(response_outcome, 'spoken_response_complete', check)
+    speech = _terminal(generation=generation)
+    speech.server_content.output_transcription = SimpleNamespace(text='Cali is rainy. Otters hold hands.')
+    agent = _agent([speech, _terminal()])
+    agent._user_transcript = 'Tell me something fun and check the weather in Cali.'
+    events = _receive(agent)
+    done = next(e for e in events if isinstance(e, TurnDoneEvent))
+    assert observed == [('Tell me something fun and check the weather in Cali.',
+                         'Cali is rainy. Otters hold hands.')]
+    assert done.execution_completed is complete
+    assert done.fallback_to_main is (not complete)
+    assert done.user_turn_id == 'user-1'
+    assert done.user_transcript == observed[0][0]
+    texts = [e.output.text for e in events if isinstance(e, OutputEvent)
+             and isinstance(e.output, TextOutput)]
+    assert texts == [observed[0][1]]
+    assert not agent._session.control_turns
+
+
+def test_late_delegate_wins_over_independent_completion(monkeypatch):
+    from hal.realtime import response_outcome
+
+    async def check(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr(response_outcome, 'spoken_response_complete', check)
+    speech = _terminal()
+    speech.server_content.output_transcription = SimpleNamespace(text='Here is a fun fact.')
+    agent = _agent([speech, _tool()])
+    events = _receive(agent)
+    calls = [e.output.name for e in events if isinstance(e, OutputEvent)
+             and isinstance(e.output, FunctionCallOutput)]
+    assert calls == ['delegate_to_main']
+
+
+def test_filler_confirmation_cannot_override_incomplete_check(monkeypatch):
+    from hal.realtime import response_outcome
+
+    async def check(*args, **kwargs):
+        return False
+
+    monkeypatch.setattr(response_outcome, 'spoken_response_complete', check)
+    speech = _terminal()
+    speech.server_content.output_transcription = SimpleNamespace(text='I can help with that.')
+    agent = _agent([speech, _tool('complete_response')])
+    events = _receive(agent)
+    done = next(e for e in events if isinstance(e, TurnDoneEvent))
+    assert done.fallback_to_main
+    assert not done.execution_completed
+    assert done.user_transcript == 'play a song'
+
+
+def test_slow_outcome_check_is_cancelled_at_its_own_deadline(monkeypatch):
+    from hal.realtime import response_outcome
+    cancelled = []
+
+    async def check(*args, **kwargs):
+        try:
+            await asyncio.sleep(60)
+        finally:
+            cancelled.append(True)
+
+    monkeypatch.setattr(response_outcome, 'spoken_response_complete', check)
+    speech = _terminal()
+    speech.server_content.output_transcription = SimpleNamespace(text='I can help with that.')
+    agent = _agent([speech])
+    events = _receive(agent)
+    assert cancelled == [True]
+    assert next(e for e in events if isinstance(e, TurnDoneEvent)).fallback_to_main

@@ -149,20 +149,14 @@ STT_KEEPALIVE = os.environ.get("HAL_STT_KEEPALIVE", "false").lower() == "true"
 STT_KEEPALIVE_PING_S = float(os.environ.get("HAL_STT_KEEPALIVE_PING_S", "3"))
 
 # ---------------------------------------------------------------------------
-# Speaker-ID prepass — how long the turn may wait for it before committing
+# Speaker-ID prepass — bounded waits before commit and downstream dispatch
 # ---------------------------------------------------------------------------
-# The prepass is an external embedding call (measured 1.49s on lamp-0c89,
-# 03/09/2026) and it used to run STRICTLY BEFORE the realtime turn opened, so
-# its whole round trip sat in front of the Gemini connect and the audio flush —
-# dead time between the user finishing a sentence and the model hearing it. It
-# now runs on its own thread while that connect happens, and the turn joins it
-# here, just before the point where the speaker's name is actually needed.
-#
-# The wait is a ceiling, not a delay: a prepass that finished during the connect
-# costs nothing. Reaching the ceiling only means this turn's [TURN CONTEXT] goes
-# out with the speaker unresolved — the same thing the always-listening path has
-# always done, and the late-correction path already covers it.
+# Recognition runs in the background. Turn-based realtime gives it only the
+# short COMMIT budget before sending activityEnd; the normal JOIN budget is
+# retained before downstream dispatch and for live/non-realtime paths.
 SPEAKER_PREPASS_JOIN_S = float(os.environ.get("HAL_SPEAKER_PREPASS_JOIN_S", "2.0"))
+# Brief pre-commit opportunity; the remaining identity work overlaps the reply.
+SPEAKER_PREPASS_COMMIT_JOIN_S = float(os.environ.get("HAL_SPEAKER_PREPASS_COMMIT_JOIN_S", "0.2"))
 
 # How long a resolved speaker identity is reused instead of re-running the
 # recognizer. The prepass is an external inference call on every turn — a

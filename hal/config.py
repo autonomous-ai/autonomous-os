@@ -1940,6 +1940,10 @@ REALTIME_FIRST_CHUNK_MAX_CHARS: int = int(
     os.environ.get("HAL_REALTIME_FIRST_CHUNK_MAX_CHARS", "0")
 )
 
+
+# Independent spoken-response routing check; overlaps the tool grace.
+REALTIME_OUTCOME_TIMEOUT_S: float = float(os.environ.get("HAL_REALTIME_OUTCOME_TIMEOUT_S", "10"))
+
 # --- Realtime: Summarizer (Anthropic Messages API) ---
 REALTIME_SUMMARIZER_ENABLED: bool = os.environ.get("HAL_REALTIME_SUMMARIZER_ENABLED", "true").lower() in ("1", "true", "yes")
 REALTIME_SUMMARIZER_API_KEY: str = os.environ.get("HAL_REALTIME_SUMMARIZER_API_KEY", "") or _os_cfg_get("llm_api_key", "")

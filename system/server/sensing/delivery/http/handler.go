@@ -23,6 +23,7 @@ import (
 	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/intent"
+	"go.autonomous.ai/os/system/intent/jev"
 	"go.autonomous.ai/os/system/lib/flow"
 	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/lib/i18n"
@@ -137,6 +138,7 @@ type HarnessVoiceSnapshot struct {
 
 // SensingHandler handles incoming sensing events from HAL and forwards them to the agent.
 type SensingHandler struct {
+	intentResolver   *jev.Resolver
 	agentGateway     domain.AgentGateway
 	monitorBus       *monitor.Bus
 	config           *config.Config
@@ -202,11 +204,12 @@ func ProvideSensingHandler(gw domain.AgentGateway, bus *monitor.Bus, cfg *config
 	// the model. Re-evaluated on every config change (see runConfigChangeListener).
 	intent.SetChitchatEnabled(!cfg.RealtimeEnabled())
 	return &SensingHandler{
-		agentGateway: gw,
-		monitorBus:   bus,
-		config:       cfg,
-		statusLED:    sled,
-		isSleeping:   isSleeping,
+		intentResolver: jev.NewResolver(),
+		agentGateway:   gw,
+		monitorBus:     bus,
+		config:         cfg,
+		statusLED:      sled,
+		isSleeping:     isSleeping,
 	}
 }
 
@@ -317,13 +320,17 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 
 	// Voice commands: try local intent matching first for instant response
 	if (req.Type == "voice" || req.Type == "voice_command" || req.Type == "voice_followup") && h.config.LocalIntentEnabled() {
-		if result := intent.Match(req.Message); result != nil {
+		if result := h.matchVoiceIntent(c.Request.Context(), req.Message); result != nil {
 			// Generate a dedicated local-intent trace ID so this turn doesn't
 			// share the global trace of an in-flight agent turn.
 			localRunID := fmt.Sprintf("local-intent-%d", time.Now().UnixMilli())
 			telemetry.ReportTaskStarted(req.Type, req.InteractionID, localRunID)
 			turnStart := flow.Start("sensing_input", startPayload, localRunID)
-			flow.Log("intent_match", map[string]any{"message": req.Message, "tts": result.TTSText, "rule": result.Rule, "actions": result.Actions}, localRunID)
+			source := "local"
+			if result.Source != "" {
+				source = result.Source
+			}
+			flow.Log("intent_match", map[string]any{"message": req.Message, "tts": result.TTSText, "rule": result.Rule, "actions": result.Actions, "source": source}, localRunID)
 			if result.TTSText != "" {
 				owner := req.InteractionID
 				go func() {
@@ -350,7 +357,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 			}
 			h.monitorBus.Push(domain.MonitorEvent{
 				Type:    "intent_match",
-				Summary: "[local] " + req.Message + " → " + result.TTSText,
+				Summary: "[" + source + "] " + req.Message + " → " + result.TTSText,
 			})
 			flow.End("sensing_input", turnStart, map[string]any{"path": "local"}, localRunID)
 			if result.ExecutionFailed {

@@ -114,3 +114,51 @@ def test_missing_outcome_after_spoken_filler_is_not_handled(monkeypatch):
     assert not result.execution_completed
     assert result.delegate_msg == REQUEST
     realtime.save_turn.assert_not_called()
+
+
+def test_confirmed_answer_reaches_handled_history_without_main_execution(monkeypatch):
+    from types import SimpleNamespace
+    from hal.drivers.voice._internal.turn_dispatch import dispatch_turn
+    from hal.drivers.voice._internal.sensing_sender import SendResult
+
+    for name, value in [('REALTIME_ENABLED', True), ('REALTIME_NATIVE_AUDIO', False),
+                        ('REALTIME_PROVIDER', 'gemini'), ('REALTIME_SESSION_MAX_TURNS', 0)]:
+        monkeypatch.setattr(config, name, value)
+    monkeypatch.setattr(realtime_turn, 'gemini_needs_idle_workaround', lambda: False)
+    monkeypatch.setattr(realtime_turn, '_thinking_cue_start', lambda: None)
+    monkeypatch.setattr(realtime_turn, '_thinking_cue_clear', lambda: None)
+    monkeypatch.setattr(realtime_turn, '_reply_language_name', lambda: 'English')
+    monkeypatch.setattr(realtime_turn, 'harness_followup_active', lambda: False)
+    request = 'Say something fun and check the weather in Cali.'
+    reply = 'Otters hold hands while asleep. Cali is rainy today.'
+    agent = Agent()
+    agent._recv_queue.put(OutputEvent(output=TextOutput(text=reply)))
+    agent._recv_queue.put(TurnDoneEvent(execution_completed=True, user_turn_id='vi-complete'))
+    orchestrator = _orchestrator(agent)
+    realtime = Mock(available=True, execution_completed=False)
+
+    def stream():
+        yield from orchestrator.stream_output()
+        realtime.execution_completed = orchestrator.execution_completed
+
+    realtime.stream_output.side_effect = stream
+    result = realtime_turn.run_realtime_turn(
+        realtime, Mock(), lambda text: text, request, [object()], 1.0,
+        wait_filler=Mock(), interaction_id='vi-complete')
+    assert result.handled and result.execution_completed
+    assert not result.delegated
+    assert result.route == realtime_turn.ROUTE_HANDLED
+    realtime.save_turn.assert_called_once_with(user_text=request, agent_text=reply)
+    decorator = SimpleNamespace(
+        classify_wake_word=lambda text: (text, 'voice'),
+        identify_and_decorate=lambda text, audio: (text, 'test', 'Test'),
+        submit_speech_emotion_from_session=lambda *a, **kw: None)
+    sender = SimpleNamespace(send=Mock(return_value=SendResult(run_id='history', delivered=True)))
+    dispatch_turn(decorator, sender, request, [], [], result, interaction_id='vi-complete')
+    sender.send.assert_called_once()
+    args, kwargs = sender.send.call_args
+    assert kwargs['event_type'] == 'voice_agent_handled'
+    assert kwargs['interaction_id'] == 'vi-complete'
+    assert kwargs['skip_echo']
+    assert '[HANDLED]' in args[0]
+    assert '[REPLY] ' + reply in args[0]
