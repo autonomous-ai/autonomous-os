@@ -319,6 +319,13 @@ workspace instruction về tool và session convention của runtime đó. Nó c
 `ROBOT.md` của device, để agent không giả định phần cứng không tồn tại. Nguồn
 runtime này cố ý là gateway đã ready, không phải `config.agent_runtime`, vì
 config có thể lệch tạm thời trong khi reconcile runtime switch.
+Restart os-server không phải yêu cầu đánh thức thiết bị đang ngủ. Với body có
+`expression`, startup kiểm tra HAL `GET /emotion/status` ngay trước greeting;
+bỏ qua cả greeting và wake-focus nếu đang ngủ hoặc không đọc được trạng thái.
+Body không có `expression` bỏ qua probe này. Passive sensing cũng hỏi HAL thay
+vì coi process Go mới là đang thức; ambient kiểm tra HAL trước khi tiếp tục
+chuyển động idle hoặc tự nói.
+
 Gửi greeting xong, os-server gọi HAL `POST /voice/wake-focus?source=boot_greeting`
 để mở cửa sổ follow-up của wake word (`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`), nên user
 trả lời greeting được mà không cần wake phrase. HAL no-op khi wake word tắt hoặc

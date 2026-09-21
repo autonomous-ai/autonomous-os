@@ -296,25 +296,26 @@ func ProvideAgentHandler(gw domain.AgentGateway, bus *monitor.Bus, sled *statusl
 // passive sensing events. HAL decides: lastEmotion only moves when the AGENT
 // expresses an emotion, so a wake that skips the agent (button tap, web UI,
 // direct POST to HAL) left this stuck on "sleepy" and dropped sensing on an
-// awake device. It stays as the awake-path filter, which keeps HTTP off the
-// common path, and as the fallback when HAL is unreachable.
+// awake device. Conversely, os-server restart clears lastEmotion while HAL
+// can remain asleep. Only use lastEmotion as a fallback when HAL is unreachable.
 func (h *AgentHandler) IsSleeping() bool {
+	return h.isSleeping(hal.GetSleeping)
+}
+
+func (h *AgentHandler) isSleeping(getSleeping func() (bool, error)) bool {
 	h.lastEmotionMu.Lock()
 	believesAsleep := h.lastEmotion == "sleepy"
 	h.lastEmotionMu.Unlock()
-	if !believesAsleep {
-		return false
-	}
 	// Devices without `expression` never mount HAL's /emotion route, so asking
 	// would 404 on every event (same gate as fetchHALEmotion).
 	if !device.Has(h.config.DeviceTypeOrDefault(), device.CapExpression) {
-		return true
+		return believesAsleep
 	}
-	sleeping, err := hal.GetSleeping()
+	sleeping, err := getSleeping()
 	if err != nil {
 		slog.Debug("sleep gate: HAL unreachable, keeping lastEmotion",
 			"component", "agent", "error", err)
-		return true
+		return believesAsleep
 	}
 	return sleeping
 }
