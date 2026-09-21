@@ -61,6 +61,20 @@ action** bullet in all four provider prompts; `hal/test/test_realtime_find_deleg
 pins the text. The decision itself is not enforced in code — only real speech on
 a device exercises it.
 
+### Research, analysis and documents delegate
+
+Grounding answers ONE fresh public fact. Multi-step work — research, a
+comparison, "which option should I pick", brainstorming, anything that ends in
+a report or document — is not a lookup, and answering it in two spoken
+sentences is the failure this rule removes. It is listed as a **Research,
+analysis & documents** bullet in every provider prompt and as a sentence in the
+shared `delegate_to_main` description; Gemini's Google Search bullet carries the
+matching "single facts only" boundary, because it is the one prompt that can
+search in-session. What the main agent then does with the request is its own
+business — it may have a research skill installed, or it may answer as best it
+can and say what it could not verify; either way the work belongs on the main
+lane. `hal/test/test_realtime_research_delegation.py` pins the text.
+
 ### Addressed speech before persona or actions
 
 All realtime provider prompts give the addressed-speech policy priority over

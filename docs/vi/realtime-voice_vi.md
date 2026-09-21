@@ -63,6 +63,20 @@ không phải là look), và bullet **Finding things is an action** trong cả b
 quyết định không được ép bằng code — chỉ giọng nói thật trên thiết bị mới kiểm
 tra được.
 
+### Research, analysis và tài liệu thì delegate
+
+Grounding chỉ trả lời MỘT sự kiện công khai mới. Việc nhiều bước — nghiên cứu,
+so sánh, "nên chọn phương án nào", brainstorm, bất cứ gì kết thúc bằng một báo
+cáo hay tài liệu — không phải là tra cứu, và trả lời nó bằng hai câu nói chính
+là lỗi mà quy tắc này loại bỏ. Nó nằm ở bullet **Research, analysis &
+documents** trong mọi prompt provider và một câu trong mô tả `delegate_to_main`
+dùng chung; bullet Google Search của Gemini mang thêm ranh giới "single facts
+only", vì đó là prompt duy nhất tìm kiếm được ngay trong phiên. Main agent xử lý
+tiếp thế nào là việc của nó — có thể đã cài một skill research, cũng có thể trả
+lời trong khả năng và nói rõ phần nào chưa kiểm chứng được; kiểu gì việc đó cũng
+thuộc lane chính. `hal/test/test_realtime_research_delegation.py` pin phần text
+này.
+
 ### Xác định lời nói hướng đến thiết bị trước persona hoặc hành động
 
 Prompt của mọi provider realtime ưu tiên quy tắc lời nói hướng đến thiết bị
