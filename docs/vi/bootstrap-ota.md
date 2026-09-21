@@ -12,6 +12,24 @@ Thiết bị chạy **5 thành phần phần mềm** trên board được hỗ t
 | **OpenClaw** | Node.js package | `npm install -g` | `openclaw.service` | Global npm |
 | **HAL** | Python package | Tải zip từ OTA | `hal.service` | `/opt/hal/` |
 
+HAL hỗ trợ CPython **3.12.x** (`requires-python = ">=3.12,<3.13"`).
+`uv sync --python 3.12` chọn interpreter nhưng vẫn resolve toàn bộ dải Python
+và optional extras mà project khai báo. Dải `>=3.12` không có cận trên có thể làm
+OTA ARM64 thất bại ở nhánh Python 3.14 (LeRobot đã pin cần Torch <2.8, không có
+wheel phù hợp cho nhánh đó). Giữ dải Python và `hal/uv.lock` đồng bộ; resolve lỗi
+ở staging sẽ khôi phục HAL cũ.
+
+Gói HAL mang theo `uv.lock`; script release chạy
+`uv lock --python 3.12 --check` trước khi tăng version hoặc upload. Updater dùng
+`uv sync --locked` khi archive có lockfile; archive cũ không có lock giữ đường
+resolve cũ. Loại lock khỏi ZIP buộc device resolve lại từ đầu: với uv 0.12.15,
+HAL 0.1.169 lỗi ở nhánh Python >=3.13 ARM64/Reachy dù project đã giới hạn 3.12;
+cùng archive thêm lock đã kiểm tra thì dry-run cài đặt locked trên device đạt.
+
+Các trình build image OrangePi, Pi 4 và Pi 5 cũng dùng `--locked` khi gói HAL
+tải về có `uv.lock`. HAL được lấy từ OTA metadata, không phải checkout local;
+chạy lại build sau khi phát hành gói đã sửa.
+
 ### Sơ đồ hệ thống
 
 ```
