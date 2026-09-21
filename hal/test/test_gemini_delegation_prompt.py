@@ -54,3 +54,29 @@ def test_unresolved_actions_cannot_be_marked_as_direct_answer_completion():
     assert "those require `delegate_to_main` with the user's request instead" in PROMPT
     assert "Do not call `complete_response` after delegation or rejection" in PROMPT
     assert 'call `delegate_to_main(message="Play a song")`, never `complete_response`' in PROMPT
+
+
+def test_account_access_is_main_agent_owned_not_a_persona_answer():
+    assert "You do not know which services the owner has linked" in PROMPT
+    assert "Every request to check or read email" in PROMPT
+    assert "determine account/connector access or connection status MUST delegate" in PROMPT
+    assert '"your email" is an account request, not a question about your persona' in PROMPT
+    assert "The main agent checks the actual linked state" in PROMPT
+    assert 'Account ownership, email, and connector access questions follow the delegation rule above' in PROMPT
+
+
+def test_email_acknowledgment_cannot_claim_or_deny_access():
+    assert "Never claim that an account is connected or disconnected" in PROMPT
+    assert "that you have or lack access" in PROMPT
+    assert "that you do not have an email account" in PROMPT
+    assert 'Never use "I\'m a desk lamp"' in PROMPT
+    assert "do not append an access claim, refusal, setup advice, or a second answer" in PROMPT
+    assert "do not use `complete_response` for an access denial" in PROMPT
+
+
+def test_email_examples_delegate_the_original_request():
+    for request in ("Check your email", "Is my Gmail connected?", "Read my latest email"):
+        example = next(line for line in PROMPT.splitlines()
+                       if line.startswith(f'User: "{request}"'))
+        assert f'delegate_to_main(message="{request}")' in example
+        assert "optional neutral acknowledgment" in example

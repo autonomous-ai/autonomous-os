@@ -234,11 +234,28 @@ Với Gemini `extended-thinking`, tool dùng `NON_BLOCKING`: câu filler như
 Provider thêm `complete_response` để xác nhận câu trả lời trực tiếp đã đáp ứng
 yêu cầu. Hội thoại, kiến thức hoặc tra cứu công khai đã xong có thể dùng xác nhận
 này; hành động, lời hứa, lỗi và việc chưa giải quyết phải delegate. Câu trả lời
-trực tiếp cần outcome tường minh này cùng terminal thành công của provider mới
+trực tiếp cần outcome được xác nhận cùng terminal thành công của provider mới
 được tính handled/completed. Text/audio đơn thuần không chứng minh hoàn tất.
 
+Với lời đã phát nhưng thiếu quyết định routing, HAL chạy kiểm tra độc lập bằng
+text model trong cửa sổ grace hiện có, dùng model, endpoint và credential của
+realtime summarizer. Đầu vào gồm yêu cầu gốc, lời đã nói và bằng chứng tìm kiếm
+công khai; bước kiểm tra không có tool hay phát âm thanh. Chỉ kết quả chính xác
+`COMPLETE` chấp nhận lượt hội thoại/tra cứu đã trả lời đủ. Filler, lỗi, truy cập
+tài khoản, hành động vật lý và yêu cầu hỗn hợp còn việc giữ fallback. Timeout,
+thiếu credential hoặc kết quả sai định dạng không cung cấp xác nhận độc lập.
+Có thêm một lượt text model với hạn riêng `HAL_REALTIME_OUTCOME_TIMEOUT_S`
+(mặc định 10 giây từ terminal
+đầu tiên). Bước này chạy đồng thời với grace tool 6 giây; khi hết grace có thể
+chờ kết quả thêm tối đa 4 giây theo mặc định. Tool routing thật hủy kiểm tra.
+INCOMPLETE ghi đè `complete_response` sai sau filler; kiểm tra không khả dụng
+giữ quyết định provider, hoặc fallback nếu chưa có quyết định. Câu trả lời được
+xác nhận đi qua `realtime_handled` → `voice_agent_handled` → history sync, không
+chạy main agent. Kiểm tra ngữ nghĩa bằng model không chứng minh mọi thông tin
+trong câu trả lời đều đúng.
+
 Text/audio filler vẫn stream ngay để phục vụ KPI-1 (Voice Acknowledge).
-HAL chờ outcome tối đa `HAL_REALTIME_NONBLOCKING_TOOL_GRACE_S`
+HAL chờ tool routing tối đa `HAL_REALTIME_NONBLOCKING_TOOL_GRACE_S`
 (mặc định **6 giây**, `0` tắt thời gian chờ, không tắt yêu cầu outcome).
 Cửa sổ bắt đầu ở `generation_complete` hoặc `turn_complete` đầu tiên; terminal
 sau không kéo dài thời hạn. HAL mở iterator `receive()` kế tiếp của SDK trên
@@ -246,16 +263,22 @@ cùng session sau `turn_complete`, giữ định danh lượt logic.
 Chỉ delegate/reject kết thúc cửa sổ sớm. `complete_response` ghi nhận xác nhận
 nhưng vẫn chờ để nhận delegate ở frame tiếp theo; tool phụ không
 xác nhận hoàn tất và không ngăn delegate đến sau. Sau xác nhận câu trả lời trực
-tiếp, HAL bỏ lời nói bổ sung do ACK kích hoạt nhưng vẫn nhận routing call. Lỗi
+tiếp, HAL bỏ lời nói bổ sung do ACK kích hoạt nhưng vẫn nhận routing call. Sau
+terminal đầu tiên, cửa sổ NON_BLOCKING chỉ nhận tool và metadata đầu vào, không
+phát thêm text/audio. Câu trả lời hoặc filler ban đầu vẫn phát ngay; câu lỗi hoặc
+từ chối quyền truy cập được sinh sau đó không bị nối vào lời nói hay lịch sử. Lỗi
 receive trên nhóm model này cũng yêu cầu fallback sang main, kể cả đã phát filler.
 
-Nếu hết cửa sổ mà lượt không bị ngắt vẫn thiếu outcome, HAL phát
+Nếu hết cả hai hạn chờ mà lượt không bị ngắt vẫn thiếu outcome, HAL phát
 `MainAgentFallbackOutput`, rồi `DelegateSignal`, giữ nguyên transcript gốc từ
 provider và định danh lượt. Fallback cục bộ không bịa function call và không gửi
 tool ACK. Route là `delegated`, không gắn `[HANDLED]`, kể cả khi filler đã phát;
 bằng chứng hoàn tất phải đến từ tác vụ phía sau. Model BLOCKING giữ cách kết
 thúc ngay hiện có. Prompt Gemini cho phép một câu xác nhận ngắn phát ngay trước
-delegate; reject vẫn hoàn toàn im lặng.
+delegate; reject vẫn hoàn toàn im lặng. Yêu cầu email/tài khoản/connector, kể cả
+"your email", thuộc main agent: Gemini chỉ xác nhận trung tính, không tự kết luận
+có/không có tài khoản hay quyền truy cập, hoặc viện persona thiết bị để từ chối.
+Chỉ main agent kiểm tra trạng thái connector thực tế.
 
 Tool call thật dùng ACK function response thông thường, bỏ trường `scheduling`:
 ngày 2026-09-21, backend Gemini 3.8 extended-thinking trên thiết bị từ chối

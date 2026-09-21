@@ -236,12 +236,30 @@ such as “I can help with that.” must not consume the user's task (#453).
 The provider adds `complete_response`, which confirms that a direct spoken
 answer fulfilled the request. Conversation, knowledge, or a completed public
 lookup can use this confirmation; actions, promises, errors, and unresolved work
-must delegate. A direct answer needs this explicit outcome and a successful
+must delegate. A direct answer needs a confirmed outcome and a successful
 provider terminal before it counts as handled/completed. Text/audio alone is
 not completion evidence.
 
+For a spoken response with no routing decision, HAL starts an independent text
+check during the existing grace, using the configured realtime summarizer model,
+endpoint and credentials. It checks the original request, spoken answer and public
+search evidence, with no tools or speech output. Only exact `COMPLETE` accepts a
+fully answered conversational/public lookup turn. Fillers, errors, account access,
+physical actions and mixed requests with remaining work retain fallback. Timeouts,
+missing credentials and malformed replies provide no independent confirmation.
+This adds one small text-model call with a separate
+`HAL_REALTIME_OUTCOME_TIMEOUT_S` deadline (default 10 seconds
+from the first terminal). It overlaps the 6-second tool grace; finalization waits
+for a pending check, at most 4 more seconds at default settings. A real routing
+call cancels the check. Explicit INCOMPLETE overrides an erroneous
+`complete_response` after a filler; an unavailable check preserves the provider
+decision, or fallback if there is none.
+A confirmed answer follows `realtime_handled` → `voice_agent_handled` → history sync,
+without main-agent execution. The semantic check is model-based, not proof that
+all factual claims are correct.
+
 Filler text/audio still streams immediately for KPI-1 (Voice Acknowledge).
-HAL waits for the outcome up to `HAL_REALTIME_NONBLOCKING_TOOL_GRACE_S`
+HAL waits for routing tools up to `HAL_REALTIME_NONBLOCKING_TOOL_GRACE_S`
 (default **6 seconds**, `0` disables the wait, not the outcome requirement).
 The grace starts at the first `generation_complete` or `turn_complete`; later
 terminals do not extend it. HAL reopens the SDK's per-turn `receive()` iterator
@@ -250,17 +268,23 @@ Only delegate/reject calls end the grace early; `complete_response` records
 confirmation but keeps the window open for a delegate in a subsequent frame; auxiliary
 tools do not confirm completion or suppress a later delegate. After direct-answer
 confirmation, HAL suppresses additional speech prompted by its ACK while still
-receiving routing calls. A receive error also requests main-agent fallback for
+receiving routing calls. More generally, once the first provider terminal arrives,
+NON_BLOCKING grace accepts tool and input metadata but no further text/audio.
+This preserves the initial answer/filler and prevents a later generated error or
+account-access denial from being appended to speech or history. A receive error also requests main-agent fallback for
 this model family, even if a filler already played.
 
-If the grace expires without an outcome on an uninterrupted turn, HAL emits
+If both waits finish without an outcome on an uninterrupted turn, HAL emits
 `MainAgentFallbackOutput`, then `DelegateSignal`, preserving the original
 provider transcript and turn identity. This local fallback invents no function
 call and sends no tool ACK. It routes as `delegated`, never `[HANDLED]`, even
 when a filler has already played; completion must come from the downstream task.
 BLOCKING models keep their existing immediate-completion behavior. The Gemini
 prompt allows one immediate, brief acknowledgement before a delegate; rejection
-remains completely silent.
+remains completely silent. Email/account/connector requests, including "your
+email", belong to the main agent: Gemini may acknowledge neutrally but must not
+claim that accounts or access are present or absent, or use its device persona
+as a reason to refuse. Only the main agent checks actual connector state.
 
 Actual tool calls use ordinary function response acknowledgements, omitting
 `scheduling`: on 2026-09-21 the device's Gemini 3.8 extended-thinking backend
