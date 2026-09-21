@@ -65,3 +65,107 @@ export function turnMemoryState(turn: Turn): TurnMemoryInfo | null {
   if (!files && changed.length === 0) return null;
   return { files: files ?? {}, changed };
 }
+
+// Bytes, with a unit, always. The memory sizes share a footer row with the LLM
+// token counts, which use a bare 1000-based `k` — a number formatted the same
+// way, a few pixels away, is read as a token count (#463). The exact byte
+// count stays in the tooltip.
+export function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// "1 entry" / "2 entries". The badge speaks to the device owner, so the guard's
+// own "quarantined" — which reads as a security incident — never reaches them.
+function entries(n: number): string {
+  return `${n} ${n === 1 ? "entry" : "entries"}`;
+}
+
+// Runtimes a removal actually happened in, deduped, in event order. Empty when
+// the guard could not name one, in which case the label says nothing about
+// where rather than implying the active runtime.
+function removalRuntimes(removals: TurnMemoryInfo["changed"]): string {
+  const names = [...new Set(removals.map((c) => c.runtime).filter(Boolean))];
+  return names.length > 0 ? ` in ${names.join(", ")}` : "";
+}
+
+// Debug tooltip: the whole fingerprint plus every change, including the guard's
+// internal reason codes. Named runtimes are shown per change because the sizes
+// above them are the active runtime's.
+function debugTitle(
+  files: [string, { size: number; sha8: string }][],
+  changed: TurnMemoryInfo["changed"],
+): string {
+  return [
+    ...files.map(([name, f]) => `${name} ${f.size} bytes · ${f.sha8}`),
+    ...changed.map((c) => {
+      const where = c.runtime ? ` (${c.runtime})` : "";
+      if (!c.quarantined) return `${c.file}${where} changed`;
+      const verb = c.execute ? "removed" : "would remove (observe mode)";
+      return `${c.file}${where} changed — ${verb} ${entries(c.quarantined)}: ${c.reasons.join(", ")}`;
+    }),
+  ].join("\n") || "memory";
+}
+
+export interface MemoryBadge {
+  color: string;
+  text: string;
+  title: string;
+}
+
+// What the turn-card memory badge shows, if anything (#463). Null = render
+// nothing.
+//
+// Gated by state rather than shown on every turn. `flow` is in PUBLIC_SECTIONS
+// and debug is a header toggle, not a hidden URL param, so "debug-only" here
+// means one click away, not gone:
+//
+//   gray  (the turn only read memory)       debug only — it reports the size of
+//                                           a file the owner cannot open, on
+//                                           every turn. A debugging aid by
+//                                           definition.
+//   amber (agent wrote, guard accepted)     debug only — lighting a badge on
+//                                           every successful write trains
+//                                           people to ignore the row, and then
+//                                           red does not land either. Observe
+//                                           mode belongs here too: nothing was
+//                                           removed, the file is untouched.
+//   red   (the guard removed blocks)        always — the only place in the
+//                                           product where the owner can see
+//                                           that the OS deleted something the
+//                                           agent wrote. The rest of the
+//                                           removal is an atomic rename, a
+//                                           .quarantine.txt sidecar and a
+//                                           .bak-<nano>, all SSH-only, and the
+//                                           #421 reset endpoint ships with no
+//                                           UI. Hiding it behind a toggle
+//                                           recreates the invisibility #421
+//                                           was filed about.
+export function memoryBadge(memory: TurnMemoryInfo, isDebug: boolean): MemoryBadge | null {
+  // Red only when blocks were really removed. In observe mode the guard reports
+  // what it WOULD remove but the file is untouched, so that count is a warning.
+  const removals = memory.changed.filter((c) => c.execute && c.quarantined > 0);
+  const removed = removals.reduce((n, c) => n + c.quarantined, 0);
+  const wouldRemove = memory.changed.reduce((n, c) => n + (c.execute ? 0 : c.quarantined), 0);
+  if (removed === 0 && !isDebug) return null;
+
+  const files = orderedMemoryFiles(memory.files);
+  const sizes = files.map(([name, f]) => `${name.replace(".md", "")} ${fmtBytes(f.size)}`).join(" ");
+  const changedLabel = removed > 0
+    ? `✎ memory updated · ${entries(removed)} removed${removalRuntimes(removals)}`
+    : wouldRemove > 0
+      ? `✎ memory changed · would remove ${entries(wouldRemove)}`
+      : memory.changed.length > 0 ? "✎ memory changed" : "";
+  const color = removed > 0 ? "var(--lm-red)"
+    : memory.changed.length > 0 ? "var(--lm-amber)"
+    : "var(--lm-text-muted)";
+  // Normal mode carries the removal alone: the sizes belong to the active
+  // runtime and the removal may not.
+  const text = isDebug ? [sizes, changedLabel].filter(Boolean).join(" ") : changedLabel;
+  if (!text) return null;
+  const title = isDebug
+    ? debugTitle(files, memory.changed)
+    : removals.map((c) => `${c.file}${c.runtime ? ` (${c.runtime})` : ""} — ${entries(c.quarantined)} removed`).join("\n");
+  return { color, text, title };
+}
