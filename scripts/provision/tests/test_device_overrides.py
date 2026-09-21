@@ -52,16 +52,29 @@ class DeviceOverrideTests(unittest.TestCase):
         identity = self.select("pro\n")
         self.assertEqual(overrides.apply_overrides(self.profile, self.root), "pro")
         env = (self.profile / "rootfs/opt/hal/.env").read_text()
-        for value in ("HAL_AEC_ENABLED=false", "HAL_LIVE_MODE=true",
-                      "HAL_LIVE_UPLINK_DURING_PLAYBACK=always",
+        for value in ("HAL_AEC_ENABLED=true", "HAL_LIVE_MODE=false",
+                      "HAL_SILERO_THRESHOLD=0.10",
                       "HAL_VOLUME_STATE_PATH=/root/config/.volume-pro", "HAL_TTS_SPEED=1.1"):
             self.assertIn(value + "\n", env)
-        self.assertIn("startup_volume: 77", (self.profile / "ROBOT.md").read_text())
-        self.assertIn("max_volume: 77", (self.profile / "SAFETY.md").read_text())
+        self.assertIn("startup_volume: 35", (self.profile / "ROBOT.md").read_text())
+        self.assertIn("max_volume: 35", (self.profile / "SAFETY.md").read_text())
         self.assertIn("max_speed: 120", (self.profile / "SAFETY.md").read_text())
         self.assertEqual((self.profile / "rootfs/etc/asound.conf").read_bytes(), (SOURCE / "overrides/pro/rootfs/etc/asound.conf").read_bytes())
         self.assertEqual(identity.read_text(), "pro\n")
         self.assertFalse((self.root / "opt/hal/.env").exists())
+
+    def test_pro_xvf3800_keeps_the_array_tuning(self):
+        # The reSpeaker XVF3800 assembly tested before the ReSpeaker Lite: live
+        # mode with every frame uplinked and no software AEC, 77% volume.
+        self.select("pro-xvf3800\n")
+        self.assertEqual(overrides.apply_overrides(self.profile, self.root), "pro-xvf3800")
+        env = (self.profile / "rootfs/opt/hal/.env").read_text()
+        for value in ("HAL_AEC_ENABLED=false", "HAL_LIVE_MODE=true",
+                      "HAL_LIVE_UPLINK_DURING_PLAYBACK=always",
+                      "HAL_VOLUME_STATE_PATH=/root/config/.volume-pro-xvf3800"):
+            self.assertIn(value + "\n", env)
+        self.assertIn("max_volume: 77", (self.profile / "SAFETY.md").read_text())
+        self.assertIn("card Array", (self.profile / "rootfs/etc/asound.conf").read_text())
 
     def test_arbitrary_profile_uses_package_data_without_product_logic(self):
         (self.profile / "overrides/pro").rename(self.profile / "overrides/studio")
