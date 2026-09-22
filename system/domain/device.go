@@ -1223,6 +1223,9 @@ type RealtimeSetData struct {
 	Reasoning string `json:"reasoning,omitempty"` // gemini thinking_level OR openai reasoning_effort (gptlive / pipecat_v1: none)
 	APIKey    string `json:"api_key,omitempty"`   // optional override; empty → llm_api_key
 	BaseURL   string `json:"base_url,omitempty"`  // optional override; empty → llm_base_url-derived
+	// WebSearch toggles the in-session `web_search` tool (pipecat_v1 only —
+	// rejected for any other provider). nil = leave unchanged.
+	WebSearch *bool `json:"web_search,omitempty"`
 }
 
 // MQTTRealtimeSetCommand wraps the full realtime.set downlink envelope for unmarshalling.
@@ -1401,6 +1404,9 @@ type RealtimePublic struct {
 	Reasoning string `json:"reasoning"`
 	BaseURL   string `json:"base_url"` // resolved (may be llm-derived)
 	HasAPIKey bool   `json:"has_api_key"`
+	// WebSearch is the resolved in-session web-search toggle: present only for
+	// pipecat_v1 (the provider that has the knob), omitted otherwise.
+	WebSearch *bool `json:"web_search,omitempty"`
 }
 
 type ConfigPublicResponse struct {
