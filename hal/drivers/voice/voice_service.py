@@ -2027,6 +2027,11 @@ class VoiceService:
             pre_frames_from_vad,
             device_rate,
         )
+        # Overlap a parked-session resume with the sentence being spoken
+        # (see RealtimeOrchestrator.prewarm). Wake-word mode only: the
+        # always-listening path calls prepare_turn() at session open itself.
+        if realtime_allowed and hal_config.REALTIME_ENABLED and hal_config.WAKEWORD_ENABLED:
+            self._realtime.prewarm()
         # A partial match is provisional: STT can correct a name in its final
         # result ("Moon" → "Mom"). It improves observability while the user is
         # speaking, but a turn is not dispatched or committed to realtime until

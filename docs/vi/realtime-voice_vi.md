@@ -1020,6 +1020,13 @@ pre-turn recycle vốn đã làm cho turn đó — và `voice_service` giữ đ�
 ~1 giây handshake. Không park khi đang có turn chạy dở; nếu resume không nối
 được thì báo unavailable (turn rơi về main agent) nhưng vẫn giữ trạng thái parked
 để turn sau thử lại.
+Ở chế độ wake-word, việc nối lại được chạy chồng lên câu user đang nói: `Session
+START` gọi `prewarm()`, khởi động handshake `idle-park-resume` ở nền
+(`idle-park-prewarm`, thread `rt-prewarm`), và `prepare_turn()` chạy sau STT final
+sẽ đợi nó xong (tối đa `PREWARM_JOIN_TIMEOUT_S` = 4 giây) thay vì nối lại tuần
+tự — đo trên lamp-4ace 22/09/2026, nối tuần tự tốn ~2 giây mỗi turn sau khoảng
+nghỉ. Capture không được dispatch chỉ để lại một session idle mà watchdog park sẽ
+đóng lại.
 
 Mọi provider coi teardown là trạng thái kết thúc: sau khi `disconnect()` đặt
 stop signal, worker send/receive không reconnect và cũng không ghi log lỗi
