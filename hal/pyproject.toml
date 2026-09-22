@@ -163,7 +163,10 @@ aec = [
 # to "unavailable" without it (the orchestrator falls back to the main agent).
 # Silero VAD, Smart Turn v3 and the OpenAI-compatible LLM service ship in the
 # core package; STT is HAL's own provider, so no vendor extra is required.
-# Install on-device with: uv sync --extra pipecat
+# Lamp setup, image builds and non-Reachy OTA select this extra automatically:
+# Smart Turn is shared by all non-Live voice backends, not only pipecat_v1.
+# Kept as an extra because Reachy's SDK has an incompatible ONNX pin.
+# Development hosts can opt in with: uv sync --extra pipecat
 pipecat = [
     "pipecat-ai>=1.11.0,<2",
 ]

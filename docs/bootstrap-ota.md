@@ -31,6 +31,12 @@ Image builders for OrangePi, Pi 4, and Pi 5 also use `--locked` when the
 downloaded HAL archive contains `uv.lock`. They fetch HAL from the OTA metadata,
 not from the local checkout; rerun the build after publishing the fixed archive.
 
+Lamp setup and Pi/OrangePi images install HAL with `--extra hardware --extra aec
+--extra pipecat`. Non-Reachy OTA selects the same extras, so Smart Turn is
+installed automatically without a separate device command. Reachy retains
+`--extra hardware --extra reachy`: its ONNX runtime requirement conflicts with
+Pipecat. The `pipecat` extra remains optional for bare developer `uv sync`.
+
 ### Architecture Diagram
 
 ```
@@ -808,7 +814,7 @@ The updater finds `uv` on `PATH`, then at `/root/.local/bin/uv`, then at
 `/home/pollen/.local/bin/uv` (Reachy's installer location). Before stopping HAL,
 it selects Python extras from `DEVICE_TYPE` in `/opt/hal/.env`, falling back to
 `device_type` in `/root/config/config.json`: `reachy-mini` uses `hardware + reachy`
-to retain the Pollen SDK; every other device keeps `hardware + aec`.
+to retain the Pollen SDK; every other device uses `hardware + aec + pipecat`.
 
 > **The uv cache lives outside the runtime tree** (`/opt/.uv-cache-hal`, next to
 > `/opt/hal` so uv can hardlink into the new venv). It used to sit at
@@ -836,7 +842,11 @@ to retain the Pollen SDK; every other device keeps `hardware + aec`.
     # Build a fresh venv; preserve .env and use the external shared cache.
     unzip -q "$ZIP" -d /opt/.hal.new
     cp -a /root/bootstrap/rollback/hal.previous/.env /opt/.hal.new/
-    (cd /opt/.hal.new && UV_CACHE_DIR=/opt/.uv-cache-hal "$UV_BIN" sync --python 3.12 --extra hardware --extra "$HAL_EXTRA")
+    HAL_EXTRA_ARGS=(--extra "$HAL_EXTRA")
+    if [ "$HAL_EXTRA" != "reachy" ]; then
+        HAL_EXTRA_ARGS+=(--extra pipecat)
+    fi
+    (cd /opt/.hal.new && UV_CACHE_DIR=/opt/.uv-cache-hal "$UV_BIN" sync --python 3.12 --extra hardware "${HAL_EXTRA_ARGS[@]}")
     mv /opt/.hal.new /opt/hal
 
     systemctl restart hal
@@ -1205,7 +1215,7 @@ HAL version is a plain text `VERSION` file in the package root. Read by bootstra
 - [x] **HAL HTTP port**: `5001` (OS Server is `5000`).
 - [x] **Bridge protocol**: Simple HTTP proxy. HAL runs FastAPI on `127.0.0.1:5001`, OS Server proxies from port 5000.
 - [x] **Python version**: Pinned to Python 3.12.x (`pyproject.toml`, `.python-version`, `setup.sh` uses `uv sync --python 3.12`).
-- [x] **HAL packaging**: On-device venv via `uv sync --python 3.12 --extra hardware` plus `--extra reachy` for Reachy Mini or `--extra aec` for other devices. OTA builds a fresh venv using the shared cache, preserves `.env`, and retains the old runtime for rollback.
+- [x] **HAL packaging**: On-device venv via `uv sync --python 3.12 --extra hardware` plus `--extra reachy` for Reachy Mini or `--extra aec --extra pipecat` for other devices. OTA builds a fresh venv using the shared cache, preserves `.env`, and retains the old runtime for rollback.
 - [x] **Display driver**: DisplayService (GC9A01) is part of HAL Python at `hal/service/display/display_service.py`.
 - [x] **HAL config**: Environment variable-based (`config.py` reads from env vars). `.env` file support via `python-dotenv`. No separate config file needed.
 
