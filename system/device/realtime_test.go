@@ -112,3 +112,46 @@ func TestApplyRealtimeSetPipecatV1(t *testing.T) {
 		t.Fatal("reasoning on the current pipecat_v1 provider must be rejected")
 	}
 }
+
+// web_search is a pipecat_v1-only knob: it lands in the sub-object as an
+// explicit override (so a later re-save keeps it), resolves through
+// RealtimeWebSearch with the HAL default (on) when unset, is left alone when
+// omitted, and is rejected for any other provider — explicit or current.
+func TestApplyRealtimeSetPipecatV1WebSearch(t *testing.T) {
+	c := baseConfig()
+	c.Realtime = &config.RealtimeConfig{Provider: "pipecat_v1"}
+	if got := c.RealtimeWebSearch(); got == nil || !*got {
+		t.Fatalf("unset web_search must resolve to the HAL default (on), got %v", got)
+	}
+
+	off := false
+	applyRealtimeSet(c, domain.RealtimeSetData{Provider: "pipecat_v1", WebSearch: &off})
+	if c.Realtime.PipecatV1 == nil || c.Realtime.PipecatV1.WebSearch == nil || *c.Realtime.PipecatV1.WebSearch {
+		t.Fatalf("web_search=false not persisted: %+v", c.Realtime.PipecatV1)
+	}
+	if got := c.RealtimeWebSearch(); got == nil || *got {
+		t.Fatalf("resolution after apply: %v, want false", got)
+	}
+
+	// A model-only follow-up must not clear the override.
+	applyRealtimeSet(c, domain.RealtimeSetData{Provider: "pipecat_v1", Model: "qwen/x"})
+	if c.Realtime.PipecatV1.WebSearch == nil || *c.Realtime.PipecatV1.WebSearch {
+		t.Fatal("omitting web_search must leave the override unchanged")
+	}
+
+	s := &Service{config: c}
+	on := true
+	if err := s.validateRealtimeSet(domain.RealtimeSetData{WebSearch: &on}); err != nil {
+		t.Fatalf("web_search on the current pipecat_v1 provider should validate: %v", err)
+	}
+	if s.validateRealtimeSet(domain.RealtimeSetData{Provider: "gemini", WebSearch: &on}) == nil {
+		t.Fatal("web_search on gemini must be rejected")
+	}
+	c.Realtime.Provider = "gptlive"
+	if s.validateRealtimeSet(domain.RealtimeSetData{WebSearch: &off}) == nil {
+		t.Fatal("web_search on the current non-pipecat provider must be rejected")
+	}
+	if c.RealtimeWebSearch() != nil {
+		t.Fatal("RealtimeWebSearch must be nil for a provider without the knob")
+	}
+}

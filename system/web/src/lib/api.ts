@@ -369,6 +369,7 @@ export interface DeviceConfig {
     reasoning?: string;
     base_url?: string;
     has_api_key?: boolean;
+    web_search?: boolean; // resolved; present only for pipecat_v1
   };
   device_id: string;
   mac: string;

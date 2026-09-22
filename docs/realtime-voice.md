@@ -1688,7 +1688,14 @@ delegates) and no longer routes weather/news to main when the tool exists.
 Gemini and GPT-Live never see this tool: they ground on their own side.
 `realtime.pipecat_v1.web_search` in config.json (`PipecatV1Realtime.WebSearch
 *bool`, nil → HAL default on) keeps an operator's override across os-server
-re-saves. Pinned by `hal/test/test_realtime_web_search.py` (20 tests: the relay's
+re-saves. The web Settings page (`/setting#realtime`, provider *Pipecat v1*)
+exposes it as the **Web search** checkbox: it rides the `realtime` block of
+`PUT /api/device/config` / MQTT `realtime.set` as `web_search` (pipecat_v1
+only — sent by the page only for that provider, rejected server-side for any
+other), lands in the sub-object as an explicit override, restarts HAL like
+every realtime edit, and is read back resolved as `realtime.web_search` in
+`GET /api/device/config` (`RealtimeWebSearch()`; omitted for other providers).
+Pinned by `hal/test/test_realtime_web_search.py` (20 tests: the relay's
 response shape, the ack contract, the registration gate).
 
 **Turn boundary and generations.** `OutputEvent.gen` is the **user-turn**
@@ -2543,8 +2550,10 @@ text and HAL's TTS voice speaks it): `RealtimeVoice()` and
 `RealtimeReasoning()` return empty, the options endpoint returns empty
 `voices.pipecat_v1` and `reasoning.pipecat_v1` lists so the web hides both
 selectors, `ValidateRealtimeKnobs` rejects any voice (`pipecat_v1 realtime has
-no voice`) or reasoning value for it, and `realtime.set` only writes `model`
-into the `pipecat_v1` sub-object; the web label is "Pipecat v1 (on-device)".
+no voice`) or reasoning value for it, and `realtime.set` writes only `model`
+and `web_search` (the in-session search toggle — `validateRealtimeSet` rejects
+it for any other provider) into the `pipecat_v1` sub-object; the web label is
+"Pipecat v1 (on-device)" and the page shows a **Web search** checkbox for it.
 HAL additionally reads
 `realtime.openai.transcribe_model` and `realtime.openai.noise_reduction` from
 the same sub-object (env `HAL_OPENAI_TRANSCRIBE_MODEL` /
@@ -2660,7 +2669,7 @@ is a top-level `config.json` flag:
 | `HAL_PIPECAT_MIN_WORDS` | `2` | Live mode: **while the model is generating** (or a tool call is in flight) a new user turn — and the interruption it broadcasts — starts only once the STT has transcribed this many words; otherwise one word opens a turn, so "yes" / "stop" still work. `_BusyAwareMinWordsStrategy` keys Pipecat's `MinWordsUserTurnStartStrategy` on the agent's LLM state because the stock strategy needs `BotStartedSpeakingFrame`s this pipeline never has. On lamp-ee17 a one-word burst (`do.`) right after a question opened a turn and cancelled the reply mid-generation; `0` = Pipecat's default VAD/transcription start |
 | `HAL_PIPECAT_TURN_STOP_TIMEOUT_S` | `5` | Watchdog on a user turn whose transcript never arrives: the aggregator finalizes it anyway (turn-based: an empty committed session already ended the turn earlier) |
 | `HAL_PIPECAT_TOOL_RESULT_TIMEOUT_S` | `15` | How long a bridged tool call waits for the orchestrator's `FunctionCallResultInput` before the model gets `{"error": "no result from the device"}` (no follow-up) |
-| `HAL_PIPECAT_WEB_SEARCH` | `true` | Registers the client-side `web_search` tool (pipecat only): public live facts are answered in-session through the Google-Search relay instead of delegating to main. Also `realtime.pipecat_v1.web_search` in config.json |
+| `HAL_PIPECAT_WEB_SEARCH` | `true` | Registers the client-side `web_search` tool (pipecat only): public live facts are answered in-session through the Google-Search relay instead of delegating to main. Also `realtime.pipecat_v1.web_search` in config.json, or the **Web search** checkbox on `/setting#realtime` |
 | `HAL_PIPECAT_SEARCH_URL` | `https://campaign-api.autonomous.ai/api/v1/ai/v1/google-search/v1beta/interactions` | The Gemini Interactions endpoint the tool POSTs to (`tools: [{"type": "google_search"}]`) |
 | `HAL_PIPECAT_SEARCH_MODEL` | `gemini-3.7-flash` | Model the relay grounds with |
 | `HAL_PIPECAT_SEARCH_API_KEY` | *(empty → the chat key, `HAL_PIPECAT_API_KEY` resolution)* | Bearer key for the search relay |

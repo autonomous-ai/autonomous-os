@@ -1630,7 +1630,14 @@ tư/tài khoản vẫn delegate) và không còn đẩy thời tiết/tin tức 
 tồn tại. Gemini và GPT-Live không bao giờ thấy tool này: chúng tự ground ở phía
 mình. `realtime.pipecat_v1.web_search` trong config.json
 (`PipecatV1Realtime.WebSearch *bool`, nil → mặc định HAL là bật) giữ override
-của operator qua các lần os-server ghi lại config. Được ghim bởi
+của operator qua các lần os-server ghi lại config. Trang Settings web
+(`/setting#realtime`, provider *Pipecat v1*) hiện nó dưới dạng checkbox **Web
+search**: nó đi trong block `realtime` của `PUT /api/device/config` / MQTT
+`realtime.set` với tên `web_search` (chỉ pipecat_v1 — trang chỉ gửi với
+provider đó, server từ chối với provider khác), ghi vào sub-object như một
+override tường minh, restart HAL như mọi chỉnh sửa realtime khác, và được đọc
+lại ở dạng đã resolve là `realtime.web_search` trong `GET /api/device/config`
+(`RealtimeWebSearch()`; bỏ trống với provider khác). Được ghim bởi
 `hal/test/test_realtime_web_search.py` (20 test: hình dạng phản hồi của relay,
 contract ack, cổng đăng ký).
 
@@ -2474,8 +2481,10 @@ giọng TTS của HAL đọc nó): `RealtimeVoice()` và `RealtimeReasoning()` t
 rỗng, endpoint options trả về danh sách `voices.pipecat_v1` và
 `reasoning.pipecat_v1` rỗng để web ẩn cả hai selector, `ValidateRealtimeKnobs`
 từ chối mọi giá trị voice (`pipecat_v1 realtime has no voice`) hay reasoning
-cho nó, và `realtime.set` chỉ ghi `model` vào sub-object `pipecat_v1`; nhãn web
-là "Pipecat v1 (on-device)".
+cho nó, và `realtime.set` chỉ ghi `model` và `web_search` (công tắc search
+trong phiên — `validateRealtimeSet` từ chối nó với mọi provider khác) vào
+sub-object `pipecat_v1`; nhãn web là "Pipecat v1 (on-device)" và trang hiện
+một checkbox **Web search** cho nó.
 Các knob KHÔNG có trong block (turn detection, session
 resumption, memory, summarizer) vẫn chỉ theo env/default.
 
@@ -2585,7 +2594,7 @@ trong `config.json`:
 | `HAL_PIPECAT_MIN_WORDS` | `2` | Chế độ live: **khi model đang sinh** (hoặc một tool call đang chạy) một user turn mới — và interruption nó broadcast — chỉ bắt đầu khi STT đã transcribe được ngần này từ; ngoài lúc đó một từ là đủ mở lượt, nên "yes" / "stop" vẫn hoạt động. `_BusyAwareMinWordsStrategy` gắn `MinWordsUserTurnStartStrategy` của Pipecat vào trạng thái LLM của agent vì strategy gốc cần các `BotStartedSpeakingFrame` mà pipeline này không bao giờ có. Trên lamp-ee17 một tiếng bật ra một từ (`do.`) ngay sau câu hỏi đã mở một lượt và hủy reply giữa chừng; `0` = mặc định của Pipecat, bắt đầu theo VAD/transcription |
 | `HAL_PIPECAT_TURN_STOP_TIMEOUT_S` | `5` | Watchdog cho user turn mà transcript không bao giờ về: aggregator vẫn finalize nó (turn-based: session đã commit mà rỗng thì đã kết thúc lượt từ trước) |
 | `HAL_PIPECAT_TOOL_RESULT_TIMEOUT_S` | `15` | Thời gian một tool call được bắc cầu chờ `FunctionCallResultInput` của orchestrator trước khi model nhận `{"error": "no result from the device"}` (không có follow-up) |
-| `HAL_PIPECAT_WEB_SEARCH` | `true` | Đăng ký tool `web_search` phía client (chỉ pipecat): dữ kiện công khai theo thời gian thực được trả lời ngay trong phiên qua relay Google-Search thay vì delegate sang main. Cũng đọc từ `realtime.pipecat_v1.web_search` trong config.json |
+| `HAL_PIPECAT_WEB_SEARCH` | `true` | Đăng ký tool `web_search` phía client (chỉ pipecat): dữ kiện công khai theo thời gian thực được trả lời ngay trong phiên qua relay Google-Search thay vì delegate sang main. Cũng đọc từ `realtime.pipecat_v1.web_search` trong config.json, hoặc checkbox **Web search** trên `/setting#realtime` |
 | `HAL_PIPECAT_SEARCH_URL` | `https://campaign-api.autonomous.ai/api/v1/ai/v1/google-search/v1beta/interactions` | Endpoint Gemini Interactions mà tool POST tới (`tools: [{"type": "google_search"}]`) |
 | `HAL_PIPECAT_SEARCH_MODEL` | `gemini-3.7-flash` | Model relay dùng để ground |
 | `HAL_PIPECAT_SEARCH_API_KEY` | *(rỗng → key chat, theo thứ tự resolve của `HAL_PIPECAT_API_KEY`)* | Bearer key cho relay search |
