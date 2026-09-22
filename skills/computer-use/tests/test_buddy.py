@@ -161,6 +161,20 @@ class ScreenshotTests(unittest.TestCase):
             self.assertTrue(Path(json.loads(output.getvalue())["result"]["local_image_path"]).exists())
             self.assertNotIn("image_b64", output.getvalue())
 
+    def test_window_capture_rejects_old_companion_display_response(self):
+        with patch.object(buddy, "command", return_value=self.response()), patch.object(buddy, "save_screenshot") as save, patch("sys.stderr", io.StringIO()):
+            self.assertEqual(buddy.main(["screenshot", "--params", '{"app":"Calendar"}']), 1)
+            save.assert_not_called()
+
+    def test_window_capture_keeps_window_metadata(self):
+        data = self.response()
+        data["result"].update(capture_scope="window", window_id=42, pid=123)
+        with tempfile.TemporaryDirectory() as folder, patch.object(buddy, "command", return_value=data), patch("sys.stdout", io.StringIO()) as output:
+            self.assertEqual(buddy.main(["screenshot", "--params", '{"app":"Calendar","window_id":42}', "--output-dir", folder]), 0)
+            capture = json.loads(output.getvalue())["result"]
+            self.assertEqual(capture["capture_scope"], "window")
+            self.assertEqual(capture["window_id"], 42)
+
     def test_cli_failure_exits_nonzero(self):
         output = io.StringIO()
         with patch.object(buddy, "command", side_effect=buddy.BuddyError("paused")), patch("sys.stderr", output):
@@ -331,6 +345,13 @@ class ObserveTests(MockServerCase):
         self.assertEqual(result["screenshot"]["image_to_global_points"]["origin_x"], -1920)
         self.assertEqual(self.server.requests, [{"question": "Tìm ô tìm kiếm", "display_id": 123, "scale": 0.5}])
 
+    def test_observe_forwards_window_target(self):
+        self.send_observe(params={"app": "com.apple.iCal", "window_id": 42})
+        self.assertEqual(self.server.requests[0]["app"], "com.apple.iCal")
+        self.assertEqual(self.server.requests[0]["window_id"], 42)
+        self.assertEqual(self.server.requests[0]["scale"], 1)
+        self.assertNotIn("display_id", self.server.requests[0])
+
     def test_observe_missing_description_and_raw_base64_rejected(self):
         for data in [{"screenshot": {}}, {"description": "", "screenshot": {}},
                      {"description": "visible", "screenshot": {"image_b64": "unexpected"}}]:
@@ -344,6 +365,9 @@ class ObserveTests(MockServerCase):
             with self.subTest(question=question), self.assertRaises(buddy.BuddyError):
                 self.send_observe(question)
         for params in [{"display_id": 0}, {"display_id": -1}, {"display_id": True}, {"display_id": 4294967296},
+                       {"app": " "}, {"app": True}, {"app": "a" * 257}, {"window_id": 42},
+                       {"app": "Calendar", "window_id": True}, {"app": "Calendar", "window_id": 0},
+                       {"app": "Calendar", "window_id": 4294967296}, {"app": "Calendar", "display_id": 1},
                        {"scale": 0}, {"scale": 1.1}, {"scale": float("nan")}, {"scale": True}, {"path": "/private/file"}]:
             with self.subTest(params=params), self.assertRaises(buddy.BuddyError):
                 self.send_observe(params=params)

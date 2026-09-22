@@ -83,12 +83,15 @@ A successful `set_value` may not submit a form or fire an app's expected interac
 
 ## Load screenshots as real images
 
+Prefer capturing the target app's window rather than a whole display. Both `screenshot` and `observe` accept `app` (nonempty name or bundle ID, at most 256 characters) and optional positive uint32 `window_id` (requires `app`). Never combine `app` with `display_id`. Use an observed window ID if selection is ambiguous; never guess or choose the first window arbitrarily. Cua captures the specified window, or selects the unique titled window (otherwise the unique window overall), without also requesting its Accessibility tree. Multiple titled windows require an observed `window_id`. JPEG output includes `capture_scope:"window"`, `backend:"cua"`, `pid`, `window_id`, `window_bounds`, and the verified `image_to_global_points` transform with existing image metadata. Jev OFF does not disable targeted capture.
+
+If targeted capture fails, is unsupported, or Cua is disabled, diagnose the blocker. An explicit fallback can capture the correct display after the bounded discovery below; do not silently drop `app` and capture the default screen. The observe endpoint rejects an untargeted response from older Buddy for an `app` request. No speed improvement is guaranteed without measurement.
+
 ```bash
-python3 <skill-directory>/scripts/buddy.py list_displays
-python3 <skill-directory>/scripts/buddy.py screenshot --params '{"display_id":1,"scale":0.5}'
+python3 <skill-directory>/scripts/buddy.py screenshot --params '{"app":"Calendar","scale":1}'
 ```
 
-Use an actual display ID from `list_displays`; 1 above is a placeholder example. **`is_main:true` identifies the primary display, not the display containing the active app.** Before interpreting a screenshot as the target app's state, locate its window:
+For explicit display fallback, use an actual display ID from `list_displays`. **`is_main:true` identifies the primary display, not the display containing the active app.** Locate the target before interpreting a display screenshot as its state:
 
 1. Enumerate displays once. If Accessibility exposes the target window's `bounds_global_points`, match its global rectangle against display `x`, `y`, `width`, `height`; for a spanning window use the display containing the relevant control or largest visible window area.
 2. If bounds are unavailable or ambiguous, inspect each plausible display once using `screenshot` or `observe` with an explicit `display_id`, stopping when the target window is found. Keep this discovery bounded to the enumerated displays; do not keep recapturing the primary screen. An unrelated app on one display is not evidence that the requested app failed to open.
@@ -96,9 +99,9 @@ Use an actual display ID from `list_displays`; 1 above is a placeholder example.
 
 For example, primary display 1 may show Buddy while display 4 contains Chrome listings and display 5 contains another app. Read display 4 before concluding anything about the Chrome task. These IDs are example evidence, not fixed device assignments.
 
-Pick a capture scale suited to the model and text size; a width around 1280–1600 pixels is a reasonable first observation, then increase resolution when text is unreadable. Compute scale from the chosen display's `pixel_width`, cap at 1, and use the **returned actual image dimensions** for coordinate conversion. There is no universally required 1280-pixel width.
+For app windows, start at `scale:1` to preserve readable text. Scale is relative to native backing pixels; Buddy does not upscale a Cua image that was already downsized. Actual returned dimensions and `image_to_global_points` are authoritative. For display captures, pick a capture scale suited to the model and text size; a width around 1280–1600 pixels is a reasonable first observation, then increase resolution when text is unreadable. For display captures, compute scale from the chosen display's `pixel_width`, cap at 1, and use the **returned actual image dimensions** for coordinate conversion. There is no universally required 1280-pixel width.
 
-The helper always requests `return_format:base64`, validates the response, decodes it, and saves a unique JPEG plus JSON metadata on the **device**. It prints `result.local_image_path`, `result.metadata_path`, and `result.capture_dir`, preserving display geometry while omitting base64. The Mac's returned path becomes `mac_image_path` and is not a file the device can open. The first capture creates a private `autonomous-buddy-task-*` directory under the device's temporary directory. **Retain `capture_dir` in the task checkpoint and pass it as `--output-dir` for every subsequent capture in this task.** A supplied directory must be owned, private (0700), and not a symlink. The helper retains the latest 50 verified image/metadata pairs in that directory, preserving unrelated files and ignoring symlinks. Older captures may be removed; base the next action on the latest observation. Delete this task's own captures when no longer needed; do not sweep other tasks' directories. Abandoned task directories require later owner cleanup; retention is per task, not a global disk quota.
+The helper always requests `return_format:base64`, validates the response, decodes it, and saves a unique JPEG plus JSON metadata on the **device**. It prints `result.local_image_path`, `result.metadata_path`, and `result.capture_dir`, preserving capture geometry while omitting base64. The Mac's returned path becomes `mac_image_path` and is not a file the device can open. The first capture creates a private `autonomous-buddy-task-*` directory under the device's temporary directory. **Retain `capture_dir` in the task checkpoint and pass it as `--output-dir` for every subsequent capture in this task.** A supplied directory must be owned, private (0700), and not a symlink. The helper retains the latest 50 verified image/metadata pairs in that directory, preserving unrelated files and ignoring symlinks. Older captures may be removed; base the next action on the latest observation. Delete this task's own captures when no longer needed; do not sweep other tasks' directories. Abandoned task directories require later owner cleanup; retention is per task, not a global disk quota.
 
 **Required next step:** call the active runtime's image-capable local-file tool with `local_image_path`. For example, Codex `view_image` accepts the absolute path; other runtimes may expose a `read`/image tool that returns actual image content blocks. Verify that the tool delivers an image to the model, rather than text describing a path or raw base64. A shell `cat`, the helper's JSON, and a printed data URI do not provide vision by themselves.
 
@@ -107,10 +110,10 @@ If this runtime has no way to load local images or its main model is text-only, 
 ### Auxiliary vision fallback for every runtime
 
 ```bash
-python3 <skill-directory>/scripts/buddy.py observe --question 'Identify the search field and describe the active dialog. Give target positions in screenshot pixels and state any uncertainty.' --params '{"scale":0.5}'
+python3 <skill-directory>/scripts/buddy.py observe --question 'Identify the search field and describe the active dialog. Give target positions in screenshot pixels and state any uncertainty.' --params '{"app":"Calendar","scale":1}'
 ```
 
-This dedicated helper action calls **`POST /api/buddy/observe`**, not `/api/buddy/command` and not the device camera. It captures a fresh Mac screenshot and sends it to the device's configured auxiliary image model. Use a task-specific question (1–2000 characters); optional params are `display_id` (an actual unsigned display ID) and `scale` (0.01–1, default 0.5). The helper uses a 90-second HTTP timeout for the server's 80-second overall operation, without retrying. Do not pass command `--id`, `--timeout-ms`, or screenshot `--output-dir` options to `observe`.
+This dedicated helper action calls **`POST /api/buddy/observe`**, not `/api/buddy/command` and not the device camera. It captures a fresh Mac screenshot and sends it to the device's configured auxiliary image model. Use a task-specific question (1–2000 characters); optional params are `app` and `window_id` using the targeting rules above, or `display_id` (an actual positive uint32 display ID), and `scale` (0.01–1; default 1 with `app`, 0.5 for display capture; explicit values are honored). The helper uses a 90-second HTTP timeout for the server's 80-second overall operation, without retrying. Do not pass command `--id`, `--timeout-ms`, or screenshot `--output-dir` options to `observe`.
 
 Success prints `{ok:true,description:"...",screenshot:{...}}`. `description` is the auxiliary model's grounded report; `screenshot` preserves actual dimensions and the image-to-global-points transform but contains no base64. Use only what the report actually establishes. Convert coordinates it explicitly identifies in screenshot pixels using **this response's** transform, and verify after acting with another observation. If a report is uncertain, ask a more focused visual question or use Accessibility rather than guessing. A description is not direct vision by the main model; do not claim otherwise.
 
@@ -141,7 +144,7 @@ global_x = origin_x + image_x * scale_x
 global_y = origin_y + image_y * scale_y
 ```
 
-The screenshot also carries `display_origin_x`, `display_origin_y`, `point_width`, `point_height`, and actual `width`/`height`. On an older Buddy without this transform, take the matching `display_id` geometry from `list_displays`:
+For a window capture, use its returned transform and `window_bounds`; never substitute a display transform. A display screenshot also carries `display_origin_x`, `display_origin_y`, `point_width`, `point_height`, and actual `width`/`height`. On an older Buddy without this transform, take the matching `display_id` geometry from `list_displays`:
 
 ```text
 global_x = display.x + image_x * display.width  / screenshot.width
@@ -157,7 +160,7 @@ All the simple actions in the parent skill also work synchronously here.
 | Action | Params / purpose |
 |---|---|
 | `desktop_info` | No params; read-only capabilities, permissions, pause state and apps preflight |
-| `screenshot` | `display_id`, `scale`; helper forces base64 and saves locally |
+| `screenshot` | `app` with optional observed `window_id`, or `display_id`; optional `scale`; helper forces base64 and saves locally |
 | `list_displays` | No params; display IDs, origins, point and pixel dimensions |
 | `cua_observe` | Optional app and positive window_id; Cua window observation |
 | `cua_action` | Buddy snapshot_id, element_token, ui_action; optional text/key/modifiers |
