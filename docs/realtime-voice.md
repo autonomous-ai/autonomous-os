@@ -533,30 +533,57 @@ same silent-device symptom one comparison away. Ids without a stamp
 (`tg-<messageID>`) keep the plain sequence rule: with nothing to compare, a
 genuinely stale POST must not be able to take the speaker back.
 
-### Two silence clocks (end of turn)
+### Two silence clocks and provisional end of turn
 
-A mic session ends when the audio stays below the RMS threshold for the current
-silence budget. There are two: once STT has delivered a **final** segment for
-this turn, the provider has already decided the user stopped (Flux emits
-EndOfTurn, nova fires `is_final` after its own endpointing window), so the loop
-closes `ENDPOINT_SILENCE_S` (`HAL_ENDPOINT_SILENCE_S`, default 0.8s) **after
-that final arrived** — not after the last speech. The distinction is the whole
-point: Flux emits an EndOfTurn for a breath pause *inside* one utterance, and
-measuring from the last speech applies the short budget retroactively to
-silence already spent, so such a final closes the session on the next frame
-while the user is still talking (device-observed 04/09/2026 on lamp-0c89:
-final `'Hello.'` at 09:22:50.766, session closed 114ms later, mid-sentence).
-Running the clock from the final gives the speaker a real window to carry on.
-The short clock applies only when `final_ts >= last_confirmed_speech`: if
-confirmed speech continues after that final, `turn_should_close` returns to the
-2.5s fallback until a new final arrives. An old final cannot shorten a later pause.
-Sitting on the long clock after that evidence is dead air in front of every
-realtime commit — it was the largest fixed cost between the user falling silent
-and the model hearing the audio. With no current final in hand there is no such
-evidence, so resumed speech and empty or noise-only sessions use the long fallback clock,
-`SILENCE_TIMEOUT_S` (2.5s). Set `HAL_ENDPOINT_SILENCE_S=0` to go back to the
-single long clock; raise it if the device starts cutting people off at natural
-mid-sentence pauses.
+The silence clocks produce an **endpoint candidate**, not proof that the whole
+request is complete. A current STT final starts the short clock:
+`ENDPOINT_SILENCE_S` (`HAL_ENDPOINT_SILENCE_S`, default 0.8s) runs **from final
+arrival**, only while `final_ts >= last_confirmed_speech`. Continued confirmed
+speech invalidates that clock until a new final arrives. Otherwise the loop uses
+`SILENCE_TIMEOUT_S` (`HAL_SILENCE_TIMEOUT`, default 2.5s) from the last speech.
+`HAL_ENDPOINT_SILENCE_S=0` disables the short clock. A final may describe a
+mid-request breath or just “Hello.”; it does not authorize execution by itself.
+
+With `HAL_TURN_END_ENABLED=true` (default), non-Live hands-free capture passes
+that candidate through `_internal/turn_endpoint.py` before closing STT and
+committing audio. This HAL gate is shared by Gemini, OpenAI Realtime, GPT-Live,
+Pipecat turn-based mode, and the ordinary STT/main-agent route. It does not
+change provider-managed Live endpointing, Pipecat Live's existing Smart Turn,
+or manual Harness tap-to-record capture.
+
+`_internal/smart_turn.py` runs Pipecat's bundled Smart Turn (`LocalSmartTurnAnalyzerV3`;
+v3.2 model in the 1.11 wheel) locally on a
+worker thread, using at most the last eight seconds of mono 16 kHz PCM16 around
+the speech tail. Lamp setup, Pi/OrangePi images, and non-Reachy OTA automatically
+install the `pipecat` extra, so normal device installs need no manual command.
+Bare developer `uv sync` still requires selecting `--extra pipecat`; Reachy
+excludes it because of the ONNX dependency conflict described below.
+Inference does not fetch a model over the network. Renewed speech
+or a changed transcript invalidates a pending decision, and results from an old
+capture cannot close a new one. Capture continues while inference runs.
+
+When the model reports complete, the candidate can close the turn. EN/VI
+hesitation or unfinished-conjunction hints such as “uhm”, “and”, “và”, or
+“để tôi nghĩ” hold it until `HAL_TURN_END_MAX_PAUSE_S` (default 6s) of silence;
+a short greeting waits at least `HAL_TURN_END_FALLBACK_S` (default 2.5s).
+An incomplete model prediction also waits until the maximum pause. Without the
+optional model, or during loading, failure or stalled inference, ordinary text
+uses the conservative fallback: at least 2.5s of silence with defaults, never
+earlier than the original candidate. Healthy pending inference gets up to 0.5s
+of grace from the first candidate before fallback can close; a missing or
+failed detector bypasses that grace, and the 6s maximum pause still applies.
+These are bounded heuristics, not a
+guarantee that the user finished. This gate adds no speculative execution or
+new barge-in behavior. Disabling it restores the previous silence-clock path.
+
+Recognized words let enhanced hands-free capture continue up to
+`HAL_TURN_END_MAX_DURATION_S` (default 180s), so a 1–2 minute request can span
+multiple STT segments. Reaching this hard ceiling **discards the unfinished
+request without dispatch**. Manual capture and sessions without recognized
+words retain `HAL_MAX_SESSION_DURATION_S` (code default 30s; lamp config 20s).
+If an enhanced hands-free session reaches that shorter ceiling before words
+arrive, it is discarded too. The long ceiling is not a minimum listening time:
+a valid endpoint can finish a short request normally.
 
 The rest of this section is about the clock itself, and applies to both. RMS alone is not enough in a noisy room: room noise sits
 above `RMS_THRESHOLD`, so every frame refreshed the clock, the turn ran to
@@ -602,9 +629,9 @@ closes, clears, or mutes user microphone capture, so the user can still talk
 over it.
 
 `robots/lamp/rootfs/opt/hal/.env` lowers `HAL_MAX_SESSION_DURATION_S` to `20`
-(the code default stays `30`); that ceiling is only reached when the silence
-clock never expires, and a real speaker always pauses longer than
-`SILENCE_TIMEOUT` within 20 seconds. The same file previously wrote
+(the code default stays `30`). Enhanced non-Live hands-free capture with
+recognized words uses the separate 180s turn ceiling described above; speech
+can legitimately last longer than 20 seconds. The same file previously wrote
 `WAKEWORD_FOLLOWUP_TIMEOUT_S=60` without the `HAL_` prefix, so it did nothing
 and the device ran the 20 s default; the key is now
 `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S=60`.
@@ -1584,9 +1611,10 @@ with a preamble saying the model reads an STT **transcript**, not audio, and
 writes text for TTS.
 
 **Install.** `pipecat-ai` is the optional extra `pipecat` in
-`hal/pyproject.toml` (`uv sync --extra pipecat` on the device — the lamp's
-`uv sync --python 3.12 --extra hardware --extra aec` line gains `--extra
-pipecat`). It is not a hard dependency: the core package drags `numba` +
+`hal/pyproject.toml`. Lamp setup and Pi/OrangePi images select
+`uv sync --python 3.12 --extra hardware --extra aec --extra pipecat`;
+non-Reachy OTA preserves this selection. A bare developer `uv sync` does not
+select the extra automatically. It is not a hard dependency: the core package drags `numba` +
 `llvmlite` (~140 MB), `resampy`, `nltk` and pins `onnxruntime ~=1.24`, which
 conflicts with the `reachy` extra's `onnxruntime==1.27.0` — the two extras are
 declared mutually exclusive (`[tool.uv] conflicts`) because they never share a
@@ -1634,7 +1662,7 @@ for `FunctionCallOutput.user_transcript` and live-mode `UserSpeechOutput`.
 
 | | `HAL_LIVE_MODE=false` (turn-based) | `HAL_LIVE_MODE=true` (live) |
 |---|---|---|
-| who ends the user's speech | HAL's VAD (`_vad_loop`) → `append_audio` × N, `commit_audio` | the pipeline: Silero VAD opens the turn (`HAL_PIPECAT_VAD_*`), Smart Turn v3 closes it (`HAL_PIPECAT_SMART_TURN`, else a `HAL_PIPECAT_SILENCE_TIMEOUT_S` silence timeout) |
+| who ends the user's speech | HAL's VAD + shared provisional turn gate (`HAL_TURN_END_*`) → `append_audio` × N, `commit_audio` | the pipeline: Silero VAD opens the turn (`HAL_PIPECAT_VAD_*`), Smart Turn v3 closes it (`HAL_PIPECAT_SMART_TURN`, else a `HAL_PIPECAT_SILENCE_TIMEOUT_S` silence timeout) |
 | turn strategies | `ExternalUserTurnStrategies`: the first frame after a commit queues `ProposedUserStartedSpeakingFrame` (which also broadcasts an interruption, cancelling a reply still streaming from the previous turn); `commit_audio` queues `ProposedUserStoppedSpeakingFrame` **and** an `STTFinalizeFrame`. A subclassed stop strategy (`_CommittedTurnStopStrategy`) finalizes the moment the committed STT final lands instead of waiting the stock 0.5 s aggregation timeout | Pipecat defaults: start on VAD / transcription, stop on the turn analyzer; an onset while the model is answering broadcasts an interruption |
 | STT session | **per turn**: opened on the first frame, closed by the `STTFinalizeFrame` — a system frame pushed *through the pipeline* behind the audio so it reaches the STT stage only after every frame of the utterance (signalling the sender thread directly raced the audio still in flight and finalized an empty session; fixed 2026-09-18). `close()` sends CloseStream, the server flushes the final. A turn whose session closes with no text at all ends at once (`TurnDoneEvent(execution_completed=False)`) so HAL falls back with its own transcript instead of waiting out `REALTIME_RECV_QUEUE_TIMEOUT_S` | **one long session** for the pipeline's life, reopened if the relay drops it, kept alive with `KeepAlive` every 5 s while nobody talks; the provider's own end-of-turn (Flux `TurnInfo`) just arrives as a final |
 | `UserSpeechOutput` | none (no live metadata on the turn path) | turn start (`method="server_vad"`), each STT **final** as the part not emitted yet (`method="provider_transcript"`, `transcript_finished=True`), turn stop (`endpoint_at`) — the same keys the live pump reads from Gemini/OpenAI. Interims are never surfaced: STT hypotheses are cumulative and get rewritten mid-utterance (`place a music` → `play some music`), and the pump's `LiveHistory.input` concatenates chunks it cannot retract — on lamp-ee17 the rewrite landed in the `[HANDLED]` text. Interims still feed MinWords and `note_server_activity()` |
@@ -2626,7 +2654,11 @@ is a top-level `config.json` flag:
 | `HAL_REALTIME_ENABLED` | `true` | Master gate for the realtime pipeline |
 | `wakeword` | ROBOT.md `voice.wakeword` on a fresh config, else `false` | Top-level config-file wake-word gate. When true, a matching interim transcript is provisional only: HAL commits buffered audio to realtime or forwards a command only after an STT **final** result confirms a configured wake phrase. The transcript is split into sentences (`.` `!` `?`) and the phrase is accepted at the start **or the end** of any sentence; mid-sentence occurrences are rejected. The confirmation re-checks the assembled, still-punctuated transcript so the `\w+`-only merge step cannot retract a gate a partial opened. If that exact re-check fails but a partial had already matched exactly, the name alone may differ by one letter and the gate still confirms: STT rewrites its own hypothesis in the final, and on lamp-0c89 (04/09/2026) the partial `hello lamp` came back as `Hello, lamb.`, which dropped the whole turn — no realtime turn, no thinking cue, and the question fell through to the much slower main agent. The prefix (`hello`, `hey`, …) must still match exactly and the loose rule can never OPEN a gate, only confirm one an exact partial opened, so a near-miss word in ambient speech still wakes nothing. It is logged as `Wake-word confirmed with a one-letter STT slip` so the rate stays countable — many of them means the STT boost terms are not doing their job. The supported prefixes are `hello`, `hey`, `hi`, `alo`, `okay`, `ok`, and `wake up`, applied to the permanent common alias (`hey autonomous`), device type (`hey lamp`), and current agent name (`hey Luna`). A runtime rename updates only the agent-name aliases. Bare names and other prefixes do not arm the gate. A rejected utterance is discarded and its transient listening LED restores to the normal resting state; it never leaves the persistent idle effect active. A confirmed turn opens the follow-up focus window; turns in that window are forwarded as `voice_followup` without another phrase. Every authorized turn dispatches to os-server: a spoken realtime reply becomes a silent `voice_agent_handled` sync event; unavailable, silent, failed, or delegated realtime follows the normal path. If realtime is disabled or unavailable, the confirmed final transcript follows the normal os-server/main-agent path. With Live ON and realtime available, the confirmed capture enters full-duplex live without a manual audio commit. Missing/false preserves the pre-gate always-listening flow unchanged. On a config.json os-server creates, the initial value comes from the body's `voice.wakeword` (see Wake-word gate above); a config loaded without the key stays `false`. HAL restarts after a local Settings save or MQTT `wakeword.gate`. |
 | `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` | `20` | Idle seconds for the short post-command focus window. Each accepted `voice_command` or `voice_followup` refreshes it. `0` disables follow-ups and requires a wake phrase for every mic session. Ignored when `wakeword` is false. |
-| `HAL_ENDPOINT_SILENCE_S` | `0.8` | Silence needed after STT final arrival, only while `final_ts >= last_confirmed_speech`. Continued confirmed speech after that final restores the 2.5s fallback until a new final arrives. `0` disables the short clock, leaving `HAL_SILENCE_TIMEOUT`. |
+| `HAL_ENDPOINT_SILENCE_S` | `0.8` | Silence needed after STT final arrival, only while `final_ts >= last_confirmed_speech`. Continued confirmed speech after that final restores the 2.5s fallback until a new final arrives. `0` disables the short clock, leaving `HAL_SILENCE_TIMEOUT`. With the shared gate enabled this only proposes an endpoint; `HAL_TURN_END_*` decides closure. |
+| `HAL_TURN_END_ENABLED` | `true` | Shared provisional endpoint gate for non-Live hands-free capture before commit; no change to Live or manual capture. `false` restores legacy silence clocks and session ceiling. |
+| `HAL_TURN_END_FALLBACK_S` | `2.5` | Minimum silence for ordinary text when Smart Turn is unavailable/pending, and for a short greeting; the original silence candidate must also fire. |
+| `HAL_TURN_END_MAX_PAUSE_S` | `6.0` | Maximum silence before closing a candidate with hesitation hints or an incomplete model result; clamped to at least the fallback. |
+| `HAL_TURN_END_MAX_DURATION_S` | `180` | Capture ceiling for enhanced hands-free sessions with recognized words. Reaching it discards the request without dispatch; manual/no-text capture retains `HAL_MAX_SESSION_DURATION_S`. |
 | `HAL_SILENCE_VAD_ENABLED` | `true` | Require Silero to confirm speech before the end-of-turn silence clock is refreshed. RMS remains the cheap pre-gate; set `false` to fall back to pure-RMS silence detection. |
 | `HAL_SILENCE_VAD_WINDOW_FRAMES` | `3` | Number of frames batched per Silero run for that check — Silero costs ~20 ms/frame on ARM and its LSTM needs more than one 64 ms frame to settle. |
 | `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `gptlive` \| `pipecat_v1` |

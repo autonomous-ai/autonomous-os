@@ -32,7 +32,7 @@ hal_dependency_extra() {
   if [ -z "$device_type" ]; then
     device_type="$(jq -r '.device_type // empty' /root/config/config.json 2>/dev/null || true)"
   fi
-  # Match the Reachy installer; other devices retain hardware + aec.
+  # Match the Reachy installer; other devices select aec plus shared Pipecat.
   case "$device_type" in
     reachy-mini) printf '%s\n' reachy ;;
     *) printf '%s\n' aec ;;
@@ -1023,6 +1023,12 @@ elif [ "$APP" = "hal" ]; then
   download_verified "$URL" "$ZIP_TMP" "$SHA256" || { echo "Failed checksum verification for hal"; exit 1; }
   UV_BIN="$(find_hal_uv)" || exit 1
   HAL_EXTRA="$(hal_dependency_extra)"
+  HAL_EXTRA_ARGS=(--extra "$HAL_EXTRA")
+  # Smart Turn is shared by non-Live voice backends on lamp images. Reachy's
+  # SDK requires a different ONNX version and cannot install Pipecat.
+  if [ "$HAL_EXTRA" != "reachy" ]; then
+    HAL_EXTRA_ARGS+=(--extra pipecat)
+  fi
   save_hal_service_state
   arm_service_restore restore_hal_service_state
   systemctl stop hal 2>/dev/null || true
@@ -1070,7 +1076,7 @@ elif [ "$APP" = "hal" ]; then
     # but never silently re-resolve a release that includes one.
     HAL_LOCK_ARGS=()
     [ ! -f uv.lock ] || HAL_LOCK_ARGS+=(--locked)
-    "$UV_BIN" sync --python 3.12 --extra hardware --extra "$HAL_EXTRA" "${HAL_LOCK_ARGS[@]}" || exit 1
+    "$UV_BIN" sync --python 3.12 --extra hardware "${HAL_EXTRA_ARGS[@]}" "${HAL_LOCK_ARGS[@]}" || exit 1
   ); then
     echo "HAL staging failed; restoring known-good runtime" >&2
     cd /

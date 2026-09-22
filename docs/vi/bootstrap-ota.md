@@ -30,6 +30,12 @@ Các trình build image OrangePi, Pi 4 và Pi 5 cũng dùng `--locked` khi gói 
 tải về có `uv.lock`. HAL được lấy từ OTA metadata, không phải checkout local;
 chạy lại build sau khi phát hành gói đã sửa.
 
+Setup lamp và image Pi/OrangePi cài HAL với `--extra hardware --extra aec
+--extra pipecat`. OTA cho thiết bị không phải Reachy chọn cùng các extra này,
+nên Smart Turn được cài tự động, không cần lệnh riêng trên thiết bị. Reachy giữ
+`--extra hardware --extra reachy`: yêu cầu ONNX runtime của nó xung đột với
+Pipecat. Extra `pipecat` vẫn tùy chọn khi developer chạy riêng `uv sync`.
+
 ### Sơ đồ hệ thống
 
 ```
@@ -783,7 +789,7 @@ Updater tìm `uv` trong `PATH`, rồi `/root/.local/bin/uv`, rồi
 `/home/pollen/.local/bin/uv` (vị trí bộ cài Reachy sử dụng). Trước khi dừng HAL,
 script chọn Python extras theo `DEVICE_TYPE` trong `/opt/hal/.env`, fallback sang
 `device_type` trong `/root/config/config.json`: `reachy-mini` dùng `hardware + reachy`
-để giữ Pollen SDK; các thiết bị khác vẫn dùng `hardware + aec`.
+để giữ Pollen SDK; các thiết bị khác dùng `hardware + aec + pipecat`.
 
 > **Cache uv nằm NGOÀI cây runtime** (`/opt/.uv-cache-hal`, cạnh `/opt/hal` để uv
 > hardlink vào venv mới). Trước đây nó ở `/opt/hal/.uv-cache` nên mỗi lần update
@@ -810,7 +816,11 @@ script chọn Python extras theo `DEVICE_TYPE` trong `/opt/hal/.env`, fallback s
     # Build a fresh venv; preserve .env and use the external shared cache.
     unzip -q "$ZIP" -d /opt/.hal.new
     cp -a /root/bootstrap/rollback/hal.previous/.env /opt/.hal.new/
-    (cd /opt/.hal.new && UV_CACHE_DIR=/opt/.uv-cache-hal "$UV_BIN" sync --python 3.12 --extra hardware --extra "$HAL_EXTRA")
+    HAL_EXTRA_ARGS=(--extra "$HAL_EXTRA")
+    if [ "$HAL_EXTRA" != "reachy" ]; then
+        HAL_EXTRA_ARGS+=(--extra pipecat)
+    fi
+    (cd /opt/.hal.new && UV_CACHE_DIR=/opt/.uv-cache-hal "$UV_BIN" sync --python 3.12 --extra hardware "${HAL_EXTRA_ARGS[@]}")
     mv /opt/.hal.new /opt/hal
 
     systemctl restart hal
@@ -1177,7 +1187,7 @@ Version của HAL là file text `VERSION` trong thư mục gốc package. Bootst
 - [x] **HAL HTTP port**: `5001` (OS Server là `5000`).
 - [x] **Bridge protocol**: HTTP proxy đơn giản. HAL chạy FastAPI trên `127.0.0.1:5001`, OS Server proxy từ port 5000.
 - [ ] **Python version**: Pin Python 3.11+? Yêu cầu Python hiện tại của HAL?
-- [ ] **Đóng gói HAL**: Include venv sẵn? Hay cài deps trên thiết bị? (Pi resources hạn chế cho `pip install`)
+- [x] **Đóng gói HAL**: Tạo venv trên thiết bị qua `uv sync --python 3.12 --extra hardware`, thêm `--extra reachy` cho Reachy Mini hoặc `--extra aec --extra pipecat` cho thiết bị khác. OTA tạo venv mới bằng cache dùng chung, giữ `.env` và runtime cũ để rollback.
 - [ ] **Display driver**: DisplayService (GC9A01) — nằm trong HAL Python? Hay module mới?
 - [ ] **HAL config**: HAL cần config file riêng? Hay cấu hình qua OS Server?
 

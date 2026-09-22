@@ -511,30 +511,56 @@ hoặc restart sớm trong phiên) thì hai sequence đụng nhau chứ không t
 thức bị vứt — đúng triệu chứng câm tiếng đó, chỉ cách một phép so sánh.
 Id không có dấu thời gian (`tg-<messageID>`) vẫn theo luật sequence thuần: không có
 gì để so thì một POST cũ thật sự không được phép giành lại loa.
-### Hai đồng hồ im lặng (kết thúc lượt)
+### Hai đồng hồ im lặng và điểm kết thúc lượt tạm thời
 
-Một phiên mic kết thúc khi audio nằm dưới ngưỡng RMS suốt ngân sách im lặng
-hiện hành. Có hai ngân sách: khi STT đã trả về một segment **final** cho lượt
-này, nhà cung cấp đã tự quyết định là người dùng nói xong (Flux phát EndOfTurn,
-nova bắn `is_final` sau cửa sổ endpointing của nó), nên vòng lặp đóng sau
-`ENDPOINT_SILENCE_S` (`HAL_ENDPOINT_SILENCE_S`, mặc định 0.8s) **tính từ lúc
-final đó về**, không phải từ lần nói cuối. Khác biệt này là điểm cốt lõi: Flux
-bắn EndOfTurn cho cả quãng lấy hơi *giữa* một câu nói, nên nếu đo từ lần nói
-cuối thì ngân sách ngắn bị áp ngược vào quãng im lặng đã trôi qua và phiên chết
-ngay frame kế tiếp trong khi người dùng còn đang nói (đo trên lamp-0c89
-04/09/2026: final `'Hello.'` lúc 09:22:50.766, phiên đóng sau đó 114ms, giữa
-câu). Chạy đồng hồ từ final cho người nói một cửa sổ thật để nói tiếp.
-Đồng hồ ngắn chỉ áp dụng khi `final_ts >= last_confirmed_speech`: nếu có tiếng
-nói được xác nhận sau final đó, `turn_should_close` quay lại ngưỡng dự phòng
-2.5s cho tới khi có final mới. Final cũ không thể rút ngắn quãng nghỉ tiếp theo.
-Ngồi chờ hết đồng hồ dài sau bằng chứng đó là dead air nằm trước mọi lần commit
-realtime —
-đây là chi phí cố định lớn nhất giữa lúc người dùng ngừng nói và lúc model nghe
-được audio. Không có final còn hiệu lực thì không có bằng chứng đó, nên khi
-người dùng nói tiếp hoặc phiên rỗng/chỉ có tiếng ồn, hệ thống dùng đồng hồ dự
-phòng dài `SILENCE_TIMEOUT_S` (2.5s). Đặt
-`HAL_ENDPOINT_SILENCE_S=0` để quay lại một đồng hồ dài duy nhất; tăng lên nếu
-thiết bị bắt đầu cắt lời ở những quãng nghỉ giữa câu.
+Các đồng hồ im lặng tạo **ứng viên kết thúc lượt**, không chứng minh toàn bộ yêu
+cầu đã hoàn tất. STT final còn hiệu lực khởi động đồng hồ ngắn:
+`ENDPOINT_SILENCE_S` (`HAL_ENDPOINT_SILENCE_S`, mặc định 0.8s) chạy **từ lúc
+final về**, chỉ khi `final_ts >= last_confirmed_speech`. Tiếng nói được xác nhận
+sau đó vô hiệu hóa đồng hồ này cho tới khi có final mới. Ngoài trường hợp đó,
+vòng lặp dùng `SILENCE_TIMEOUT_S` (`HAL_SILENCE_TIMEOUT`, mặc định 2.5s) từ lần
+nói cuối. `HAL_ENDPOINT_SILENCE_S=0` tắt đồng hồ ngắn. Final có thể chỉ là quãng
+lấy hơi giữa yêu cầu hoặc “Hello.”; riêng nó không cho phép thực thi.
+
+Với `HAL_TURN_END_ENABLED=true` (mặc định), thu hands-free khi Live tắt đưa ứng
+viên qua `_internal/turn_endpoint.py` trước khi đóng STT và commit audio. Gate
+HAL này dùng chung cho Gemini, OpenAI Realtime, GPT-Live, Pipecat theo lượt và
+đường STT/main-agent thông thường. Nó không đổi cơ chế chốt lượt Live của
+provider, Smart Turn sẵn có của Pipecat Live, hoặc thu thủ công bằng tap của
+Harness.
+
+`_internal/smart_turn.py` chạy Smart Turn đóng gói trong Pipecat (`LocalSmartTurnAnalyzerV3`;
+model v3.2 trong wheel 1.11) ngay trên
+máy bằng worker thread, dùng tối đa tám giây PCM16 mono 16 kHz cuối quanh đuôi
+tiếng nói. Setup lamp, image Pi/OrangePi và OTA cho thiết bị không phải Reachy
+tự cài extra `pipecat`, nên cài đặt thiết bị thông thường không cần lệnh thủ công.
+Developer chạy riêng `uv sync` vẫn cần chọn `--extra pipecat`; Reachy không cài
+extra này do xung đột dependency ONNX mô tả bên dưới.
+Suy luận không tải model qua mạng. Tiếng nói mới hoặc transcript thay đổi vô
+hiệu hóa quyết định đang chờ; kết quả của capture cũ không thể đóng capture
+mới. Quá trình thu vẫn tiếp tục trong lúc suy luận.
+
+Khi model báo hoàn tất, ứng viên có thể đóng lượt. Dấu hiệu ngập ngừng hoặc
+liên từ chưa hoàn chỉnh EN/VI như “uhm”, “and”, “và”, “để tôi nghĩ” giữ lượt tới
+`HAL_TURN_END_MAX_PAUSE_S` (mặc định 6s) im lặng; lời chào ngắn chờ ít nhất
+`HAL_TURN_END_FALLBACK_S` (mặc định 2.5s). Model dự đoán chưa hoàn tất cũng chờ
+tới mức nghỉ tối đa. Khi thiếu model tùy chọn, đang tải, lỗi hoặc suy luận bị
+kẹt, transcript thông thường dùng fallback thận trọng: ít nhất 2.5s im lặng
+với mặc định, không bao giờ sớm hơn ứng viên gốc. Suy luận đang chờ và chưa lỗi
+được thêm tối đa 0.5s từ ứng viên đầu trước khi fallback có thể đóng; detector
+thiếu hoặc lỗi bỏ qua khoảng chờ này, và trần nghỉ 6s vẫn áp dụng.
+Đây là heuristic có giới hạn,
+không bảo đảm người dùng đã nói xong. Gate này không thêm thực thi suy đoán
+hoặc hành vi barge-in mới. Tắt gate khôi phục đường đồng hồ im lặng trước đó.
+
+Khi đã nhận được chữ, thu hands-free tăng cường có thể kéo dài tới
+`HAL_TURN_END_MAX_DURATION_S` (mặc định 180s), nên yêu cầu 1–2 phút có thể trải
+qua nhiều segment STT. Chạm trần cứng này **loại bỏ yêu cầu chưa hoàn tất, không
+dispatch**. Thu thủ công và phiên chưa nhận được chữ vẫn dùng
+`HAL_MAX_SESSION_DURATION_S` (mặc định code 30s; cấu hình lamp 20s). Nếu phiên
+hands-free tăng cường chạm trần ngắn trước khi có chữ, phiên đó cũng bị loại
+bỏ. Trần dài không phải thời gian nghe tối thiểu: điểm kết thúc hợp lệ vẫn
+chốt yêu cầu ngắn bình thường.
 
 Phần còn lại của mục này nói về bản thân đồng hồ, và áp dụng cho cả hai.
 Chỉ dùng RMS là không đủ trong phòng ồn: tiếng ồn phòng nằm trên
@@ -580,9 +606,9 @@ huỷ lời nói tuỳ chọn của thiết bị — không đóng, xoá hay mut
 người dùng vẫn có thể nói đè lên nó.
 
 `robots/lamp/rootfs/opt/hal/.env` hạ `HAL_MAX_SESSION_DURATION_S` xuống `20`
-(default trong code vẫn là `30`); trần đó chỉ chạm tới khi đồng hồ im lặng không
-bao giờ hết hạn, mà người nói thật luôn ngừng lâu hơn `SILENCE_TIMEOUT` trong
-vòng 20 giây. Cũng file đó trước kia ghi `WAKEWORD_FOLLOWUP_TIMEOUT_S=60` mà
+(default trong code vẫn là `30`). Thu hands-free tăng cường khi Live tắt và đã
+nhận được chữ dùng trần lượt riêng 180s mô tả ở trên; lời nói thực tế có thể
+dài hơn 20 giây. Cũng file đó trước kia ghi `WAKEWORD_FOLLOWUP_TIMEOUT_S=60` mà
 thiếu prefix `HAL_`, nên nó không có tác dụng gì và thiết bị chạy default 20 s;
 nay key đã là `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S=60`.
 
@@ -1524,9 +1550,10 @@ một đoạn mở đầu nói rằng model đọc **transcript** STT chứ khô
 viết text cho TTS.
 
 **Cài đặt.** `pipecat-ai` là extra tùy chọn `pipecat` trong
-`hal/pyproject.toml` (`uv sync --extra pipecat` trên thiết bị — dòng
-`uv sync --python 3.12 --extra hardware --extra aec` của lamp có thêm `--extra
-pipecat`). Nó không phải dependency cứng: package lõi kéo theo `numba` +
+`hal/pyproject.toml`. Setup lamp và image Pi/OrangePi chọn
+`uv sync --python 3.12 --extra hardware --extra aec --extra pipecat`;
+OTA cho thiết bị không phải Reachy giữ cùng lựa chọn này. Developer chạy riêng
+`uv sync` không tự chọn extra. Nó không phải dependency cứng: package lõi kéo theo `numba` +
 `llvmlite` (~140 MB), `resampy`, `nltk` và ghim `onnxruntime ~=1.24`, xung đột
 với `onnxruntime==1.27.0` của extra `reachy` — hai extra được khai báo loại trừ
 lẫn nhau (`[tool.uv] conflicts`) vì chúng không bao giờ ở chung một thân máy.
@@ -1576,7 +1603,7 @@ thiết kế:
 
 | | `HAL_LIVE_MODE=false` (turn-based) | `HAL_LIVE_MODE=true` (live) |
 |---|---|---|
-| ai kết thúc lời nói của user | VAD của HAL (`_vad_loop`) → `append_audio` × N, `commit_audio` | pipeline: Silero VAD mở lượt (`HAL_PIPECAT_VAD_*`), Smart Turn v3 đóng lượt (`HAL_PIPECAT_SMART_TURN`, không thì timeout im lặng `HAL_PIPECAT_SILENCE_TIMEOUT_S`) |
+| ai kết thúc lời nói của user | VAD của HAL + gate kết thúc lượt tạm thời dùng chung (`HAL_TURN_END_*`) → `append_audio` × N, `commit_audio` | pipeline: Silero VAD mở lượt (`HAL_PIPECAT_VAD_*`), Smart Turn v3 đóng lượt (`HAL_PIPECAT_SMART_TURN`, không thì timeout im lặng `HAL_PIPECAT_SILENCE_TIMEOUT_S`) |
 | chiến lược lượt | `ExternalUserTurnStrategies`: frame đầu tiên sau một commit queue `ProposedUserStartedSpeakingFrame` (đồng thời broadcast một interruption, hủy reply còn đang stream từ lượt trước); `commit_audio` queue `ProposedUserStoppedSpeakingFrame` **và** một `STTFinalizeFrame`. Stop strategy kế thừa (`_CommittedTurnStopStrategy`) finalize ngay khi STT final đã commit về, thay vì chờ timeout gom 0.5 s mặc định | mặc định của Pipecat: bắt đầu theo VAD / transcription, dừng theo turn analyzer; user cất tiếng khi model đang trả lời thì broadcast một interruption |
 | STT session | **theo từng lượt**: mở ở frame đầu, đóng bởi `STTFinalizeFrame` — một system frame được đẩy *xuyên qua pipeline* phía sau audio để nó chỉ tới stage STT sau mọi frame của câu nói (báo thẳng cho thread sender từng chạy đua với audio còn trên đường và finalize một session rỗng; sửa 2026-09-18). `close()` gửi CloseStream, server flush final. Lượt mà session đóng lại không có chữ nào thì kết thúc ngay (`TurnDoneEvent(execution_completed=False)`) để HAL fallback bằng transcript của chính nó thay vì chờ hết `REALTIME_RECV_QUEUE_TIMEOUT_S` | **một session dài** suốt đời pipeline, mở lại nếu relay rớt, giữ sống bằng `KeepAlive` mỗi 5 s khi không ai nói; end-of-turn riêng của provider (Flux `TurnInfo`) chỉ về như một final |
 | `UserSpeechOutput` | không (đường turn không có metadata live) | bắt đầu lượt (`method="server_vad"`), mỗi STT **final** dưới dạng phần chưa được phát (`method="provider_transcript"`, `transcript_finished=True`), kết thúc lượt (`endpoint_at`) — cùng các key mà live pump đọc từ Gemini/OpenAI. Interim không bao giờ được đưa ra ngoài: giả thuyết STT là tích lũy và bị viết lại giữa câu (`place a music` → `play some music`), còn `LiveHistory.input` của pump nối các chunk lại mà không rút lại được — trên lamp-ee17 bản viết lại lọt vào text `[HANDLED]`. Interim vẫn nuôi MinWords và `note_server_activity()` |
@@ -2550,7 +2577,11 @@ trong `config.json`:
 | `HAL_REALTIME_ENABLED` | `true` | Cổng tổng cho pipeline realtime |
 | `wakeword` | `voice.wakeword` trong ROBOT.md khi config còn mới, ngược lại `false` | Cổng wake word top-level trong config file. Khi bật, partial khớp chỉ là tín hiệu tạm: HAL chỉ commit audio buffer sang realtime hoặc forward command sau khi STT **final** xác nhận wake phrase. Transcript được tách thành câu (`.` `!` `?`) và phrase được chấp nhận ở đầu **hoặc cuối** bất kỳ câu nào; xuất hiện giữa câu bị từ chối. Bước xác nhận kiểm lại trên transcript đã ghép mà vẫn còn dấu câu, để bước merge chỉ giữ `\w+` không rút lại cái gate mà một partial đã mở. Nếu bước kiểm khớp tuyệt đối đó trượt nhưng trước đó đã có một partial khớp chính xác, thì riêng chữ TÊN được phép lệch 1 ký tự và gate vẫn được xác nhận: STT tự viết lại giả thuyết của nó ở final, và trên lamp-0c89 (04/09/2026) partial `hello lamp` quay lại thành `Hello, lamb.` làm rơi cả lượt — không mở lượt realtime, không có cue thinking, câu hỏi rơi xuống main agent chậm hơn nhiều. Tiền tố (`hello`, `hey`, …) vẫn phải khớp tuyệt đối, và luật lỏng này KHÔNG BAO GIỜ mở được gate mà chỉ xác nhận lại gate do một partial khớp chính xác đã mở, nên một từ gần giống trong lời nói xung quanh vẫn không đánh thức được gì. Nó được log riêng thành `Wake-word confirmed with a one-letter STT slip` để còn đếm được — nhiều dòng này nghĩa là keyterm boost đang không làm tròn việc. Các prefix hỗ trợ là `hello`, `hey`, `hi`, `alo`, `okay`, `ok`, `wake up`, áp dụng cho alias chung cố định (`hey autonomous`), device type (`hey lamp`) và tên agent hiện tại (`hey Luna`). Runtime rename chỉ cập nhật alias theo tên agent. Bare name và các prefix khác không mở gate. Một câu bị từ chối sẽ bị bỏ và LED `listening` tạm thời được restore về trạng thái nghỉ bình thường; không bao giờ để hiệu ứng `idle` cố định tiếp tục chạy. Một lượt đã xác nhận mở cửa sổ focus follow-up; lượt trong cửa sổ đó được forward dưới type `voice_followup` mà không cần wake phrase khác. Mọi lượt được phép đều dispatch sang os-server: câu realtime đã nói thành event đồng bộ im lặng `voice_agent_handled`; realtime unavailable, im lặng, lỗi hoặc delegate đi theo đường thường. Nếu realtime tắt hoặc không khả dụng, final transcript đã xác nhận đi theo đường os-server/main agent thường. Với Live ON và realtime khả dụng, lần thu đã xác nhận chuyển sang live song công mà không commit audio thủ công. Thiếu/`false` giữ nguyên luồng luôn lắng nghe trước gate. Với `config.json` do os-server tạo ra, giá trị khởi tạo lấy từ `voice.wakeword` của body (xem phần Cổng wake word ở trên); config nạp lên mà không có key thì vẫn là `false`. HAL restart sau khi lưu ở local Settings hoặc MQTT `wakeword.gate`. |
 | `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` | `20` | Số giây idle của cửa sổ focus sau lệnh. Mỗi `voice_command` hoặc `voice_followup` được nhận sẽ refresh cửa sổ. `0` tắt follow-up và buộc mỗi phiên mic phải có wake phrase. Bị bỏ qua khi `wakeword` là false. |
-| `HAL_ENDPOINT_SILENCE_S` | `0.8` | Thời gian im lặng từ lúc STT final về, chỉ áp dụng khi `final_ts >= last_confirmed_speech`. Nếu có tiếng nói được xác nhận sau final đó, quay lại ngưỡng dự phòng 2.5s tới khi có final mới. `0` tắt đồng hồ ngắn, chỉ dùng `HAL_SILENCE_TIMEOUT`. |
+| `HAL_ENDPOINT_SILENCE_S` | `0.8` | Thời gian im lặng từ lúc STT final về, chỉ áp dụng khi `final_ts >= last_confirmed_speech`. Nếu có tiếng nói được xác nhận sau final đó, quay lại ngưỡng dự phòng 2.5s tới khi có final mới. `0` tắt đồng hồ ngắn, chỉ dùng `HAL_SILENCE_TIMEOUT`. Khi bật gate dùng chung, đây chỉ là đề xuất kết thúc; `HAL_TURN_END_*` quyết định đóng lượt. |
+| `HAL_TURN_END_ENABLED` | `true` | Gate kết thúc lượt tạm thời dùng chung cho thu hands-free khi Live tắt, trước commit; không đổi Live hoặc thu thủ công. `false` khôi phục đồng hồ im lặng và trần phiên cũ. |
+| `HAL_TURN_END_FALLBACK_S` | `2.5` | Im lặng tối thiểu cho transcript thông thường khi Smart Turn thiếu/đang chờ, và cho lời chào ngắn; ứng viên im lặng gốc cũng phải đủ điều kiện. |
+| `HAL_TURN_END_MAX_PAUSE_S` | `6.0` | Im lặng tối đa trước khi đóng ứng viên có dấu hiệu ngập ngừng hoặc model báo chưa hoàn tất; được giới hạn dưới bằng fallback. |
+| `HAL_TURN_END_MAX_DURATION_S` | `180` | Trần thu cho phiên hands-free tăng cường đã nhận được chữ. Chạm trần thì loại bỏ yêu cầu, không dispatch; thu thủ công/chưa có chữ vẫn dùng `HAL_MAX_SESSION_DURATION_S`. |
 | `HAL_SILENCE_VAD_ENABLED` | `true` | Yêu cầu Silero xác nhận có tiếng nói trước khi refresh đồng hồ im lặng kết thúc lượt. RMS vẫn là cổng chặn rẻ chạy trước; đặt `false` để quay về phát hiện im lặng thuần RMS. |
 | `HAL_SILENCE_VAD_WINDOW_FRAMES` | `3` | Số frame gom lại cho mỗi lần chạy Silero ở bước kiểm đó — Silero tốn ~20 ms/frame trên ARM và LSTM của nó cần hơn một frame 64 ms mới ổn định. |
 | `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `gptlive` \| `pipecat_v1` |

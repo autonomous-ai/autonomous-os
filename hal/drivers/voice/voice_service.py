@@ -4,7 +4,7 @@ Voice Service — local VAD + pluggable STT for autonomous sensing.
 Pipeline:
   1. Mic always on, local RMS energy check (free, zero cost)
   2. Speech detected → create STT session, stream audio
-  3. Silence for SILENCE_TIMEOUT → close session (stop billing)
+  3. Silence candidate → provisional turn detection → close session
   4. Transcripts → POST to OS server /api/sensing/event
   5. OS server → local intent match or OpenClaw → AI responds → POST /voice/speak
 
@@ -66,6 +66,8 @@ from hal.drivers.voice._internal.speaker_decorate import (
     merge_wake_words,
 )
 from hal.drivers.voice._internal.turn_dispatch import dispatch_turn
+from hal.drivers.voice._internal.turn_endpoint import TurnEndpoint
+from hal.drivers.voice._internal.smart_turn import SmartTurnDetector
 from hal.telemetry import voice_metrics
 from hal.telemetry.live_voice import LiveVoiceMetrics
 from hal.drivers.voice._internal.live_history import LiveHistory
@@ -244,6 +246,7 @@ class VoiceService:
         # noise or speech" mid-capture cannot disturb the entry gate's state,
         # and it works whether or not the entry gate is enabled.
         self._silence_vad: SileroVADFilter | None = None
+        self._turn_detector = None
 
         # Speaker decoration (wake-word + speaker recognizer + SER). Speaker-ID and
         # SER (speech emotion) are voice people-perception — gated on the `audio`
@@ -454,6 +457,8 @@ class VoiceService:
             )
             return
         self._running = True
+        if voice_cfg.TURN_END_ENABLED and not voice_cfg.LIVE_MODE:
+            self._turn_detector = SmartTurnDetector()
         self._thread = threading.Thread(target=self._loop, daemon=True, name="voice")
         self._thread.start()
         logger.info("VoiceService started (local VAD + %s)", self._stt.name)
@@ -480,6 +485,9 @@ class VoiceService:
     def stop(self):
         self.cancel_harness_capture()
         self._running = False
+        if self._turn_detector is not None:
+            self._turn_detector.close()
+            self._turn_detector = None
         if hal_config.REALTIME_ENABLED:
             # realtime.stop() calls _context.summarize_device_memory() +
             # summarize_realtime_memory() which fire LLM requests — an
@@ -1991,6 +1999,13 @@ class VoiceService:
         final_sent = [False]
         # time.time() of the most recent STT final segment, 0 = none yet.
         final_ts = [0.0]
+        turn_endpoint = None
+        if voice_cfg.TURN_END_ENABLED and not voice_cfg.LIVE_MODE and manual_capture is None:
+            turn_endpoint = TurnEndpoint(
+                self._turn_detector,
+                fallback_s=voice_cfg.TURN_END_FALLBACK_S,
+                max_pause_s=voice_cfg.TURN_END_MAX_PAUSE_S,
+            )
         # The listening cue fires on the FIRST STT PARTIAL — never at session
         # open. A partial is proof a human said words; the entry VAD is not.
         # That VAD is tuned wide open on purpose so quiet speech is never
@@ -2512,11 +2527,20 @@ class VoiceService:
                     endpoint_ts = time.monotonic()
                     break
 
-                # Guard against zombie sessions
-                if (time.time() - session_start) > voice_cfg.MAX_SESSION_DURATION_S:
+                # Recognized hands-free speech may last minutes. Keep the
+                # short ceiling for empty/noisy and manual captures.
+                has_words = any(c.isalnum() for c in last_partial[0]) or any(
+                    any(c.isalnum() for c in segment) for segment in final_segments
+                )
+                duration_limit = (
+                    voice_cfg.TURN_END_MAX_DURATION_S
+                    if turn_endpoint is not None and has_words
+                    else voice_cfg.MAX_SESSION_DURATION_S
+                )
+                if (time.time() - session_start) > duration_limit:
                     logger.warning(
                         "STT session exceeded %ds, force-closing",
-                        voice_cfg.MAX_SESSION_DURATION_S,
+                        duration_limit,
                     )
                     endpoint_method = "max_duration"
                     endpoint_ts = time.monotonic()
@@ -2585,6 +2609,18 @@ class VoiceService:
                                         noise_windows, probe_frames,
                                     )
                 elif manual_capture is None and turn_should_close(time.time(), last_speech_time, final_ts[0]):
+                    if turn_endpoint is not None:
+                        # Snapshot only the last eight seconds through the
+                        # speech tail, not a growing multi-minute copy. The
+                        # worker never reads the mutable capture buffer.
+                        end = min(len(audio_buffer), last_speech_idx + 1 + 4)
+                        start = max(0, end - 125)  # 8 seconds at 64 ms/frame.
+                        if not turn_endpoint.should_close(
+                            now=time.time(), last_speech=last_speech_time,
+                            text=" ".join([*final_segments, last_partial[0]]).strip(),
+                            pcm=b"".join(audio_buffer[start:end]),
+                        ):
+                            continue
                     if noise_windows:
                         logger.info(
                             "Silence detected, disconnecting STT "
@@ -2592,7 +2628,7 @@ class VoiceService:
                         )
                     else:
                         logger.info("Silence detected, disconnecting STT")
-                    endpoint_method = "silence_clock"
+                    endpoint_method = turn_endpoint.reason if turn_endpoint else "silence_clock"
                     endpoint_ts = time.monotonic()
                     break
         except Exception as e:
@@ -2628,6 +2664,11 @@ class VoiceService:
                 getattr(self._tts, "last_spoken_text", "") if self._tts else "",
             )
             capture_complete.set()
+            if turn_endpoint is not None and endpoint_method == "max_duration":
+                logger.warning("Hands-free capture limit reached; unfinished request discarded")
+                if realtime_turn_started and hal_config.REALTIME_ENABLED:
+                    self._realtime.discard_open_activity()
+                return
             if manual_capture is not None and (
                 not self._running
                 or endpoint_method != "manual_tap"
