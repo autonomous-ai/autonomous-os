@@ -47,7 +47,7 @@ func (s *HermesService) ensureJevPlugin() error {
 	return nil
 }
 
-// syncJevPlugin only owns its namespaced files and allow-list entry. A user
+// syncJevPlugin owns its assets, allow-list entry and unset hook spill default. A user
 // deny-list takes precedence. The sidecar contains a path, never credentials.
 func syncJevPlugin(home, configPath string) (bool, error) {
 	yamlPath := filepath.Join(home, "config.yaml")
@@ -105,6 +105,7 @@ func syncJevPlugin(home, configPath string) (bool, error) {
 	if plugins == nil {
 		plugins = map[string]any{}
 	}
+	alreadyEnabled := false
 	// Do not override an operator disabling the plugin in Hermes itself.
 	for _, key := range []string{"disabled", "enabled"} {
 		values, ok := plugins[key].([]any)
@@ -113,13 +114,26 @@ func syncJevPlugin(home, configPath string) (bool, error) {
 		}
 		for _, value := range values {
 			if name, ok := value.(string); ok && name == jevPluginName {
-				return changed, nil
+				if key == "disabled" {
+					return changed, nil
+				}
+				alreadyEnabled = true
 			}
 		}
 	}
-	enabled, _ := plugins["enabled"].([]any)
-	plugins["enabled"] = append(enabled, jevPluginName)
-	cfg["plugins"] = plugins
+	configChanged, err := setJevHookSpillDefault(cfg)
+	if err != nil {
+		return changed, err
+	}
+	if !alreadyEnabled {
+		enabled, _ := plugins["enabled"].([]any)
+		plugins["enabled"] = append(enabled, jevPluginName)
+		cfg["plugins"] = plugins
+		configChanged = true
+	}
+	if !configChanged {
+		return changed, nil
+	}
 	yamlData, err := yaml.Marshal(cfg)
 	if err != nil {
 		return changed, fmt.Errorf("encode Hermes plugin config: %w", err)
@@ -145,5 +159,31 @@ func writeJevAsset(path string, data []byte) (bool, error) {
 	if err := atomicWriteFile(path, data, 0o600); err != nil {
 		return false, fmt.Errorf("write Jev asset: %w", err)
 	}
+	return true, nil
+}
+
+// Hermes spills each hook result above 10,000 characters by default. Allow the
+// bounded Jev preload inline; preserve every explicit operator spill setting.
+func setJevHookSpillDefault(cfg map[string]any) (bool, error) {
+	hooks, ok := cfg["hooks"].(map[string]any)
+	if cfg["hooks"] != nil && !ok {
+		return false, fmt.Errorf("Hermes hooks config must be a mapping")
+	}
+	if hooks == nil {
+		hooks = map[string]any{}
+	}
+	spill, ok := hooks["output_spill"].(map[string]any)
+	if hooks["output_spill"] != nil && !ok {
+		return false, fmt.Errorf("Hermes hooks.output_spill must be a mapping")
+	}
+	if spill == nil {
+		spill = map[string]any{}
+	}
+	if _, exists := spill["max_chars"]; exists {
+		return false, nil
+	}
+	spill["max_chars"] = 128 * 1024
+	hooks["output_spill"] = spill
+	cfg["hooks"] = hooks
 	return true, nil
 }
