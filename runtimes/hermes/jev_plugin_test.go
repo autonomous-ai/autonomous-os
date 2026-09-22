@@ -109,3 +109,38 @@ func TestSyncJevPluginRejectsMalformedConfig(t *testing.T) {
 		t.Fatal("malformed operator config overwritten")
 	}
 }
+
+func TestSyncJevPluginSpillBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name, config string
+		want         int
+	}{
+		{"already_enabled", "plugins:\n  enabled: [jev]\n", 131072},
+		{"preserve_operator_limit", "plugins:\n  enabled: [jev]\nhooks:\n  output_spill:\n    max_chars: 7000\n", 7000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			path := filepath.Join(home, "config.yaml")
+			if err := os.WriteFile(path, []byte(tc.config), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := syncJevPlugin(home, "/config/config.json"); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := readHermesConfig(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			spill := cfg["hooks"].(map[string]any)["output_spill"].(map[string]any)
+			// YAML decoders may represent integers with different concrete Go types.
+			raw, _ := json.Marshal(spill["max_chars"])
+			var got int
+			if err := json.Unmarshal(raw, &got); err != nil || got != tc.want {
+				t.Fatalf("max_chars: %s", raw)
+			}
+			if changed, err := syncJevPlugin(home, "/config/config.json"); err != nil || changed {
+				t.Fatalf("not idempotent: %v %v", changed, err)
+			}
+		})
+	}
+}
