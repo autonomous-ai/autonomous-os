@@ -258,18 +258,28 @@ not completion evidence.
 For a spoken response with no routing decision, HAL starts an independent text
 check during the existing grace, using the configured realtime summarizer model,
 endpoint and credentials. It checks the original request, spoken answer and public
-search evidence, with no tools or speech output. Only exact `COMPLETE` accepts a
-fully answered conversational/public lookup turn. Fillers, errors, account access,
-physical actions and mixed requests with remaining work retain fallback. Timeouts,
+search evidence, with no tools or speech output. Exact `COMPLETE` accepts a
+fully answered conversational/public lookup turn. Exact `CLARIFICATION` also
+accepts the current spoken turn when an information request needs missing user
+input and the response asks a specific, necessary follow-up question. For example,
+answering the Bitcoin price and asking which city to use for the weather keeps
+the conversation in realtime. This handles the current turn; it does not mark
+the whole request complete. Merely stating inability, without a necessary
+follow-up question, remains `INCOMPLETE`. Fillers, errors, account access,
+physical actions, research still to do, and mixed requests with unresolved
+execution work (such as music playback or reminders) retain fallback, even if
+the response also asks a question. Timeouts,
 missing credentials and malformed replies provide no independent confirmation.
 This adds one small text-model call with a separate
 `HAL_REALTIME_OUTCOME_TIMEOUT_S` deadline (default 10 seconds
 from the first terminal). It overlaps the 6-second tool grace; finalization waits
 for a pending check, at most 4 more seconds at default settings. A real routing
-call cancels the check. Explicit INCOMPLETE overrides an erroneous
+call cancels the check; an explicit delegate still takes priority over either
+accepted check result. Explicit `INCOMPLETE` overrides an erroneous
 `complete_response` after a filler; an unavailable check preserves the provider
 decision, or fallback if there is none.
-A confirmed answer follows `realtime_handled` → `voice_agent_handled` → history sync,
+A confirmed answer or necessary clarification follows
+`realtime_handled` → `voice_agent_handled` → history sync,
 without main-agent execution. The semantic check is model-based, not proof that
 all factual claims are correct.
 

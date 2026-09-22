@@ -256,17 +256,26 @@ trực tiếp cần outcome được xác nhận cùng terminal thành công c�
 Với lời đã phát nhưng thiếu quyết định routing, HAL chạy kiểm tra độc lập bằng
 text model trong cửa sổ grace hiện có, dùng model, endpoint và credential của
 realtime summarizer. Đầu vào gồm yêu cầu gốc, lời đã nói và bằng chứng tìm kiếm
-công khai; bước kiểm tra không có tool hay phát âm thanh. Chỉ kết quả chính xác
-`COMPLETE` chấp nhận lượt hội thoại/tra cứu đã trả lời đủ. Filler, lỗi, truy cập
-tài khoản, hành động vật lý và yêu cầu hỗn hợp còn việc giữ fallback. Timeout,
+công khai; bước kiểm tra không có tool hay phát âm thanh. Kết quả chính xác
+`COMPLETE` chấp nhận lượt hội thoại/tra cứu đã trả lời đủ. Kết quả chính xác
+`CLARIFICATION` cũng chấp nhận lượt nói hiện tại khi yêu cầu thông tin còn thiếu
+dữ kiện từ người dùng và câu trả lời đặt câu hỏi tiếp nối cụ thể, cần thiết.
+Ví dụ, trả lời giá Bitcoin rồi hỏi thành phố để tra thời tiết sẽ giữ hội thoại
+ở realtime. Điều này chỉ xác nhận đã xử lý lượt hiện tại, không đánh dấu toàn
+bộ yêu cầu đã hoàn tất. Chỉ nói không thể trả lời mà không hỏi thêm dữ kiện
+cần thiết vẫn là `INCOMPLETE`. Filler, lỗi, truy cập tài khoản, hành động vật lý,
+nghiên cứu còn phải làm và yêu cầu hỗn hợp còn việc thực thi (như phát nhạc hoặc
+tạo nhắc nhở) vẫn fallback, kể cả khi câu trả lời cũng đặt câu hỏi. Timeout,
 thiếu credential hoặc kết quả sai định dạng không cung cấp xác nhận độc lập.
 Có thêm một lượt text model với hạn riêng `HAL_REALTIME_OUTCOME_TIMEOUT_S`
 (mặc định 10 giây từ terminal
 đầu tiên). Bước này chạy đồng thời với grace tool 6 giây; khi hết grace có thể
-chờ kết quả thêm tối đa 4 giây theo mặc định. Tool routing thật hủy kiểm tra.
-INCOMPLETE ghi đè `complete_response` sai sau filler; kiểm tra không khả dụng
-giữ quyết định provider, hoặc fallback nếu chưa có quyết định. Câu trả lời được
-xác nhận đi qua `realtime_handled` → `voice_agent_handled` → history sync, không
+chờ kết quả thêm tối đa 4 giây theo mặc định. Tool routing thật hủy kiểm tra;
+delegate tường minh vẫn ưu tiên hơn cả hai kết quả kiểm tra được chấp nhận.
+`INCOMPLETE` ghi đè `complete_response` sai sau filler; kiểm tra không khả dụng
+giữ quyết định provider, hoặc fallback nếu chưa có quyết định. Câu trả lời hoặc
+câu hỏi bổ sung cần thiết đã xác nhận đi qua
+`realtime_handled` → `voice_agent_handled` → history sync, không
 chạy main agent. Kiểm tra ngữ nghĩa bằng model không chứng minh mọi thông tin
 trong câu trả lời đều đúng.
 

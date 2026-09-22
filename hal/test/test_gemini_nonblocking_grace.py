@@ -430,6 +430,61 @@ def test_late_delegate_wins_over_independent_completion(monkeypatch):
     assert calls == ['delegate_to_main']
 
 
+@pytest.mark.parametrize('generation', [True, False])
+@pytest.mark.parametrize('verdict,needs_main', [
+    ('CLARIFICATION', False), ('INCOMPLETE', True), ('unexpected', True),
+])
+def test_weather_clarification_routes_through_real_outcome_parser(
+        monkeypatch, generation, verdict, needs_main):
+    import anthropic
+    import json
+    from hal.realtime import response_outcome
+
+    request = 'Can you tell me the weather today and Bitcoin pricing?'
+    answer = ("Bitcoin is trading at around 86,400 USD today. "
+              "To give you the correct weather, I'll need to know which city you're in.")
+    captured = []
+
+    class Stream:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        @property
+        def text_stream(self):
+            async def chunks():
+                yield verdict
+            return chunks()
+
+    class Client(Stream):
+        def __init__(self, **kwargs):
+            self.messages = self
+
+        def stream(self, **kwargs):
+            captured.append(json.loads(kwargs['messages'][0]['content']))
+            return Stream()
+
+    # Mock only the text-model transport, preserving classification parsing and
+    # Gemini terminal routing together. No live API or device action is needed.
+    monkeypatch.setattr(anthropic, 'AsyncAnthropic', Client)
+    monkeypatch.setattr(response_outcome.app_config, 'REALTIME_SUMMARIZER_API_KEY', 'test')
+    speech = _terminal(generation=generation)
+    speech.server_content.output_transcription = SimpleNamespace(text=answer)
+    agent = _agent([speech, _terminal()])
+    agent._user_transcript = request
+    events = _receive(agent)
+    done = next(e for e in events if isinstance(e, TurnDoneEvent))
+    assert captured == [{'request': request, 'spoken_answer': answer,
+                         'public_search_evidence': False}]
+    assert done.fallback_to_main is needs_main
+    assert done.execution_completed is (not needs_main)
+    assert done.user_transcript == request
+    assert not _calls(events)
+    _assert_done(agent, events)
+
+
 def test_filler_confirmation_cannot_override_incomplete_check(monkeypatch):
     from hal.realtime import response_outcome
 
