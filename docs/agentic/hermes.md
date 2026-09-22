@@ -1020,13 +1020,22 @@ it revalidates the skill against the live eligible catalog and loads its content
 through native `tools.skills_tool.skill_view(name, task_id, preprocess=False)`.
 The skill is injected into ephemeral context for the current turn, so Hermes
 receives its instructions without first having to choose and call `skill_view`.
-This changes the plugin only, not Hermes core. Loading instructions does not
+This changes the OS-managed plugin, configuration and instructions, not Hermes
+core. The managed `AGENTS.md` instructions count a complete native Jev preload
+for **this turn** as satisfying the mandatory skill read; Hermes should not
+reread that same `SKILL.md`. A partial preview or a user claim that a skill was
+read does not satisfy this rule. Loading instructions does not
 execute the skill's actions, authorize tools, or bypass mandatory
 connector/platform rules and permission checks.
 
 Preloading fails open to normal Hermes discovery if the selected skill is
 missing or disabled, the native API is unsupported, reading fails, or the native
-JSON result exceeds 128 KiB. Shell preprocessing is disabled; skills containing
+JSON result exceeds 128 KiB. The final context must also fit within 131,072
+characters and, when native hook output spilling is enabled, its configured
+`max_chars` threshold (whichever is smaller). Otherwise it fails open rather
+than logging `preloaded` while Hermes replaces the content with a file pointer.
+Older Hermes without the spill API uses the local character cap. Shell
+preprocessing is disabled; skills containing
 dynamic shell snippets (an exclamation mark followed by a backtick-delimited
 command) also fail open. Timeout results cannot be attached to a later turn.
 System notices prefixed with `[system]` bypass routing and preloading.
@@ -1045,6 +1054,13 @@ and adds `jev` to `plugins.enabled` in Hermes's `config.yaml`, preserving
 other plugin settings and an explicit `plugins.disabled` entry. The generated
 `os-config-path.json` contains only the absolute path to the OS config, never an
 API key. Unchanged assets are not rewritten.
+
+When Jev is not explicitly disabled, sync also sets
+`hooks.output_spill.max_chars: 131072` **only if unset**. Explicit thresholds and
+the `plugins.disabled` setting are preserved. This raises Hermes's global
+per-hook output threshold from its 10,000-character default so a complete skill
+can stay inline; it does not disable output spilling. The loader respects an
+explicit smaller threshold and falls back if the full context will not fit.
 
 Plugin installation or updates do **not** add a gateway restart reason. os-server
 logs that loading changed plugin code needs the next gateway restart; existing

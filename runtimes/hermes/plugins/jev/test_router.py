@@ -74,6 +74,23 @@ class RouterTest(unittest.TestCase):
                 plugin.cooldown_until = 0
                 self.assertIsNone(plugin.before_turn(user_message="play music"))
 
+    def test_preload_respects_actual_core_spill_budget(self):
+        native = {"success": True, "content": "skill instructions " * 1000}
+        modules = {
+            "tools.skills_tool": SimpleNamespace(skill_view=lambda **kw: json.dumps(native)),
+            "tools.hook_output_spill": SimpleNamespace(get_spill_config=lambda: {"enabled": True, "max_chars": 10000}),
+        }
+        with patch.dict(sys.modules, modules):
+            with self.assertRaisesRegex(ValueError, "inline hook budget"):
+                router.load_skill_context("openclaw-imports/computer-use")
+            modules["tools.hook_output_spill"].get_spill_config = lambda: {"enabled": True, "max_chars": 131072}
+            context = router.load_skill_context("openclaw-imports/computer-use")
+            self.assertIn(native["content"], context)
+            self.assertLess(len(context), 131072)
+            modules["tools.hook_output_spill"].get_spill_config = lambda: {"enabled": True, "max_chars": 500}
+            with self.assertRaisesRegex(ValueError, "inline hook budget"):
+                router.load_skill_context("openclaw-imports/computer-use")
+
     def test_slow_preload_is_discarded_and_context_is_copied(self):
         plugin = self.make()
         entered, release = threading.Event(), threading.Event()
