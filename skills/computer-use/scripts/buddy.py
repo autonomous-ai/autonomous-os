@@ -269,6 +269,13 @@ def main(argv=None):
         params = json.loads(raw)
         if not isinstance(params, dict):
             raise BuddyError("params must be a JSON object")
+        if args.action == "inspect":
+            if args.id or args.output_dir or args.timeout_ms != 15000 or args.question is not None or args.goal is not None:
+                raise BuddyError("inspect accepts only --params or --params-file")
+            from buddy_inspect import inspect_ui
+            result = inspect_ui(params, command)
+            print(json.dumps(result, ensure_ascii=False, allow_nan=False))
+            return 0 if result["ok"] else 1
         if args.action == "suggest":
             if args.id or args.output_dir or args.timeout_ms != 15000 or args.question is not None:
                 raise BuddyError("suggest uses a fixed 15-second HTTP timeout and does not accept --id, --output-dir or --question")
