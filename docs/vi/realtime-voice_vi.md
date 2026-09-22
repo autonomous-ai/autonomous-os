@@ -295,10 +295,15 @@ nghiên cứu còn phải làm và yêu cầu hỗn hợp còn việc thực thi
 tạo nhắc nhở) vẫn fallback, kể cả khi câu trả lời cũng đặt câu hỏi. Timeout,
 thiếu credential hoặc kết quả sai định dạng không cung cấp xác nhận độc lập.
 Kiểm tra ban đầu dùng một lượt text model với hạn riêng
-`HAL_REALTIME_OUTCOME_TIMEOUT_S` (mặc định 10 giây từ terminal đầu tiên).
-Nếu cần kiểm tra phần nói tiếp, bước đó dùng chung hạn ban đầu, không mở thêm
-một timeout. Bước này chạy đồng thời với grace tool 6 giây; khi hết grace có thể
-chờ kết quả thêm tối đa 4 giây theo mặc định. Tool routing thật hủy kiểm tra;
+`HAL_REALTIME_OUTCOME_TIMEOUT_S` (mặc định 10 giây từ terminal đầu tiên), chạy
+đồng thời với grace tool thông thường 6 giây. Đáp án đến sau và có terminal
+được kiểm tra phần nói tiếp với hạn mới có giới hạn: tối đa timeout outcome,
+và không muộn hơn chunk đáp án cuối cộng khoảng chờ receive (mặc định 8 giây).
+Khi có tiến độ đã xác minh, nó còn bị chặn ở hạn 15 giây từ commit, trừ khi
+chunk đáp án thật tiếp tục về sau hạn đó.
+Terminal đầu tiên không có lời nói không còn khiến kiểm tra này nhận hạn bằng 0.
+Tiến độ đã xác minh cũng giới hạn kiểm tra ban đầu còn chờ ở hạn progress.
+Tool routing thật hủy kiểm tra;
 delegate tường minh vẫn ưu tiên hơn cả hai kết quả kiểm tra được chấp nhận.
 `INCOMPLETE` ghi đè `complete_response` sai sau filler; kiểm tra không khả dụng
 giữ quyết định provider, hoặc fallback nếu chưa có quyết định. Nếu phần nói tiếp
@@ -310,28 +315,42 @@ chạy main agent. Kiểm tra ngữ nghĩa bằng model không chứng minh mọ
 trong câu trả lời đều đúng.
 
 Text/audio filler vẫn stream ngay để phục vụ KPI-1 (Voice Acknowledge).
-HAL chờ tool routing tối đa `HAL_REALTIME_NONBLOCKING_TOOL_GRACE_S`
+HAL thông thường chờ tool routing tối đa `HAL_REALTIME_NONBLOCKING_TOOL_GRACE_S`
 (mặc định **6 giây**, `0` tắt thời gian chờ, không tắt yêu cầu outcome).
 Cửa sổ bắt đầu ở `generation_complete` hoặc `turn_complete` đầu tiên; terminal
-sau không kéo dài thời hạn. HAL mở iterator `receive()` kế tiếp của SDK trên
+sau đơn thuần không kéo dài thời hạn. Query/chunk Google Search hoặc tool thực
+hiện công việc ngoài routing và biểu cảm có thể kéo dài thời gian chờ outcome
+chưa hoàn tất tới `HAL_REALTIME_PROGRESS_TIMEOUT_S` (mặc định **15 giây tính từ
+commit audio**). Tiến độ lặp lại không đặt lại ngân sách này; việc còn chờ
+bị chặn ở hạn đó kể cả terminal đầu tiên đến muộn. Outcome được chấp nhận
+chấm dứt phần gia hạn progress.
+Không có tiến độ đã xác minh, extended-thinking khi Live tắt giữ watchdog gap
+output thông thường **8 giây**: thought, usage và heartbeat chung không chứng
+minh tiến độ hữu ích. Thay đổi này không thêm lịch phát filler; giữ câu xác nhận
+một lần mỗi lượt hiện có. Watchdog progress chặt hơn áp dụng cho Gemini
+extended-thinking khi Live tắt; OpenAI, GPT-Live và Pipecat giữ hành vi hiện có.
+HAL mở iterator `receive()` kế tiếp của SDK trên
 cùng session sau `turn_complete`, giữ định danh lượt logic.
-Chỉ delegate/reject kết thúc cửa sổ sớm. `complete_response` ghi nhận xác nhận
+Delegate/reject/end-conversation kết thúc cửa sổ sớm. `complete_response` ghi nhận xác nhận
 nhưng vẫn chờ để nhận delegate ở frame tiếp theo; tool phụ không
 xác nhận hoàn tất và không ngăn delegate đến sau. Sau terminal đầu tiên, HAL
 giữ text/audio tiếp theo trong bộ đệm, chưa phát. Terminal sau hoặc
 `complete_response` có thể kích hoạt kiểm tra lời ban đầu cộng phần nói tiếp.
 HAL chỉ phát phần đang giữ khi chốt grace, không có delegate hay interruption,
-kiểm tra độc lập xác nhận lời ban đầu là `INCOMPLETE` và kết quả kiểm tra ngữ
+lời ban đầu rỗng hoặc kiểm tra độc lập xác nhận là `INCOMPLETE`, và kiểm tra ngữ
 nghĩa chấp nhận toàn bộ câu trả lời. Nếu lời ban đầu đã hoàn chỉnh, cơ chế chặn
-lặp vẫn giữ nguyên; nếu kiểm tra ban đầu chưa xác nhận được, phần nói tiếp không
+lặp vẫn giữ nguyên; nếu đã có lời ban đầu nhưng chưa xác nhận được, phần nói tiếp không
 được phát. Delegate/reject tường minh đến muộn vẫn ưu tiên khi HAL còn nhận
 routing, nên phần đang giữ không phát trước quyết định này.
 
 Bộ đệm phần nói tiếp giới hạn 2.000.000 byte PCM và 16.000 ký tự text; vượt
 giới hạn sẽ không được phát. Lời nói bổ sung hủy hiệu lực kiểm tra phần nói tiếp
-trước đó, chờ terminal/xác nhận mới để kiểm tra lại. Phần nói tiếp và terminal
-mới đều không kéo dài grace routing 6 giây hay hạn outcome 10 giây ban đầu.
-Nhờ đó, đáp án được xác nhận sau filler có thể phát mà không lặp lại câu trả lời
+trước đó, chờ terminal/xác nhận mới để kiểm tra lại. Chunk audio/text đáp án thật
+giữ quá trình sinh tiếp hoạt động với giới hạn im lặng theo receive gap (mặc định
+8 giây); đáp án đang về có thể hoàn thành sau grace gốc và ngân sách progress
+15 giây. Terminal đóng cửa sổ sinh tiếp và cho phép kiểm tra phần nói tiếp có
+giới hạn như trên; metadata đơn thuần không giữ cửa sổ này. Nhờ đó, đáp án được
+xác nhận sau filler có thể phát mà không lặp lại câu trả lời
 đã hoàn chỉnh hoặc nối thêm lỗi/từ chối quyền truy cập chưa được xác nhận vào
 lời nói hay lịch sử. Lỗi receive trên nhóm model này cũng yêu cầu fallback sang
 main, kể cả đã phát filler.
@@ -345,11 +364,19 @@ lời realtime đã nói, dispatch thêm `[realtime-handoff]`: đây là yêu c�
 xử lý, không phải lịch sử đã handled. Main agent cần giải quyết hoặc hỏi thêm
 ngữ cảnh còn thiếu, không chọn `NO_REPLY` chỉ vì realtime đã nói. Đây là ngữ
 cảnh riêng cho bàn giao, không ghi đè toàn cục quyết định im lặng/bỏ tiếng ồn.
-Sau fallback hoặc delegate tường minh có lời realtime trước đó, Gemini đánh dấu
+Cả delegate tường minh và fallback cục bộ còn có thể mang `[realtime-context]`:
+tối đa 6.000 ký tự gồm query, tiêu đề/URL/snippet nguồn tìm kiếm có sẵn và lời
+đã phát (tối đa 2.000 ký tự). Metadata nguồn phụ thuộc dữ liệu nhận được, không
+bảo đảm có toàn bộ nội dung kết quả tìm kiếm. Dispatch giữ phần này thành dữ
+liệu tham khảo không đáng tin cậy được quote bằng JSON, tách khỏi transcript
+người dùng; đây không phải chỉ dẫn hay bằng chứng thực thi. Main agent có thể
+kiểm tra rồi tái sử dụng thông tin, tránh lặp lời đã phát.
+Sau fallback có lời ban đầu, phần nói tiếp đang giữ hoặc tiến độ đã xác minh,
+hoặc delegate tường minh có lời realtime trước đó, Gemini đánh dấu
 session `requires_fresh_session`; cơ chế `prepare_turn` hiện có tạo lại session
 trước lần thu âm tiếp theo. Nhờ đó terminal hoặc output grace cũ không làm mất
-input mới của người dùng. Câu trả lời trực tiếp đã hoàn tất và bàn giao không
-có lời nói không chịu thêm yêu cầu tạo lại session này.
+input mới của người dùng. Câu trả lời trực tiếp đã hoàn tất và bàn giao rỗng
+không có output đang giữ hay tiến độ đã xác minh không chịu thêm yêu cầu này.
 Model BLOCKING giữ cách kết thúc ngay hiện có. Prompt Gemini cho phép một câu xác nhận ngắn phát ngay trước
 delegate; reject vẫn hoàn toàn im lặng. Yêu cầu email/tài khoản/connector, kể cả
 "your email", thuộc main agent: Gemini chỉ xác nhận trung tính, không tự kết luận
@@ -1251,17 +1278,14 @@ trên queue:
   `OutputBase` đến khi gặp `TurnDoneEvent`, hoặc khi không có event nào trong
   `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` — mặc định 8 s — để kết thúc lượt im lặng
   và fallback sang main agent mà không bị dead-air dài).
-  Riêng cửa sổ đó không phân biệt được model *quyết định không trả lời* với model
-  *đang làm việc*: một lượt có Google Search grounding không phát ra output nào
-  cho tới khi search về, và cắt ở đó là vứt đi câu trả lời model sắp nói, đẩy
-  lượt xuống main agent chậm hơn nhiều, mà vẫn phải trả tiền cho cái search bị bỏ
-  (chunk của nó rơi vào context session và bị tính lại ở mọi lượt sau). Nhưng
-  trên đường truyền thì hai ca này khác nhau: lượt đang làm việc vẫn liên tục gửi
-  message không bao giờ vào queue (thought part, grounding metadata, frame chỉ có
-  usage), còn lượt bị bỏ thì im hoàn toàn. Provider gọi `note_server_activity()`
-  ở mọi message nhận được, và `receive()` giữ lượt sống quá cửa sổ gap chừng nào
-  còn message về, tối đa `HAL_REALTIME_TURN_MAX_SILENCE_S` (mặc định 20 s) cho cả
-  lượt. Lượt không có message nào về vẫn kết thúc ngay ở cửa sổ gap đầu tiên.
+  Gemini extended-thinking khi Live tắt dùng tiến độ đã xác minh và chunk đáp
+  án thật như trên: search/tool có thể kéo dài chờ tới hạn 15 giây từ commit,
+  còn chunk đáp án có giới hạn im lặng 8 giây. Lưu lượng nhận chung không kéo dài
+  lượt im lặng của model này. Các provider/chế độ khác giữ chính sách liveness
+  hiện có: gọi `note_server_activity()` khi nhận message, và `receive()` có thể
+  kéo dài lượt im lặng khi message còn về, tối đa
+  `HAL_REALTIME_TURN_MAX_SILENCE_S` (mặc định 20 s). Lượt không có message về vẫn
+  kết thúc ở cửa sổ gap đầu tiên.
 - `available` ⇔ websocket/session đã connect (`_connected`).
 - **Contract live-mode** (cả ba provider phát giống nhau — xem đoạn OpenAI ở
   trên; GPT-Live tổng hợp từ transcript input và khoảng im lặng output, xem mục
@@ -2587,8 +2611,10 @@ trong `config.json`:
 | `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `gptlive` \| `pipecat_v1` |
 | `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = activity detection thủ công; OpenAI: off = `turn_detection: null`, lượt do client commit + `response.create`; `server_vad` / `semantic_vad` nhận knob từ `HAL_LIVE_VAD_*` và `HAL_OPENAI_VAD_THRESHOLD`). `HAL_LIVE_MODE=true` ép `off` → `server_vad`. GPT-Live bỏ qua knob này: Live không có cấu hình VAD, adapter tổng hợp lượt từ transcript input và khoảng im lặng output |
 | `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` | `8.0` | Số giây tối đa `receive()` chờ output event kế tiếp trước khi kết thúc lượt im lặng (fallback sang main agent) |
+| `HAL_REALTIME_NONBLOCKING_TOOL_GRACE_S` | `6.0` | Grace routing thông thường sau terminal Gemini extended-thinking đầu tiên; tiến độ đã xác minh hoặc đáp án đang sinh tiếp có thể kéo dài. `0` tắt grace thông thường, không tắt yêu cầu outcome. |
+| `HAL_REALTIME_PROGRESS_TIMEOUT_S` | `15.0` | Hạn gia hạn khi Gemini extended-thinking có tiến độ search/tool, tính từ commit audio; tiến độ lặp lại không đặt lại hạn. `0` tắt gia hạn. Chunk đáp án thật vẫn có thể tiếp tục với giới hạn im lặng receive gap. |
 | `HAL_REALTIME_GROUNDING_DEBUG` | `false` | In toàn bộ field của `grounding_metadata` từ Gemini, mỗi lượt có grounding một lần (`grounding_chunks`, `grounding_supports`, `search_entry_point`, …). Chỉ để chẩn đoán và rất dài dòng; nó sinh ra để phân biệt lượt mà search thật sự không trả về gì với lượt bị cắt payload trên đường truyền. Đo trên lamp-0c89 04/09/2026 qua bốn lượt có grounding, payload luôn về đủ — nên `chunks=0` nghĩa là model không dùng nguồn nào cho câu trả lời đó. |
-| `HAL_REALTIME_TURN_MAX_SILENCE_S` | `20.0` | Trần thời gian một lượt được im lặng khi server vẫn còn gửi message. `receive()` chỉ kéo dài quá `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` khi lưu lượng vào chứng minh model còn đang làm việc (search grounding không phát output tới khi xong); trần này chặn trường hợp server nói liên tục mà không bao giờ ra output. `0` tắt cơ chế giữ lượt, quay về watchdog gap thuần. |
+| `HAL_REALTIME_TURN_MAX_SILENCE_S` | `20.0` | Trần liveness cũ cho provider/chế độ ngoài Gemini extended-thinking khi Live tắt (dùng tiến độ đã xác minh). `receive()` chỉ kéo dài quá `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` khi lưu lượng vào chứng minh model còn đang làm việc (search grounding không phát output tới khi xong); trần này chặn trường hợp server nói liên tục mà không bao giờ ra output. `0` tắt cơ chế giữ lượt, quay về watchdog gap thuần. |
 | `HAL_REALTIME_LOOK_RECV_TIMEOUT_S` | `20.0` | Watchdog im-lặng dùng thay mặc định cho turn có `look` (theo từng turn, qua `extend_recv_timeout()`). Gemini bị ép thinking trên frame dày chữ có thể im >8 s ngay trước khi trả lời — watchdog mặc định giết nhầm mấy turn đó. Nâng nó lên là hoãn luôn handoff frame `look`, nên phải giữ `HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S` cao hơn |
 | `HAL_REALTIME_REQUIRE_TRANSCRIPT` | `true` | Không bao giờ commit turn empty-STT lên model. Final transcript chỉ có dấu câu/ký hiệu (ví dụ `.`) được chuẩn hoá thành empty trước gaze, speaker-ID, realtime, dispatch hay refresh follow-up; nó không thể tạo `voice_followup`. Giọng thật mà nova-3 miss (câu ngắn) vẫn là voiced nên qua hết guard VAD/Silero, commit audio thô khiến model bịa câu trả lời cho khoảng im lặng (lời chào chung chung, thường kèm tên không ai nói). Khi `true`, mọi turn empty-STT bị bỏ bất kể duration/voicing — im còn hơn trả lời sai. Đặt `false` để quay về đường audio-only gated bằng Silero bên dưới. |
 | `HAL_REALTIME_AI_REJECT_FILTER` | `true` | Đăng ký `reject_turn` và bật policy gate tách riêng `should_drop_realtime_rejection()`. Tool call rõ ràng sẽ bỏ transcript trước OS dispatch; model im lặng, timeout hay lỗi vẫn fallback sang main agent. Noise guard deterministic riêng cũng terminal cho audio mà nó đã phân loại là không phải tiếng nói. Đặt `false` để tắt filter AI thử nghiệm này mà không đổi phần routing realtime còn lại. |
@@ -2698,3 +2724,5 @@ Một lượt so sánh audio tổng hợp riêng bằng Gemini 3.1 Live sau đó
 Realtime và Harness-only voice dùng chung journal `system/externalhistory` và worker gửi silent. HAL vẫn gửi `voice_agent_handled` với `[HANDLED]` / `[REPLY]`; OS ghi atomic lượt realtime hoàn tất trước khi xác nhận nhận và gửi tiếp history pending chưa từng gửi sau restart. Hook ngắt lời cũ chạy trước bước lưu; silent/chặn TTS giữ nguyên. Runtime hỗ trợ active-turn steering vẫn nhận history realtime khi bận; runtime khác chờ rảnh bằng queue trên disk. Lượt gửi chưa rõ kết quả giữ `uncertain`, không tự gửi lại. Flow Monitor hiện **History sync · Realtime → Main**, câu hỏi/câu trả lời gốc là Context. Xem [lịch sử hội thoại từ bên ngoài](os-server_vi.md#lịch-sử-hội-thoại-từ-bên-ngoài).
 
 Phân loại input LIVE còn được gửi trong metadata debug `voice_turn_type`, dùng bộ phân loại wake phrase thông thường và focus đã cho phép input. Reply realtime trực tiếp giữ event routing `voice_agent_handled`; monitor có thể hiển thị command/follow-up độc lập.
+
+Chẩn đoán: `[realtime][timing]` ghi lúc đưa audio commit vào hàng đợi, progress đầu tiên được xác nhận, nhận grounding, bắt đầu giữ continuation, phát/bỏ continuation, hết thời gian chờ và receive timeout. Thời gian dùng đồng hồ monotonic tính từ commit gần nhất được đưa vào hàng đợi (không phải lúc người dùng nói xong), kèm generation và thời gian progress/output còn lại. Event đến muộn có thể xuất hiện sau commit mới; các trường này không chứng minh request nào đã khởi tạo search. `Google Search metadata received (search start unknown)` đánh dấu lúc nhận metadata grounding, không phải lúc bắt đầu search. Provider không cung cấp mốc bắt đầu search ở đây; không suy ra thời gian chạy search từ log này.

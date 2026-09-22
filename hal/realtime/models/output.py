@@ -27,6 +27,7 @@ class MainAgentFallbackOutput(OutputBase):
 
     type: OutputTypeEnum = OutputTypeEnum.MAIN_AGENT_FALLBACK
     transcript: str = ""
+    handoff_context: str = ""
 
 
 class AudioOutput(OutputBase):
@@ -69,3 +70,4 @@ class FunctionCallOutput(OutputBase):
     # Provider-side transcript of the utterance that triggered the call
     # (Gemini input_transcription); empty when the provider has none.
     user_transcript: str = ""
+    handoff_context: str = ""

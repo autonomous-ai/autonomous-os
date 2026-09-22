@@ -66,3 +66,4 @@ class TurnDoneEvent(AgentOutputEvent):
     # Providers opt in when speech alone does not establish task completion.
     fallback_to_main: bool = False
     user_transcript: str = ""
+    handoff_context: str = ""

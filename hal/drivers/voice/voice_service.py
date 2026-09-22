@@ -1461,6 +1461,7 @@ class VoiceService:
                             RealtimeTurnResult(
                                 delegated=True,
                                 delegate_msg=out.message,
+                                handoff_context=out.handoff_context,
                                 route=ROUTE_DELEGATED,
                             ),
                             harness_voice=harness_voice,

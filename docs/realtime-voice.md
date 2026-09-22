@@ -299,10 +299,15 @@ execution work (such as music playback or reminders) retain fallback, even if
 the response also asks a question. Timeouts,
 missing credentials and malformed replies provide no independent confirmation.
 The initial check uses one small text-model call with a separate
-`HAL_REALTIME_OUTCOME_TIMEOUT_S` deadline (default 10 seconds
-from the first terminal). A continuation check, when needed, shares that original
-deadline rather than starting another timeout. It overlaps the 6-second tool grace; finalization waits
-for a pending check, at most 4 more seconds at default settings. A real routing
+`HAL_REALTIME_OUTCOME_TIMEOUT_S` deadline (default 10 seconds from its first
+terminal). It overlaps the ordinary 6-second tool grace. A later, terminal-ended
+answer gets a fresh bounded continuation check: at most the outcome timeout,
+and no later than the last answer chunk plus the receive gap (default 8 seconds).
+With verified progress, it also stops at the 15-second commit-based deadline
+unless actual answer chunks continued past that deadline.
+An empty initial terminal no longer leaves this check with a zero deadline.
+Verified progress also bounds pending initial classification at the progress
+deadline. A real routing
 call cancels the check; an explicit delegate still takes priority over either
 accepted check result. Explicit `INCOMPLETE` overrides an erroneous
 `complete_response` after a filler; an unavailable check preserves the provider
@@ -315,29 +320,44 @@ without main-agent execution. The semantic check is model-based, not proof that
 all factual claims are correct.
 
 Filler text/audio still streams immediately for KPI-1 (Voice Acknowledge).
-HAL waits for routing tools up to `HAL_REALTIME_NONBLOCKING_TOOL_GRACE_S`
+HAL ordinarily waits for routing tools up to `HAL_REALTIME_NONBLOCKING_TOOL_GRACE_S`
 (default **6 seconds**, `0` disables the wait, not the outcome requirement).
 The grace starts at the first `generation_complete` or `turn_complete`; later
-terminals do not extend it. HAL reopens the SDK's per-turn `receive()` iterator
+terminals alone do not extend it. Verified Google Search queries/chunks or
+non-routing, non-emotion tool work can extend unfinished-outcome waiting until
+`HAL_REALTIME_PROGRESS_TIMEOUT_S` (default **15 seconds from audio commit**).
+Repeated progress does not restart that budget; pending work is capped there
+even if the first terminal arrives late. An accepted outcome stops this progress
+extension. Without
+verified progress, non-Live extended-thinking keeps the ordinary **8-second**
+output-gap watchdog: thoughts, usage frames and generic heartbeats are not
+proof of useful progress. This change adds no new filler schedule; the existing
+once-per-turn acknowledgement remains. The stricter progress watchdog applies
+to Gemini extended-thinking with Live off; OpenAI, GPT-Live and Pipecat keep
+their existing behavior.
+HAL reopens the SDK's per-turn `receive()` iterator
 on the same session after `turn_complete`, retaining the logical turn identity.
-Only delegate/reject calls end the grace early; `complete_response` records
+Delegate/reject/end-conversation calls end the grace early; `complete_response` records
 confirmation but keeps the window open for a delegate in a subsequent frame; auxiliary
 tools do not confirm completion or suppress a later delegate. After the first
 provider terminal, HAL holds subsequent text/audio instead of playing it. A later
 terminal or `complete_response` can trigger a check of the initial speech plus
 this continuation. HAL releases the held output only at grace finalization,
-without delegation or interruption, when the initial response was independently
+without delegation or interruption, when the initial response was empty or independently
 `INCOMPLETE` and the combined response receives an accepted semantic result.
 An already complete initial answer keeps the duplicate-speech guard; an
-unconfirmed initial check does not release the continuation. An explicit late
+unconfirmed check of existing initial speech does not release the continuation. An explicit late
 delegate/reject wins while routing is still being received, so held speech is
 never played before that decision.
 
 The continuation buffer is capped at 2,000,000 PCM bytes and 16,000 text
 characters; overflow prevents its release. Additional speech invalidates an
 earlier continuation check until another terminal/confirmation permits a new
-check. Neither continuation nor additional terminals extend the original
-6-second routing grace or 10-second outcome deadline. This permits a verified
+check. Actual answer audio/text chunks keep generation alive with a bounded
+receive-gap idle window (default 8 seconds); an answer still arriving can finish
+beyond the original grace and the 15-second progress budget. A terminal closes
+that generation window and permits the bounded continuation check above; metadata
+alone cannot keep it alive. This permits a verified
 answer after a filler without replaying a completed answer or appending an
 unconfirmed error/account-access denial to speech or history. A receive error
 also requests main-agent fallback for this model family, even if a filler already
@@ -352,12 +372,19 @@ For delegated turns with a realtime spoken transcript, dispatch adds
 `[realtime-handoff]`: this is an active, unresolved request, not handled history.
 The main agent should resolve it or ask for missing context, and must not choose
 `NO_REPLY` merely because realtime already spoke. This is scoped handoff context,
-not a global override of silence/noise decisions. After fallback or an explicit
-delegate following realtime speech, Gemini marks the session
+not a global override of silence/noise decisions. Both explicit delegation and
+local fallback can also carry `[realtime-context]`: up to 6,000 characters of
+available search queries, source titles/URLs/snippets, and already spoken text
+(up to 2,000 characters). Source metadata is best effort, not a guaranteed full
+search-result body. Dispatch keeps this JSON-quoted, untrusted reference separate
+from the user transcript; it is neither an instruction nor proof of execution.
+The main agent can check and reuse it and avoid repeating delivered speech.
+After fallback with initial speech, buffered continuation or verified progress,
+or an explicit delegate following realtime speech, Gemini marks the session
 `requires_fresh_session`; the existing `prepare_turn` rebuilds it before the next
 capture. This prevents old terminals or grace output from consuming the next
-user input. Completed direct answers and handoffs without speech do not gain
-this recycle requirement.
+user input. Completed direct answers and empty handoffs without buffered output
+or verified progress do not gain this recycle requirement.
 BLOCKING models keep their existing immediate-completion behavior. The Gemini
 prompt allows one immediate, brief acknowledgement before a delegate; rejection
 remains completely silent. Email/account/connector requests, including "your
@@ -1190,18 +1217,14 @@ queue-based contract:
   `OutputBase` until a `TurnDoneEvent`, or until no event arrives within
   `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` — default 8 s — which ends the turn quietly
   so a silent/no-response turn falls back to the main agent without long dead-air).
-  That gap window alone cannot tell a model that chose not to answer from one
-  that is **working**: a turn grounded with Google Search emits no output at all
-  until the search returns, and ending it there throws away an answer the model
-  was about to give, hands the turn to the far slower main agent, and still pays
-  for the abandoned search (whose chunks land in the session context and are
-  re-billed on every later turn). The two are not alike on the wire, though — a
-  working turn keeps sending messages that never reach the queue (thought parts,
-  grounding metadata, usage-only frames), while an abandoned one goes completely
-  quiet. Providers call `note_server_activity()` on every inbound message, and
-  `receive()` keeps the turn alive past the gap window while those keep arriving,
-  up to `HAL_REALTIME_TURN_MAX_SILENCE_S` (default 20 s) for the whole turn.
-  A turn with no inbound traffic at all still ends on the first gap window.
+  Gemini non-Live extended-thinking uses verified progress and actual answer
+  chunks as described above: search/tool progress can extend waiting to the
+  15-second commit-based deadline, while answer chunks have an 8-second idle
+  window. Generic inbound traffic does not extend that model's silent turn.
+  Other provider/mode paths retain their existing liveness policy: providers call
+  `note_server_activity()` on inbound messages, and `receive()` may extend a
+  silent turn while those messages arrive, up to `HAL_REALTIME_TURN_MAX_SILENCE_S`
+  (default 20 s). A turn with no inbound traffic still ends on the first gap.
 - `available` ⇔ the websocket/session is connected (`_connected`).
 - **Provider user-turn key.** Every `OutputBase` and the `TurnDoneEvent` carry
   `user_turn_id`, the provider's key for the user input that the reply answers.
@@ -2664,8 +2687,10 @@ is a top-level `config.json` flag:
 | `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `gptlive` \| `pipecat_v1` |
 | `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = manual activity detection). Ignored by GPT-Live, which has no `turn_detection` |
 | `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` | `8.0` | Max seconds `receive()` waits for the next output event before ending a silent turn (fallback to main agent) |
+| `HAL_REALTIME_NONBLOCKING_TOOL_GRACE_S` | `6.0` | Ordinary routing grace after the first Gemini extended-thinking terminal; verified progress or actual answer continuation may extend it. `0` disables ordinary grace, not the outcome requirement. |
+| `HAL_REALTIME_PROGRESS_TIMEOUT_S` | `15.0` | Gemini extended-thinking search/tool progress extension deadline, measured from audio commit; repeated progress does not reset it. `0` disables the extension. Actual answer chunks may continue with the receive-gap idle bound. |
 | `HAL_REALTIME_GROUNDING_DEBUG` | `false` | Dump every field of Gemini's `grounding_metadata` verbatim, once per grounded turn (`grounding_chunks`, `grounding_supports`, `search_entry_point`, …). Diagnostic only and verbose; it exists to tell a turn whose search genuinely returned nothing from one whose payload was stripped in transit. Measured on lamp-0c89 04/09/2026 over four grounded turns, the payload always arrived complete, so a `chunks=0` turn means the model did not ground that answer. |
-| `HAL_REALTIME_TURN_MAX_SILENCE_S` | `20.0` | Ceiling on how long one turn may stay silent while the server keeps sending messages. `receive()` extends a turn past `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` only while inbound traffic proves the model is still working (a grounded search emits nothing until it returns); this stops a server that chatters without ever producing output from hanging the turn. `0` disables the keep-alive and restores the plain gap watchdog. |
+| `HAL_REALTIME_TURN_MAX_SILENCE_S` | `20.0` | Legacy liveness ceiling for provider/mode paths other than Gemini non-Live extended-thinking (which uses verified progress). `receive()` extends a turn past `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` only while inbound traffic proves the model is still working (a grounded search emits nothing until it returns); this stops a server that chatters without ever producing output from hanging the turn. `0` disables the keep-alive and restores the plain gap watchdog. |
 | `HAL_REALTIME_LOOK_RECV_TIMEOUT_S` | `20.0` | Silent-turn watchdog used instead of the default for turns where a `look` fired (per-turn, via `extend_recv_timeout()`). Gemini's forced thinking over a text-dense frame can stay silent >8 s right before the answer — the default watchdog was killing those turns. Raising it delays the look-frame handoff, so keep `HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S` above it |
 | `HAL_REALTIME_REQUIRE_TRANSCRIPT` | `true` | Never commit an empty-STT turn to the model. A final transcript containing only punctuation or symbols (for example `.`) is normalized to empty before gaze, speaker-ID, realtime, dispatch, or follow-up refresh; it cannot create a `voice_followup`. Real speech that nova-3 missed (short utterances) is voiced and passes the VAD/Silero guards, so committing its raw audio makes the model invent a reply to silence (a generic greeting, often with a name nobody said). When `true`, any empty-STT turn is dropped regardless of duration/voicing — silence beats a wrong reply. Set `false` to fall back to the Silero-gated audio-only path below. |
 | `HAL_REALTIME_AI_REJECT_FILTER` | `true` | Registers `reject_turn` and enables the isolated `should_drop_realtime_rejection()` policy gate. An explicit tool call drops a transcript before OS dispatch; a silent model completion, timeout, or error still falls back to the main agent. The separate deterministic noise guard is also terminal for audio it already classified as non-speech. Set `false` to disable this experimental AI filter without changing the rest of realtime routing. |
@@ -2775,3 +2800,5 @@ A subsequent isolated Gemini 3.1 Live synthetic-audio comparison reused identica
 Realtime and Harness-only voice now share the `system/externalhistory` journal and silent delivery worker. HAL still sends `voice_agent_handled` with `[HANDLED]` / `[REPLY]`; OS atomically persists the completed realtime exchange before acknowledging it and resumes never-sent pending history after restart. The existing speaker-supersession hook runs before persistence, and silent/TTS suppression is unchanged. Busy runtimes with active-turn steering retain that capability for realtime history; others wait durably for idle. Ambiguous sends are retained as `uncertain`, not automatically replayed. Flow Monitor displays the sync as **History sync · Realtime → Main**, with the original question/answer as Context. See [external conversation history](os-server.md#external-conversation-history).
 
 LIVE input classification is also sent as observational `voice_turn_type` metadata. It uses the regular wake-phrase classifier and the focus that authorized the input. Direct realtime answers retain the `voice_agent_handled` routing event, while the monitor can display command/follow-up independently.
+
+Diagnostics: `[realtime][timing]` records queued audio commits, first verified progress, grounding receipt, first buffered continuation, continuation release/discard, deferred wait expiry, and receive timeout. Timing uses monotonic seconds since the latest queued commit (not microphone speech end), plus generation and remaining progress/output budgets. A late provider event may follow a newer commit; these fields do not prove which request initiated a search. `Google Search metadata received (search start unknown)` marks receipt of grounding metadata, not search start. The provider does not expose search start here; do not infer search duration from this log.

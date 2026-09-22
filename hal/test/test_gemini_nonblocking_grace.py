@@ -3,6 +3,7 @@
 import asyncio
 import queue
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -77,6 +78,7 @@ def _agent(messages, model="gemini-3.8-live-extended-thinking"):
 def _short_grace(monkeypatch):
     monkeypatch.setattr(gemini_live.app_config, "REALTIME_NONBLOCKING_TOOL_GRACE_S", 0.02)
     monkeypatch.setattr(gemini_live.app_config, "REALTIME_OUTCOME_TIMEOUT_S", 0.03)
+    monkeypatch.setattr(gemini_live.app_config, "REALTIME_RECV_QUEUE_TIMEOUT_S", 0.04)
 
 
 def _receive(agent):
@@ -626,3 +628,221 @@ def test_slow_outcome_check_is_cancelled_at_its_own_deadline(monkeypatch):
     events = _receive(agent)
     assert cancelled == [True]
     assert next(e for e in events if isinstance(e, TurnDoneEvent)).fallback_to_main
+
+
+@pytest.mark.parametrize("generation", [True, False])
+def test_empty_terminal_then_real_answer_gets_fresh_outcome_window(monkeypatch, generation):
+    from hal.realtime import response_outcome
+    observed = []
+
+    async def check(request, answer, **kwargs):
+        observed.append((answer, kwargs["timeout"]))
+        return True
+
+    monkeypatch.setattr(response_outcome, "spoken_response_complete", check)
+    response = _terminal(generation=generation)
+    response.server_content.output_transcription = SimpleNamespace(text="Two plus two is four.")
+    agent = _agent([_terminal(generation=generation), response])
+    events = _receive(agent)
+    assert observed[0][0] == "Two plus two is four."
+    assert observed[0][1] > 0
+    assert [e.output.text for e in events if isinstance(e, OutputEvent)
+            and isinstance(e.output, TextOutput)] == ["Two plus two is four."]
+    assert not events[-1].fallback_to_main
+
+
+def _grounding():
+    message = _terminal()
+    message.server_content.turn_complete = False
+    message.server_content.grounding_metadata = SimpleNamespace(
+        web_search_queries=["AI news"],
+        grounding_chunks=[SimpleNamespace(web=SimpleNamespace(
+            title="News", uri="https://example.com/news", snippet="New AI model"))],
+    )
+    return message
+
+
+def test_search_progress_waits_for_answer_beyond_normal_grace(monkeypatch):
+    from hal.realtime import response_outcome
+    monkeypatch.setattr(gemini_live.app_config, "REALTIME_PROGRESS_TIMEOUT_S", 0.15)
+
+    async def check(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr(response_outcome, "spoken_response_complete", check)
+
+    async def scenario():
+        agent = _agent([_terminal(generation=True), _grounding()])
+        agent._committed_at = time.monotonic()
+        task = asyncio.create_task(agent._async_receive_turn())
+        await asyncio.sleep(0.05)
+        assert not task.done()
+        reply = _terminal(generation=True)
+        reply.server_content.output_transcription = SimpleNamespace(text="Here is the AI news.")
+        agent._session.messages.put_nowait(reply)
+        await asyncio.wait_for(task, timeout=0.08)
+        events = list(agent._recv_queue.queue)
+        assert not events[-1].fallback_to_main
+        assert any(isinstance(e, OutputEvent) and isinstance(e.output, TextOutput)
+                   and e.output.text == "Here is the AI news." for e in events)
+
+    asyncio.run(scenario())
+
+
+def test_repeated_grounding_does_not_reset_absolute_progress_deadline(monkeypatch):
+    monkeypatch.setattr(gemini_live.app_config, "REALTIME_PROGRESS_TIMEOUT_S", 0.07)
+
+    async def scenario():
+        agent = _agent([_terminal(), _grounding()])
+        agent._committed_at = time.monotonic()
+        task = asyncio.create_task(agent._async_receive_turn())
+        await asyncio.sleep(0.04)
+        agent._session.messages.put_nowait(_grounding())
+        await asyncio.wait_for(task, timeout=0.055)
+        done = agent._recv_queue.get_nowait()
+        assert done.fallback_to_main
+        assert done.user_transcript == "play a song"
+        assert "AI news" in done.handoff_context
+        assert "https://example.com/news" in done.handoff_context
+        assert len(done.handoff_context) <= 6000
+
+    asyncio.run(scenario())
+
+
+def test_active_continuation_is_not_cut_at_initial_grace(monkeypatch):
+    from hal.realtime import response_outcome
+
+    async def check(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr(response_outcome, "spoken_response_complete", check)
+
+    async def scenario():
+        agent = _agent([_terminal(generation=True)])
+        task = asyncio.create_task(agent._async_receive_turn())
+        for text in ["Two ", "plus two ", "is four."]:
+            await asyncio.sleep(0.012)
+            response = _terminal()
+            response.server_content.turn_complete = False
+            response.server_content.output_transcription = SimpleNamespace(text=text)
+            agent._session.messages.put_nowait(response)
+        agent._session.messages.put_nowait(_terminal(generation=True))
+        await asyncio.wait_for(task, timeout=0.1)
+        events = list(agent._recv_queue.queue)
+        assert not events[-1].fallback_to_main
+        assert "".join(e.output.text for e in events if isinstance(e, OutputEvent)
+                       and isinstance(e.output, TextOutput)) == "Two plus two is four."
+
+    asyncio.run(scenario())
+
+
+def test_search_without_terminal_is_bounded_and_quarantined(monkeypatch):
+    monkeypatch.setattr(gemini_live.app_config, "REALTIME_PROGRESS_TIMEOUT_S", 0.035)
+    agent = _agent([_grounding()])
+    agent._committed_at = time.monotonic()
+    events = _receive(agent)
+    assert events[-1].fallback_to_main
+    assert "AI news" in events[-1].handoff_context
+    assert agent._requires_fresh_session
+
+
+def test_zero_progress_budget_disables_extension(monkeypatch):
+    monkeypatch.setattr(gemini_live.app_config, "REALTIME_PROGRESS_TIMEOUT_S", 0)
+    agent = _agent([_grounding(), _terminal()])
+    agent._committed_at = time.monotonic()
+    events = _receive(agent)
+    assert getattr(agent, "_progress_deadline_at", 0.0) == 0.0
+    assert events[-1].fallback_to_main
+
+
+def test_grounded_fallback_does_not_wait_past_budget_for_slow_outcome(monkeypatch):
+    from hal.realtime import response_outcome
+    monkeypatch.setattr(gemini_live.app_config, "REALTIME_PROGRESS_TIMEOUT_S", 0.035)
+    monkeypatch.setattr(gemini_live.app_config, "REALTIME_OUTCOME_TIMEOUT_S", 0.3)
+    cancelled = []
+
+    async def check(*args, **kwargs):
+        try:
+            await asyncio.sleep(60)
+        finally:
+            cancelled.append(True)
+
+    monkeypatch.setattr(response_outcome, "spoken_response_complete", check)
+
+    async def scenario():
+        filler = _terminal()
+        filler.server_content.output_transcription = SimpleNamespace(text="Let me check.")
+        agent = _agent([_grounding(), filler])
+        agent._committed_at = time.monotonic()
+        await asyncio.wait_for(agent._async_receive_turn(), timeout=0.09)
+        assert cancelled == [True]
+        assert list(agent._recv_queue.queue)[-1].fallback_to_main
+
+    asyncio.run(scenario())
+
+def test_late_first_terminal_does_not_extend_search_budget(monkeypatch):
+    monkeypatch.setattr(gemini_live.app_config, "REALTIME_PROGRESS_TIMEOUT_S", 0.06)
+    monkeypatch.setattr(gemini_live.app_config, "REALTIME_NONBLOCKING_TOOL_GRACE_S", 0.08)
+
+    async def scenario():
+        agent = _agent([_grounding()])
+        agent._committed_at = time.monotonic()
+        task = asyncio.create_task(agent._async_receive_turn())
+        await asyncio.sleep(0.035)
+        agent._session.messages.put_nowait(_terminal())
+        await asyncio.wait_for(task, timeout=0.055)
+        assert list(agent._recv_queue.queue)[-1].fallback_to_main
+
+    asyncio.run(scenario())
+
+
+def test_terminal_answer_before_progress_cap_cannot_add_classifier_window(monkeypatch):
+    from hal.realtime import response_outcome
+    monkeypatch.setattr(gemini_live.app_config, "REALTIME_PROGRESS_TIMEOUT_S", 0.06)
+    monkeypatch.setattr(gemini_live.app_config, "REALTIME_RECV_QUEUE_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(gemini_live.app_config, "REALTIME_OUTCOME_TIMEOUT_S", 0.3)
+
+    async def check(*args, **kwargs):
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(response_outcome, "spoken_response_complete", check)
+
+    async def scenario():
+        agent = _agent([_terminal(generation=True), _grounding()])
+        agent._committed_at = time.monotonic()
+        task = asyncio.create_task(agent._async_receive_turn())
+        await asyncio.sleep(0.035)
+        response = _terminal(generation=True)
+        response.server_content.output_transcription = SimpleNamespace(text="News result.")
+        agent._session.messages.put_nowait(response)
+        await asyncio.wait_for(task, timeout=0.055)
+        assert list(agent._recv_queue.queue)[-1].fallback_to_main
+
+    asyncio.run(scenario())
+
+
+def test_actual_answer_streaming_past_search_cap_can_finish(monkeypatch):
+    from hal.realtime import response_outcome
+    monkeypatch.setattr(gemini_live.app_config, "REALTIME_PROGRESS_TIMEOUT_S", 0.03)
+
+    async def check(*args, **kwargs):
+        await asyncio.sleep(0.005)
+        return True
+
+    monkeypatch.setattr(response_outcome, "spoken_response_complete", check)
+
+    async def scenario():
+        agent = _agent([_terminal(generation=True), _grounding()])
+        agent._committed_at = time.monotonic()
+        task = asyncio.create_task(agent._async_receive_turn())
+        for text in ["The ", "news ", "today."]:
+            await asyncio.sleep(0.015)
+            chunk = _terminal()
+            chunk.server_content.turn_complete = False
+            chunk.server_content.output_transcription = SimpleNamespace(text=text)
+            agent._session.messages.put_nowait(chunk)
+        agent._session.messages.put_nowait(_terminal(generation=True))
+        await asyncio.wait_for(task, timeout=0.09)
+        assert not list(agent._recv_queue.queue)[-1].fallback_to_main
+
+    asyncio.run(scenario())

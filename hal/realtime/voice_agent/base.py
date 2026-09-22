@@ -66,6 +66,10 @@ class VoiceAgentBase(ABC):
         # monotonic() of the last message the SERVER sent us, whatever it was.
         # Liveness, not output — see note_server_activity / receive().
         self._last_server_msg_at: float = 0.0
+        self._committed_at: float = 0.0
+        self._progress_deadline_at: float = 0.0
+        self._output_deadline_at: float = 0.0
+        self._progress_watchdog_enabled: bool = False
 
     @property
     def available(self) -> bool:
@@ -133,7 +137,23 @@ class VoiceAgentBase(ABC):
     def commit_audio(self) -> None:
         """Queue a commit signal (non-blocking)."""
         if self.available:
+            self._committed_at = time.monotonic()
+            self._progress_deadline_at = 0.0
+            self._output_deadline_at = 0.0
+            logger.info("[realtime][timing] audio_commit_queued gen=%s", getattr(self, "_turn_gen", 0))
             self._send_queue.put(AudioCommitEvent())
+
+    def allow_progress_until(self, deadline: float) -> None:
+        """Let verified provider work survive the receive gap until a deadline.
+
+        Callers supply an absolute, turn-scoped deadline. Repeated search or
+        tool updates must not buy a fresh timeout on every message.
+        """
+        self._progress_deadline_at = deadline
+
+    def allow_output_until(self, deadline: float) -> None:
+        """Keep actual buffered answer chunks alive, not generic heartbeats."""
+        self._output_deadline_at = deadline
 
     def flush_output(self) -> None:
         """Drop any output events left on the recv queue from a previous turn.
@@ -235,9 +255,21 @@ class VoiceAgentBase(ABC):
                     self._recv_timeout_override_s
                     or app_config.REALTIME_RECV_QUEUE_TIMEOUT_S
                 )
+                progress_remaining = max(
+                    getattr(self, "_progress_deadline_at", 0.0),
+                    getattr(self, "_output_deadline_at", 0.0),
+                ) - time.monotonic()
+                # Leave a small scheduling margin for the provider to enqueue
+                # its bounded fallback (including handoff context) at expiry.
+                queue_timeout = min(recv_timeout, progress_remaining + 0.1) if progress_remaining > 0 else recv_timeout
                 try:
-                    event = self._recv_queue.get(timeout=recv_timeout)
+                    event = self._recv_queue.get(timeout=queue_timeout)
                 except queue.Empty:
+                    if time.monotonic() < max(
+                        getattr(self, "_progress_deadline_at", 0.0),
+                        getattr(self, "_output_deadline_at", 0.0),
+                    ):
+                        continue
                     # No OUTPUT within the gap window. Usually the model staying
                     # silent on a noise / non-directed turn, which is correct —
                     # end quietly and let the main agent have it.
@@ -254,6 +286,8 @@ class VoiceAgentBase(ABC):
                     since_msg: float = time.monotonic() - self._last_server_msg_at
                     waited: float = time.monotonic() - turn_started
                     if (
+                        not getattr(self, "_progress_watchdog_enabled", False)
+                        and
                         self._last_server_msg_at > 0
                         and since_msg < recv_timeout
                         and waited < app_config.REALTIME_TURN_MAX_SILENCE_S
@@ -271,6 +305,16 @@ class VoiceAgentBase(ABC):
                         recv_timeout,
                         since_msg if self._last_server_msg_at > 0 else -1.0,
                     )
+                    now = time.monotonic()
+                    logger.info(
+                        "[realtime][timing] receive_timeout gen=%s since_latest_commit_s=%.3f "
+                        "progress_seen=%s progress_remaining_s=%.3f output_remaining_s=%.3f",
+                        getattr(self, "_turn_gen", 0),
+                        now - self._committed_at if self._committed_at else -1.0,
+                        bool(self._progress_deadline_at),
+                        max(0.0, self._progress_deadline_at - now),
+                        max(0.0, self._output_deadline_at - now),
+                    )
                     turn_ended = True
                     break
                 if isinstance(event, TurnDoneEvent):
@@ -287,6 +331,7 @@ class VoiceAgentBase(ABC):
                         turn_ended = stop_on_done
                         yield MainAgentFallbackOutput(
                             transcript=event.user_transcript,
+                            handoff_context=event.handoff_context,
                             user_turn_id=event.user_turn_id,
                         )
                         if stop_on_done:
@@ -335,6 +380,8 @@ class VoiceAgentBase(ABC):
             # replayed turn.
             if turn_ended:
                 self._recv_timeout_override_s = None
+                self._progress_deadline_at = 0.0
+                self._output_deadline_at = 0.0
 
     # --- Abstract: provider-specific implementation ---
 

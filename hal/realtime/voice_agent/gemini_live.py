@@ -602,11 +602,18 @@ class GeminiLiveAgent(VoiceAgentBase):
         _grace_model: str = getattr(getattr(self, "_config", None), "model", "") or ""
         _requires_outcome = "extended-thinking" in _grace_model
         _grace_on: bool = _grace_s > 0 and _requires_outcome
+        self._progress_watchdog_enabled = _requires_outcome and not app_config.LIVE_MODE
         _outcome_received = False
         _routing_received = False
         _direct_answer_confirmed = False
         _turn_transcript = ""
         _spoken_response = ""
+        _initial_speech = False
+        _initial_active_until = 0.0
+        _continuation_active_until = 0.0
+        _last_continuation_output_until = 0.0
+        _progress_until = 0.0
+        _search_context: list[str] = []
         _outcome_check: asyncio.Task[bool | None] | None = None
         _continuation_check: asyncio.Task[bool | None] | None = None
         _continuation: list[OutputEvent] = []
@@ -618,6 +625,35 @@ class GeminiLiveAgent(VoiceAgentBase):
         _grace_deadline: float = 0.0
         _deferred_finalize: Callable[[], Any] | None = None
         _receiver = self._session.receive().__aiter__()
+
+        def _log_timing(event: str) -> None:
+            now = time.monotonic()
+            committed_at = getattr(self, "_committed_at", 0.0)
+            logger.info(
+                "[realtime][timing] %s gen=%s since_latest_commit_s=%.3f "
+                "progress_remaining_s=%.3f output_remaining_s=%.3f",
+                event, self._turn_gen,
+                now - committed_at if committed_at else -1.0,
+                max(0.0, _progress_until - now),
+                max(0.0, max(_initial_active_until, _continuation_active_until) - now),
+            )
+
+        def _note_progress() -> None:
+            nonlocal _progress_until
+            committed_at = getattr(self, "_committed_at", 0.0)
+            if (committed_at and _requires_outcome and not app_config.LIVE_MODE
+                    and app_config.REALTIME_PROGRESS_TIMEOUT_S > 0):
+                first_progress = not _progress_until
+                _progress_until = committed_at + app_config.REALTIME_PROGRESS_TIMEOUT_S
+                self.allow_progress_until(_progress_until)
+                if first_progress:
+                    _log_timing("first_verified_progress")
+
+        def _handoff_context() -> str:
+            parts = list(_search_context)
+            if _spoken_response.strip():
+                parts.append("Already spoken to user: " + _spoken_response[:2000])
+            return "\n".join(parts)[:6000]
 
         def _start_outcome_check() -> None:
             nonlocal _outcome_check, _outcome_deadline
@@ -638,7 +674,7 @@ class GeminiLiveAgent(VoiceAgentBase):
             _outcome_check = asyncio.create_task(check())
 
         async def _check_continuation() -> None:
-            nonlocal _continuation_check
+            nonlocal _continuation_check, _outcome_deadline
             if not _continuation_text or _continuation_overflow or _routing_received:
                 return
             from hal.realtime.response_outcome import spoken_response_complete
@@ -646,6 +682,18 @@ class GeminiLiveAgent(VoiceAgentBase):
                 _continuation_check.cancel()
                 await asyncio.gather(_continuation_check, return_exceptions=True)
             request = getattr(self, "_user_transcript", "") or _turn_transcript
+            # A later answer needs its own bounded classification window. The
+            # first terminal may have had no speech, or its check expired while
+            # a real tool was working.
+            _outcome_deadline = min(
+                time.monotonic() + app_config.REALTIME_OUTCOME_TIMEOUT_S,
+                _last_continuation_output_until,
+            )
+            last_chunk_at = (
+                _last_continuation_output_until - app_config.REALTIME_RECV_QUEUE_TIMEOUT_S)
+            if _progress_until and last_chunk_at <= _progress_until:
+                _outcome_deadline = min(_outcome_deadline, _progress_until)
+            self.allow_output_until(_outcome_deadline)
             answer = _spoken_response + _continuation_text
             grounded = _grounded
 
@@ -665,7 +713,13 @@ class GeminiLiveAgent(VoiceAgentBase):
                     _outcome_check.cancel()
                 else:
                     try:
-                        independently_complete = await _outcome_check
+                        if _progress_until and not _outcome_check.done():
+                            independently_complete = await asyncio.wait_for(
+                                _outcome_check,
+                                timeout=max(0.0, _progress_until - time.monotonic()),
+                            )
+                        else:
+                            independently_complete = await _outcome_check
                     except asyncio.TimeoutError:
                         logger.warning("[realtime] Spoken outcome check timed out")
                         independently_complete = None
@@ -674,7 +728,8 @@ class GeminiLiveAgent(VoiceAgentBase):
                             "incomplete" if independently_complete is False else "unconfirmed")
             if _continuation_check is not None:
                 if (_routing_received or execution_interrupted or delayed_playback_ack
-                        or independently_complete is not False or _continuation_overflow):
+                        or (_initial_speech and independently_complete is not False)
+                        or _continuation_overflow):
                     _continuation_check.cancel()
                 else:
                     try:
@@ -683,8 +738,8 @@ class GeminiLiveAgent(VoiceAgentBase):
                         logger.warning("[realtime] Continuation outcome check timed out")
                         continuation_complete = None
                     # A completed initial answer keeps the old duplicate guard.
-                    # Only a confirmed incomplete initial reply followed by a
-                    # checked, terminal-ended continuation can
+                    # Only an empty initial response or a confirmed incomplete
+                    # reply followed by a checked, terminal-ended continuation can
                     # be released, and a trailing delegate always wins first.
                     if continuation_complete is True:
                         for event in _continuation:
@@ -696,6 +751,7 @@ class GeminiLiveAgent(VoiceAgentBase):
             if _outcome_check is not None:
                 await asyncio.gather(_outcome_check, return_exceptions=True)
             if _continuation:
+                _log_timing("continuation_released" if continuation_released else "continuation_discarded")
                 logger.info("[realtime] Continuation decision: released=%s routing=%s audio_bytes=%d text_chars=%d",
                             continuation_released, _routing_received,
                             _continuation_bytes, len(_continuation_text))
@@ -712,7 +768,7 @@ class GeminiLiveAgent(VoiceAgentBase):
             fallback = await _fallback_needed(delayed_playback_ack)
             if fallback:
                 logger.warning("[realtime] No confirmed outcome after NON_BLOCKING response — forwarding to main")
-                if _spoken_response.strip():
+                if _initial_speech or _continuation or _progress_until:
                     self._requires_fresh_session = True
             self._awaiting_playback_turn_complete = False
             self._first_audio_received = False
@@ -722,6 +778,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                 execution_completed=not execution_interrupted and not delayed_playback_ack and not fallback,
                 fallback_to_main=fallback,
                 user_transcript=transcript,
+                handoff_context=_handoff_context() if fallback else "",
                 user_turn_id=("" if delayed_playback_ack else response_user_turn_id
                               if response_user_turn_id is not None
                               else getattr(self, "_live_user_turn_id", "")),
@@ -736,7 +793,7 @@ class GeminiLiveAgent(VoiceAgentBase):
             fallback = await _fallback_needed()
             if fallback:
                 logger.warning("[realtime] No confirmed outcome after NON_BLOCKING response — forwarding to main")
-                if _spoken_response.strip():
+                if _initial_speech or _continuation or _progress_until:
                     self._requires_fresh_session = True
             self._user_transcript = ""
             self._awaiting_playback_turn_complete = True
@@ -746,6 +803,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                 execution_completed=not execution_interrupted and not fallback,
                 fallback_to_main=fallback,
                 user_transcript=transcript,
+                handoff_context=_handoff_context() if fallback else "",
                 user_turn_id=(response_user_turn_id if response_user_turn_id is not None
                               else getattr(self, "_live_user_turn_id", "")),
             ))
@@ -757,15 +815,57 @@ class GeminiLiveAgent(VoiceAgentBase):
         while True:
             try:
                 if _deferred_finalize is not None:
-                    _remaining = _grace_deadline - time.monotonic()
+                    # Progress buys time only for an unfinished outcome. A real
+                    # completed answer still observes the ordinary routing grace.
+                    progress_deadline = _progress_until
+                    routing_deadline = (
+                        min(_grace_deadline, _progress_until)
+                        if _progress_until else _grace_deadline
+                    )
+                    check = _continuation_check or _outcome_check
+                    if check is not None and check.done() and not check.cancelled():
+                        try:
+                            if check.result() is True:
+                                progress_deadline = 0.0
+                        except Exception:
+                            pass
+                    deadline = max(routing_deadline, progress_deadline,
+                                   _continuation_active_until)
+                    _remaining = deadline - time.monotonic()
                     if _remaining <= 0:
                         logger.info("[realtime] NON_BLOCKING grace expired (%.2fs, pending_tools=%d)",
                                     _grace_s, len(self._pending_tool_calls))
+                        _log_timing("deferred_wait_expired")
                         await _deferred_finalize()
                         return
-                    message = await asyncio.wait_for(
-                        _receiver.__anext__(), timeout=_remaining
-                    )
+                    next_message = asyncio.create_task(_receiver.__anext__())
+                    try:
+                        # Wake when classification completes, without cancelling
+                        # a socket read merely to re-evaluate the progress grace.
+                        if check is not None and not check.done():
+                            await asyncio.wait(
+                                {next_message, check}, timeout=_remaining,
+                                return_when=asyncio.FIRST_COMPLETED,
+                            )
+                            if check.done() and not check.cancelled():
+                                try:
+                                    if check.result() is True:
+                                        deadline = max(routing_deadline, _continuation_active_until)
+                                except Exception:
+                                    pass
+                        message = await asyncio.wait_for(
+                            next_message, timeout=max(0.0, deadline - time.monotonic())
+                        )
+                    finally:
+                        if not next_message.done():
+                            next_message.cancel()
+                            await asyncio.gather(next_message, return_exceptions=True)
+                elif _progress_until:
+                    remaining = max(_progress_until, _initial_active_until) - time.monotonic()
+                    if remaining <= 0:
+                        await _finalize_generation_complete()
+                        return
+                    message = await asyncio.wait_for(_receiver.__anext__(), timeout=remaining)
                 else:
                     message = await _receiver.__anext__()
             except StopAsyncIteration:
@@ -781,7 +881,11 @@ class GeminiLiveAgent(VoiceAgentBase):
                 if _deferred_finalize is not None:
                     logger.info("[realtime] NON_BLOCKING grace expired (%.2fs, pending_tools=%d)",
                                 _grace_s, len(self._pending_tool_calls))
+                    _log_timing("deferred_wait_expired")
                     await _deferred_finalize()
+                    return
+                if _progress_until:
+                    await _finalize_generation_complete()
                     return
                 raise
             # Liveness for the silent-turn watchdog: most of what arrives here
@@ -856,10 +960,25 @@ class GeminiLiveAgent(VoiceAgentBase):
                     queries = list(getattr(gm, "web_search_queries", None) or [])
                     chunks = getattr(gm, "grounding_chunks", None) or []
                     _grounded = _grounded or bool(chunks)
+                    if queries or chunks:
+                        _note_progress()
+                    for query in queries[:3]:
+                        entry = "Search query: " + str(query)[:300]
+                        if entry not in _search_context and len(_search_context) < 12:
+                            _search_context.append(entry)
+                    for chunk in chunks[:5]:
+                        web = getattr(chunk, "web", None)
+                        if web is not None:
+                            entry = "Search source: " + " | ".join(
+                                str(getattr(web, key, "") or "")[:800]
+                                for key in ("title", "uri", "snippet"))
+                            if entry not in _search_context and len(_search_context) < 12:
+                                _search_context.append(entry)
                     logger.info(
-                        "[realtime][grounding] Google Search fired: queries=%s chunks=%d",
+                        "[realtime][grounding] Google Search metadata received (search start unknown): queries=%s chunks=%d",
                         queries[:3], len(chunks),
                     )
+                    _log_timing("grounding_received")
                     # chunks=0 on turns that clearly ran a search (measured on
                     # lamp-0c89 04/09/2026: 2 of 3 grounded turns) has two very
                     # different causes and the count alone cannot separate them:
@@ -940,6 +1059,14 @@ class GeminiLiveAgent(VoiceAgentBase):
                         _continuation.clear()
                         logger.warning("[realtime] Continuation buffer limit reached; preserving fallback")
                     elif held_outputs:
+                        # Audio/text chunks, unlike metadata heartbeats, prove
+                        # that a continuation is still being generated.
+                        _continuation_active_until = (
+                            time.monotonic() + app_config.REALTIME_RECV_QUEUE_TIMEOUT_S)
+                        _last_continuation_output_until = _continuation_active_until
+                        self.allow_output_until(_continuation_active_until)
+                        if not _continuation:
+                            _log_timing("first_continuation_held")
                         _continuation.extend(OutputEvent(gen=self._turn_gen, output=o) for o in held_outputs)
                         # New chunks invalidate a check of an earlier terminal.
                         if _continuation_check is not None:
@@ -967,6 +1094,10 @@ class GeminiLiveAgent(VoiceAgentBase):
                         if getattr(part, "thought", False):
                             continue
                         if part.inline_data and part.inline_data.data:
+                            _initial_speech = True
+                            _initial_active_until = (
+                                time.monotonic() + app_config.REALTIME_RECV_QUEUE_TIMEOUT_S)
+                            self.allow_output_until(_initial_active_until)
                             if not self._first_audio_received:
                                 self._first_audio_received = True
                                 now = time.monotonic()
@@ -1020,6 +1151,10 @@ class GeminiLiveAgent(VoiceAgentBase):
 
                 if (content.output_transcription and content.output_transcription.text
                         and accept_speech):
+                    _initial_speech = True
+                    _initial_active_until = (
+                        time.monotonic() + app_config.REALTIME_RECV_QUEUE_TIMEOUT_S)
+                    self.allow_output_until(_initial_active_until)
                     if not valid_transcription_chunk_cnt:
                         self._recv_queue.put(OutputEvent(
                             gen=getattr(self, "_turn_gen", 0),
@@ -1114,6 +1249,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                     self._turn_done.set()
 
                 if content.turn_complete:
+                    _continuation_active_until = 0.0
                     delayed_playback_ack = app_config.LIVE_MODE and getattr(
                         self, "_awaiting_playback_turn_complete", False
                     )
@@ -1134,6 +1270,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                     return
 
                 if getattr(content, "generation_complete", False):
+                    _continuation_active_until = 0.0
                     # Gemini Live can defer turn_complete until its assumed
                     # real-time audio playback ends. HAL plays the received
                     # response itself, so waiting for that acknowledgement
@@ -1155,6 +1292,10 @@ class GeminiLiveAgent(VoiceAgentBase):
                     return
 
             elif message.tool_call and message.tool_call.function_calls:
+                if any(fc.name not in {"complete_response", "delegate_to_main",
+                                       "reject_turn", "end_conversation", "express_emotion"}
+                       for fc in message.tool_call.function_calls):
+                    _note_progress()
                 # A tool call this turn — even one arriving after turn_complete on
                 # a NON_BLOCKING model (the #453 case the grace window catches).
                 # Close the audio gate before the events are queued: the consumer
@@ -1174,6 +1315,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                     logger.info("[realtime] Function call: %s (call_id=%s, after_terminal=%s)",
                                 fc.name, fc.id, _deferred_finalize is not None)
                     if _requires_outcome and fc.name == "complete_response":
+                        _continuation_active_until = 0.0
                         await _check_continuation()
                         # An explicit direct-answer outcome, never an inferred
                         # success from audio or a terminal alone. Ack normally;
@@ -1209,15 +1351,17 @@ class GeminiLiveAgent(VoiceAgentBase):
                                 arguments=json.dumps(fc.args) if fc.args else "{}",
                                 call_id=fc.id or "",
                                 user_transcript=user_transcript,
+                                handoff_context=_handoff_context() if fc.name == "delegate_to_main" else "",
                             ),
                         )
                     )
                 if _deferred_finalize is not None and any(
-                    fc.name in {"delegate_to_main", "reject_turn"}
+                    fc.name in {"delegate_to_main", "reject_turn", "end_conversation"}
                     for fc in message.tool_call.function_calls
                 ):
                     # Routing tools finish the consumer turn. Auxiliary tools
                     # (such as emotion) must not hide a subsequent delegate.
+                    _log_timing("deferred_wait_expired")
                     await _deferred_finalize()
                     return
 

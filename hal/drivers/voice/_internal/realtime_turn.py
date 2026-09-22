@@ -311,6 +311,7 @@ class RealtimeTurnResult(NamedTuple):
     rejected: bool = False
     # Observation only: the provider confirmed execution finished, not correctness.
     execution_completed: bool = False
+    handoff_context: str = ""
 
 
 def should_drop_realtime_rejection(rt: RealtimeTurnResult) -> bool:
@@ -500,6 +501,7 @@ def run_realtime_turn(
     foreign_suppressed = False  # reply came back in a script the device can't speak
     transcript = ""
     delegate_msg = ""
+    handoff_context = ""
     route = ROUTE_NOT_STARTED
     native = hal_config.REALTIME_NATIVE_AUDIO and tts is not None
     native_started = False  # cleanup guard: True between begin and end
@@ -630,6 +632,7 @@ def run_realtime_turn(
                     if isinstance(output, DelegateSignal):
                         delegated = True
                         delegate_msg = output.message
+                        handoff_context = output.handoff_context
                         # The wait is over — the main-agent hop that follows has
                         # its own filler (os-server fires one on the forwarded
                         # voice turn), so ours must not fire on top of it.
@@ -957,6 +960,7 @@ def run_realtime_turn(
         handled=handled,
         transcript=transcript,
         delegate_msg=delegate_msg,
+        handoff_context=handoff_context,
         route=route,
         rejected=rejected,
         execution_completed=execution_completed,

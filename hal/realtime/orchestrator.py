@@ -1210,6 +1210,7 @@ class RealtimeOrchestrator:
                     message=output.transcript,
                     transcript=output.transcript,
                     user_turn_id=output.user_turn_id,
+                    handoff_context=output.handoff_context,
                 )
                 break
             if isinstance(output, ExecutionOutput):
@@ -1375,6 +1376,7 @@ class RealtimeOrchestrator:
                 yield DelegateSignal(
                     message=delegate_msg, transcript=output.user_transcript,
                     user_turn_id=output.user_turn_id,
+                    handoff_context=output.handoff_context,
                 )
                 # Stop the turn here — once the model has delegated, it has nothing
                 # more to say, and waiting for turn_complete just blocks on the

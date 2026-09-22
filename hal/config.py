@@ -1010,6 +1010,11 @@ REALTIME_RECV_QUEUE_TIMEOUT_S: float = float(
 REALTIME_NONBLOCKING_TOOL_GRACE_S: float = float(
     os.environ.get("HAL_REALTIME_NONBLOCKING_TOOL_GRACE_S", "6.0")
 )
+# Verified Gemini search/tool work may outlive the normal receive gap and
+# late-tool grace. Bound the extension from audio commit, not from each event.
+REALTIME_PROGRESS_TIMEOUT_S: float = max(0.0, float(
+    os.environ.get("HAL_REALTIME_PROGRESS_TIMEOUT_S", "15.0")
+))
 # Silent-turn watchdog for turns where a `look` fired. Gemini 3.1's forced
 # thinking over a text-dense frame ("read this label") stays silent >8s with
 # zero output events — the default watchdog killed such turns seconds before
