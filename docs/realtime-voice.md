@@ -270,14 +270,17 @@ physical actions, research still to do, and mixed requests with unresolved
 execution work (such as music playback or reminders) retain fallback, even if
 the response also asks a question. Timeouts,
 missing credentials and malformed replies provide no independent confirmation.
-This adds one small text-model call with a separate
+The initial check uses one small text-model call with a separate
 `HAL_REALTIME_OUTCOME_TIMEOUT_S` deadline (default 10 seconds
-from the first terminal). It overlaps the 6-second tool grace; finalization waits
+from the first terminal). A continuation check, when needed, shares that original
+deadline rather than starting another timeout. It overlaps the 6-second tool grace; finalization waits
 for a pending check, at most 4 more seconds at default settings. A real routing
 call cancels the check; an explicit delegate still takes priority over either
 accepted check result. Explicit `INCOMPLETE` overrides an erroneous
 `complete_response` after a filler; an unavailable check preserves the provider
-decision, or fallback if there is none.
+decision, or fallback if there is none. If continuation speech is being withheld,
+an unavailable check retains fallback even with `complete_response`: that speech
+has not reached the user and cannot count as a delivered answer.
 A confirmed answer or necessary clarification follows
 `realtime_handled` → `voice_agent_handled` → history sync,
 without main-agent execution. The semantic check is model-based, not proof that
@@ -291,19 +294,42 @@ terminals do not extend it. HAL reopens the SDK's per-turn `receive()` iterator
 on the same session after `turn_complete`, retaining the logical turn identity.
 Only delegate/reject calls end the grace early; `complete_response` records
 confirmation but keeps the window open for a delegate in a subsequent frame; auxiliary
-tools do not confirm completion or suppress a later delegate. After direct-answer
-confirmation, HAL suppresses additional speech prompted by its ACK while still
-receiving routing calls. More generally, once the first provider terminal arrives,
-NON_BLOCKING grace accepts tool and input metadata but no further text/audio.
-This preserves the initial answer/filler and prevents a later generated error or
-account-access denial from being appended to speech or history. A receive error also requests main-agent fallback for
-this model family, even if a filler already played.
+tools do not confirm completion or suppress a later delegate. After the first
+provider terminal, HAL holds subsequent text/audio instead of playing it. A later
+terminal or `complete_response` can trigger a check of the initial speech plus
+this continuation. HAL releases the held output only at grace finalization,
+without delegation or interruption, when the initial response was independently
+`INCOMPLETE` and the combined response receives an accepted semantic result.
+An already complete initial answer keeps the duplicate-speech guard; an
+unconfirmed initial check does not release the continuation. An explicit late
+delegate/reject wins while routing is still being received, so held speech is
+never played before that decision.
+
+The continuation buffer is capped at 2,000,000 PCM bytes and 16,000 text
+characters; overflow prevents its release. Additional speech invalidates an
+earlier continuation check until another terminal/confirmation permits a new
+check. Neither continuation nor additional terminals extend the original
+6-second routing grace or 10-second outcome deadline. This permits a verified
+answer after a filler without replaying a completed answer or appending an
+unconfirmed error/account-access denial to speech or history. A receive error
+also requests main-agent fallback for this model family, even if a filler already
+played.
 
 If both waits finish without an outcome on an uninterrupted turn, HAL emits
 `MainAgentFallbackOutput`, then `DelegateSignal`, preserving the original
 provider transcript and turn identity. This local fallback invents no function
 call and sends no tool ACK. It routes as `delegated`, never `[HANDLED]`, even
 when a filler has already played; completion must come from the downstream task.
+For delegated turns with a realtime spoken transcript, dispatch adds
+`[realtime-handoff]`: this is an active, unresolved request, not handled history.
+The main agent should resolve it or ask for missing context, and must not choose
+`NO_REPLY` merely because realtime already spoke. This is scoped handoff context,
+not a global override of silence/noise decisions. After fallback or an explicit
+delegate following realtime speech, Gemini marks the session
+`requires_fresh_session`; the existing `prepare_turn` rebuilds it before the next
+capture. This prevents old terminals or grace output from consuming the next
+user input. Completed direct answers and handoffs without speech do not gain
+this recycle requirement.
 BLOCKING models keep their existing immediate-completion behavior. The Gemini
 prompt allows one immediate, brief acknowledgement before a delegate; rejection
 remains completely silent. Email/account/connector requests, including "your
