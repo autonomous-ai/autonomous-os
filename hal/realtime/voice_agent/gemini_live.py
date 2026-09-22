@@ -616,6 +616,7 @@ class GeminiLiveAgent(VoiceAgentBase):
         valid_transcription_chunk_cnt = 0
 
         execution_interrupted = False
+        replay_response = False
         response_user_turn_id: str | None = None
         # NON_BLOCKING tools (extended-thinking) let the model speak a filler,
         # send turn_complete, THEN emit the tool call. Ending the turn at
@@ -894,7 +895,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                 else:
                     message = await _receiver.__anext__()
             except StopAsyncIteration:
-                if _deferred_finalize is not None:
+                if _deferred_finalize is not None or replay_response:
                     # The SDK receive() iterator ends at turn_complete, not at
                     # socket close. Read the next iterator on the SAME session
                     # while preserving this logical turn and its deadline.
@@ -1271,6 +1272,39 @@ class GeminiLiveAgent(VoiceAgentBase):
                         dropped,
                     )
                     self._first_audio_received = False
+                    if (not app_config.LIVE_MODE and not replay_response
+                            and getattr(self, "_skip_stale_turn_done", False)
+                            and _deferred_finalize is not None):
+                        # The existing look replay marker identifies an internal
+                        # replacement, not a user cancellation. Its interrupted
+                        # filler must not discard the new visual answer or finish
+                        # the replay's commit gate. Retire only the old response.
+                        for check in (_outcome_check, _continuation_check):
+                            if check is not None:
+                                check.cancel()
+                                await asyncio.gather(check, return_exceptions=True)
+                        _outcome_check = _continuation_check = None
+                        _deferred_finalize = None
+                        _grace_deadline = _outcome_deadline = 0.0
+                        _initial_active_until = _continuation_active_until = 0.0
+                        _last_continuation_output_until = _progress_until = 0.0
+                        _outcome_received = _routing_received = False
+                        _direct_answer_confirmed = _initial_speech = False
+                        _spoken_response = _continuation_text = ""
+                        _continuation.clear()
+                        _continuation_bytes = 0
+                        _continuation_overflow = _grounded = False
+                        _search_context.clear()
+                        execution_interrupted = False
+                        replay_response = True
+                        self._turn_gen += 1
+                        valid_transcription_chunk_cnt = 0
+                        self._awaiting_playback_turn_complete = False
+                        _note_progress()
+                        _log_timing("look_replay_response_started")
+                        # A terminal on this same frame belongs to the old
+                        # response. The SDK may end its iterator after yielding it.
+                        continue
                     self._turn_done.set()
 
                 if content.turn_complete:

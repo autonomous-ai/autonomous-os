@@ -846,3 +846,59 @@ def test_actual_answer_streaming_past_search_cap_can_finish(monkeypatch):
         assert not list(agent._recv_queue.queue)[-1].fallback_to_main
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('replay,live', [(True, False), (False, False), (True, True)])
+@pytest.mark.parametrize('old_terminal', [False, True])
+def test_look_replay_interrupt_does_not_drop_visual_answer(monkeypatch, replay, live, old_terminal):
+    from hal.realtime import response_outcome
+    monkeypatch.setattr(gemini_live.app_config, 'LIVE_MODE', live)
+
+    async def check(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr(response_outcome, 'spoken_response_complete', check)
+    interrupted = _terminal(generation=True)
+    interrupted.server_content.generation_complete = False
+    interrupted.server_content.interrupted = True
+    interrupted.server_content.turn_complete = old_terminal
+    answer = _terminal(generation=True)
+    answer.server_content.generation_complete = False
+    answer.server_content.output_transcription = SimpleNamespace(text='You are wearing an orange shirt.')
+    filler = _terminal(generation=True)
+    filler.server_content.generation_complete = False
+    filler.server_content.output_transcription = SimpleNamespace(text='Let me take a look.')
+    agent = _agent([filler, _terminal(generation=True), interrupted, answer,
+                    _tool('complete_response'), _terminal(generation=True)])
+    if replay:
+        agent.skip_next_turn_done()
+    events = _receive(agent)
+    texts = [e.output.text for e in events
+             if isinstance(e, OutputEvent) and isinstance(e.output, TextOutput)]
+    if replay and not live:
+        assert texts == ['You are wearing an orange shirt.']
+        assert events[-1].execution_completed
+        assert not events[-1].fallback_to_main
+    else:
+        assert texts == []
+        assert not events[-1].execution_completed
+
+
+def test_user_interrupt_after_look_replay_still_cancels(monkeypatch):
+    monkeypatch.setattr(gemini_live.app_config, 'LIVE_MODE', False)
+    interrupted = _terminal(generation=True)
+    interrupted.server_content.generation_complete = False
+    interrupted.server_content.interrupted = True
+    answer = _terminal(generation=True)
+    answer.server_content.generation_complete = False
+    answer.server_content.output_transcription = SimpleNamespace(text='You are wearing')
+    agent = _agent([_terminal(generation=True), interrupted, answer,
+                    interrupted, _terminal(generation=True)])
+    agent.skip_next_turn_done()
+    events = _receive(agent)
+    # The second interruption is not another internal replay: discard queued
+    # speech and never declare the cancelled visual response completed.
+    assert not any(isinstance(e, OutputEvent) and isinstance(e.output, TextOutput)
+                   for e in events)
+    assert not events[-1].execution_completed
+    assert not events[-1].fallback_to_main
