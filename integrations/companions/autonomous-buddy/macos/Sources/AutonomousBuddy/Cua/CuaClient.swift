@@ -94,7 +94,12 @@ actor CuaClient {
             throw Failure.remote(String(message.prefix(500)))
         }
         // SDK envelopes may contain the raw structured result or the MCP wrapper.
-        return result["structuredContent"] as? [String: Any] ?? result
+        guard var structured = result["structuredContent"] as? [String: Any] else { return result }
+        // Images are protocol content, not fields in structuredContent. Preserve them
+        // separately for capture-only consumers without replacing native metadata.
+        let images = (result["content"] as? [[String: Any]])?.filter { $0["type"] as? String == "image" } ?? []
+        if !images.isEmpty { structured["_cua_images"] = images }
+        return structured
     }
 
     private func connect() async throws {

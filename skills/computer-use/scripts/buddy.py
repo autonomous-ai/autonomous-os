@@ -89,11 +89,17 @@ def observe(question, params, endpoint=OBSERVE_ENDPOINT):
     """Ask the device's configured auxiliary vision model about a fresh Mac capture."""
     if not isinstance(question, str) or not question.strip() or len(question) > 2000:
         raise BuddyError("question must contain 1–2000 characters")
-    if not isinstance(params, dict) or set(params) - {"display_id", "scale"}:
-        raise BuddyError("observe params may contain only display_id and scale")
+    if not isinstance(params, dict) or set(params) - {"display_id", "scale", "app", "window_id"}:
+        raise BuddyError("observe params may contain only display_id, scale, app and window_id")
     if "display_id" in params and (type(params["display_id"]) is not int or not 1 <= params["display_id"] <= 4294967295):
         raise BuddyError("display_id must be a positive unsigned 32-bit integer")
-    scale = params.get("scale", 0.5)
+    if "app" in params and (not isinstance(params["app"], str) or not params["app"].strip() or len(params["app"]) > 256):
+        raise BuddyError("app must contain 1–256 characters")
+    if "window_id" in params and (type(params["window_id"]) is not int or not 1 <= params["window_id"] <= 4294967295 or "app" not in params):
+        raise BuddyError("window_id must be a positive unsigned 32-bit integer and requires app")
+    if "app" in params and "display_id" in params:
+        raise BuddyError("app and display_id are mutually exclusive")
+    scale = params.get("scale", 1 if "app" in params else 0.5)
     if type(scale) not in (int, float) or not 0.01 <= scale <= 1:
         raise BuddyError("scale must be between 0.01 and 1")
     payload = dict(params, question=question, scale=scale)
@@ -294,6 +300,12 @@ def main(argv=None):
             params["return_format"] = "base64"
         data = command(args.action, params, args.timeout_ms, command_id=args.id)
         if args.action == "screenshot":
+            if "app" in params:
+                capture = data.get("result", {})
+                if (capture.get("capture_scope") != "window" or type(capture.get("window_id")) is not int
+                        or capture["window_id"] <= 0
+                        or ("window_id" in params and capture["window_id"] != params["window_id"])):
+                    raise BuddyError("companion did not capture the requested window; update Buddy or use an explicit display capture")
             data = save_screenshot(data, args.output_dir)
         print(json.dumps(data, ensure_ascii=False, allow_nan=False))
         return 0
