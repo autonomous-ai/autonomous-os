@@ -566,20 +566,24 @@ Harness.
 
 `_internal/smart_turn.py` chạy Smart Turn đóng gói trong Pipecat (`LocalSmartTurnAnalyzerV3`;
 model v3.2 trong wheel 1.11) ngay trên
-máy bằng worker thread, dùng tối đa tám giây PCM16 mono 16 kHz cuối quanh đuôi
-tiếng nói. Setup lamp, image Pi/OrangePi và OTA cho thiết bị không phải Reachy
+máy bằng worker thread, dùng tối đa tám giây PCM16 mono 16 kHz cuối tới thời
+điểm ứng viên hiện tại, kể cả phần audio nhỏ/im lặng thực tế đã thu. Setup lamp, image Pi/OrangePi và OTA cho thiết bị không phải Reachy
 tự cài extra `pipecat`, nên cài đặt thiết bị thông thường không cần lệnh thủ công.
 Developer chạy riêng `uv sync` vẫn cần chọn `--extra pipecat`; Reachy không cài
 extra này do xung đột dependency ONNX mô tả bên dưới.
-Suy luận không tải model qua mạng. Tiếng nói mới hoặc transcript thay đổi vô
-hiệu hóa quyết định đang chờ; kết quả của capture cũ không thể đóng capture
-mới. Quá trình thu vẫn tiếp tục trong lúc suy luận.
+Suy luận không tải model qua mạng. Tiếng nói mới, transcript thay đổi hoặc
+STT final mới tới sẽ vô hiệu hóa quyết định đang chờ/đã cache. Final trùng chữ
+với partial vẫn tạo token mới và snapshot audio hiện tại, để `INCOMPLETE` cũ
+không che mất dữ kiện mới. Gate im lặng tính từ lúc nhận final vẫn chạy trước;
+final tự nó không đóng lượt. Dữ kiện không đổi thì không gọi lại inference mỗi
+frame im lặng. Kết quả capture cũ không thể đóng capture mới; quá trình thu
+vẫn tiếp tục trong lúc suy luận.
 
 Khi model báo hoàn tất, ứng viên có thể đóng lượt. Dấu hiệu ngập ngừng hoặc
 liên từ chưa hoàn chỉnh EN/VI như “uhm”, “and”, “và”, “để tôi nghĩ” giữ lượt tới
 `HAL_TURN_END_MAX_PAUSE_S` (mặc định 6s) im lặng; lời chào ngắn chờ ít nhất
-`HAL_TURN_END_FALLBACK_S` (mặc định 2.5s). Model dự đoán chưa hoàn tất cũng chờ
-tới mức nghỉ tối đa. Khi thiếu model tùy chọn, đang tải, lỗi hoặc suy luận bị
+`HAL_TURN_END_FALLBACK_S` (mặc định 2.5s). Dự đoán chưa hoàn tất chờ dữ kiện
+mới để đánh giá lại hoặc tới mức nghỉ tối đa. Khi thiếu model tùy chọn, đang tải, lỗi hoặc suy luận bị
 kẹt, transcript thông thường dùng fallback thận trọng: ít nhất 2.5s im lặng
 với mặc định, không bao giờ sớm hơn ứng viên gốc. Suy luận đang chờ và chưa lỗi
 được thêm tối đa 0.5s từ ứng viên đầu trước khi fallback có thể đóng; detector

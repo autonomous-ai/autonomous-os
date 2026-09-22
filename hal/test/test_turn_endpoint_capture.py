@@ -82,7 +82,8 @@ def capture(monkeypatch, frames, *, realtime=False, enabled=True, detector=None,
         if on_read is not None:
             on_read(elapsed)
         if transcript:
-            stt._on_transcript_cb(transcript, transcripts_final)
+            text, final = transcript if isinstance(transcript, tuple) else (transcript, transcripts_final)
+            stt._on_transcript_cb(text, final)
         return np.full((1024, 1), 10000 if speech else 0, dtype=np.int16), False
 
     mic = Mock()
@@ -135,6 +136,29 @@ def test_incomplete_pause_keeps_one_session_and_merges_final_segments(monkeypatc
         assert detector.submit.call_count == 2
         tokens = [call.args[0] for call in detector.submit.call_args_list]
         assert tokens[0] != tokens[1]
+        assert result.metrics.speech_end.call_args.args[0] == "smart_turn"
+
+
+def test_unchanged_final_refreshes_model_with_recorded_quiet_tail(monkeypatch):
+    detector = Mock(failed=False)
+    detector.submit.return_value = True
+    detector.poll.side_effect = [False, True]
+    words = "Help me check what we talked about today."
+    frames = [(1, True, (words, False))]
+    frames += [(2 + i / 10, False, None) for i in range(7)]
+    frames += [(2.7, False, (words, True))]
+    with capture(monkeypatch, frames, detector=detector) as result:
+        assert result.consumed[-1] == 2.7
+        assert detector.submit.call_count == 2
+        first, refreshed = detector.submit.call_args_list
+        assert first.args[0] != refreshed.args[0]
+        # The new snapshot includes audio beyond four post-RMS frames. It is
+        # not the identical clipped PCM that produced INCOMPLETE earlier.
+        assert len(first.args[1]) == 2 * 2048
+        assert len(refreshed.args[1]) == len(frames) * 2048
+        result.stt.close.assert_called_once()
+        result.dispatch.assert_called_once()
+        assert result.dispatch.call_args.args[2] == words
         assert result.metrics.speech_end.call_args.args[0] == "smart_turn"
 
 

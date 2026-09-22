@@ -589,20 +589,25 @@ or manual Harness tap-to-record capture.
 
 `_internal/smart_turn.py` runs Pipecat's bundled Smart Turn (`LocalSmartTurnAnalyzerV3`;
 v3.2 model in the 1.11 wheel) locally on a
-worker thread, using at most the last eight seconds of mono 16 kHz PCM16 around
-the speech tail. Lamp setup, Pi/OrangePi images, and non-Reachy OTA automatically
+worker thread, using at most the last eight seconds of mono 16 kHz PCM16
+through the current candidate, including its recorded quiet tail. Lamp setup, Pi/OrangePi images, and non-Reachy OTA automatically
 install the `pipecat` extra, so normal device installs need no manual command.
 Bare developer `uv sync` still requires selecting `--extra pipecat`; Reachy
 excludes it because of the ONNX dependency conflict described below.
-Inference does not fetch a model over the network. Renewed speech
-or a changed transcript invalidates a pending decision, and results from an old
-capture cannot close a new one. Capture continues while inference runs.
+Inference does not fetch a model over the network. Renewed speech, changed
+transcript, or a new STT final arrival invalidates a pending/cached decision.
+Even a final with the same text as its partial gets a new token and current
+audio snapshot, so a previous `INCOMPLETE` cannot hide that evidence. The
+arrival-based silence gate still runs first; final alone does not close a turn.
+Unchanged evidence does not resubmit inference on every silent frame. Results
+from an old capture cannot close a new one; capture continues during inference.
 
 When the model reports complete, the candidate can close the turn. EN/VI
 hesitation or unfinished-conjunction hints such as “uhm”, “and”, “và”, or
 “để tôi nghĩ” hold it until `HAL_TURN_END_MAX_PAUSE_S` (default 6s) of silence;
 a short greeting waits at least `HAL_TURN_END_FALLBACK_S` (default 2.5s).
-An incomplete model prediction also waits until the maximum pause. Without the
+An incomplete model prediction waits until new evidence permits reevaluation
+or the maximum pause is reached. Without the
 optional model, or during loading, failure or stalled inference, ordinary text
 uses the conservative fallback: at least 2.5s of silence with defaults, never
 earlier than the original candidate. Healthy pending inference gets up to 0.5s

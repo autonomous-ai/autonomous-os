@@ -2699,13 +2699,16 @@ class VoiceService:
                                     )
                 elif manual_capture is None and turn_should_close(time.time(), last_speech_time, final_ts[0]):
                     if turn_endpoint is not None:
-                        # Snapshot only the last eight seconds through the
-                        # speech tail, not a growing multi-minute copy. The
-                        # worker never reads the mutable capture buffer.
-                        end = min(len(audio_buffer), last_speech_idx + 1 + 4)
+                        # Include the recorded quiet tail: a late final can
+                        # follow speech below the RMS threshold. Clipping at
+                        # last_speech_idx + 4 froze that evidence out of retries.
+                        # Only a new speech/text/final token submits another
+                        # bounded snapshot; silence alone does not rerun ONNX.
+                        end = len(audio_buffer)
                         start = max(0, end - 125)  # 8 seconds at 64 ms/frame.
                         if not turn_endpoint.should_close(
                             now=time.time(), last_speech=last_speech_time,
+                            final_at=final_ts[0],
                             text=" ".join([*final_segments, last_partial[0]]).strip(),
                             pcm=b"".join(audio_buffer[start:end]),
                         ):

@@ -1,8 +1,11 @@
 """A provisional endpoint may be revoked while microphone capture continues."""
 
+import logging
 import re
 import uuid
 
+
+logger = logging.getLogger("hal.voice")
 
 def needs_more_time(text: str) -> bool:
     """Conservative EN/VI hesitation hints, not a semantic classifier.
@@ -29,7 +32,7 @@ def is_greeting(text: str) -> bool:
 class TurnEndpoint:
     """One capture's state; the detector itself is shared across captures.
 
-    Only run this after the legacy silence candidate fires. Audio/word changes
+    Only run this after the legacy silence candidate fires. Speech/text/final changes
     invalidate both provisional completion and an in-flight model result.
     A bounded timeout also covers a missing, failed or stalled optional model.
     """
@@ -46,9 +49,16 @@ class TurnEndpoint:
         self._candidate_at = 0.0
         self.reason = ""
 
-    def should_close(self, *, now, last_speech, text, pcm):
-        key = (last_speech, text)
+    def should_close(self, *, now, last_speech, text, pcm, final_at=0.0):
+        # A final may confirm exactly the preceding partial. It still marks
+        # new evidence: re-evaluate the current audio, not the old prediction.
+        key = (last_speech, text, final_at)
         if key != self._key:
+            if self._key is not None and final_at != self._key[2]:
+                logger.info(
+                    "[turn-end] STT final updated; refreshing Smart Turn (previous=%s)",
+                    self._complete,
+                )
             self._key = key
             self._generation += 1
             self._submitted = False

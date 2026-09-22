@@ -20,9 +20,9 @@ def test_complete_text_is_not_a_filler(text):
     assert not needs_more_time(text)
 
 
-def decision(endpoint, silence, text="turn on the lamp", speech=10.0):
+def decision(endpoint, silence, text="turn on the lamp", speech=10.0, final_at=0.0):
     return endpoint.should_close(
-        now=speech + silence, last_speech=speech, text=text, pcm=b"\x00\x00",
+        now=speech + silence, last_speech=speech, text=text, pcm=b"\x00\x00", final_at=final_at,
     )
 
 
@@ -46,6 +46,49 @@ def test_incomplete_model_keeps_one_request_and_waits_to_bound():
     detector.poll.assert_called_once()
     assert decision(endpoint, 6)
     assert endpoint.reason == "turn_pause_limit"
+
+
+def test_final_with_unchanged_text_refreshes_incomplete_prediction():
+    detector = model(False)
+    endpoint = TurnEndpoint(detector)
+    assert not decision(endpoint, 1)
+    old_token = detector.submit.call_args.args[0]
+    detector.poll.return_value = True
+    assert decision(endpoint, 2, final_at=11.5)
+    assert detector.submit.call_args.args[0] != old_token
+    assert endpoint.reason == "smart_turn"
+
+
+def test_final_refresh_does_not_reuse_complete_result_or_retry_every_frame():
+    detector = model(True)
+    endpoint = TurnEndpoint(detector)
+    assert not decision(endpoint, 1, "Hello lamp.")
+    detector.poll.return_value = False
+    assert not decision(endpoint, 3, "Hello lamp.", final_at=12)
+    assert not decision(endpoint, 4, "Hello lamp.", final_at=12)
+    assert detector.submit.call_count == 2
+    assert detector.poll.call_count == 2
+    assert decision(endpoint, 6, "Hello lamp.", final_at=12)
+    assert endpoint.reason == "turn_pause_limit"
+
+
+def test_final_refresh_cannot_bypass_hesitation_guard():
+    detector = model(False)
+    endpoint = TurnEndpoint(detector)
+    assert not decision(endpoint, 1, "Please check and um...")
+    detector.poll.return_value = True
+    assert not decision(endpoint, 3, "Please check and um...", final_at=12)
+    assert decision(endpoint, 6, "Please check and um...", final_at=12)
+
+
+def test_final_refresh_stalled_inference_retains_bounded_fallback():
+    detector = model(False)
+    endpoint = TurnEndpoint(detector)
+    assert not decision(endpoint, 1)
+    detector.poll.return_value = None
+    assert not decision(endpoint, 3, final_at=12)
+    assert decision(endpoint, 3.6, final_at=12)
+    assert endpoint.reason == "turn_fallback"
 
 
 def test_filler_overrides_complete_prediction_but_is_bounded():
