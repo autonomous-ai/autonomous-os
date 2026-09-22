@@ -273,8 +273,8 @@ trước khi dùng; HAL không tự sửa boot overlay:
       "address": 90,
       "electrodes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
       "swipe_axis": [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
-      "touch_threshold": 2,
-      "release_threshold": 1,
+      "touch_threshold": 6,
+      "release_threshold": 3,
       "autoconfig": true,
       "poll_ms": 10,
       "debounce_ms": 30
@@ -287,8 +287,9 @@ trước khi dùng; HAL không tự sửa boot overlay:
 địa chỉ 90 nghĩa là `0x5A` (cho phép 90–93). Electrode được chọn phải là
 các số không trùng từ 0–11, có ít nhất một electrode. Ngưỡng phải thỏa
 `0 <= release_threshold < touch_threshold <= 255`. Polling cho phép 1–1000 ms;
-debounce cho phép 0–1000 ms. Cần chỉnh ngưỡng theo electrode đã lắp và nhiễu
-motor. Cấu hình được đọc lúc khởi động; sửa xong phải restart HAL.
+debounce cho phép 0–1000 ms. Chỉnh ngưỡng cho từng máy theo quy trình hiệu
+chuẩn bên dưới; mức nhiễu nền khác nhau giữa các bản lắp. Cấu hình được đọc
+lúc khởi động; sửa xong phải restart HAL.
 
 Thiếu file, thiếu entry board, hoặc `"enabled": false` thì bỏ qua MPR121 và
 giữ các handler GPIO/TTP223 hiện có. Không có bus MPR121 cũ để fallback.
@@ -300,6 +301,56 @@ chạm ban đầu, rồi poll mỗi 10 ms theo mặc định. Chuyển trạng t
 nhả dùng debounce 30 ms. Chạm chồng nhau trên các electrode được chọn tính
 là một contact; nhả nghĩa là **toàn bộ electrode được chọn** đã nhả.
 Contact đang bị giữ khi startup bị bỏ qua đến khi nhả.
+
+### Bộ lọc baseline và hiệu chuẩn ngưỡng
+
+Chip báo electrode được chạm khi `baseline - filtered >= touch_threshold` và
+nhả khi delta xuống dưới `release_threshold`; baseline bị đóng băng trong lúc
+electrode đang chạm. Chuyện xảy ra *trước* khi vượt ngưỡng do bộ lọc baseline
+chiều xuống (register `0x2F`–`0x32`) quyết định. `_initialize` nạp giá trị
+quick-start NXP AN3944 `MHDF 1, NHDF 1, NCLF 255, FDLF 2`: baseline chỉ đi theo
+một bước giảm sau 255 mẫu liên tiếp, nên nó bám drift chậm (tối đa vài count
+mỗi giây) nhưng không bao giờ bám theo ngón tay. Chiều lên (`0x2B`–`0x2E`) giữ
+mặc định Adafruit `1, 1, 14, 0`.
+
+Đến 2026-09-22 driver còn dùng giá trị chiều xuống của Adafruit (`NHDF 5,
+NCLF 1, FDLF 0`), khiến baseline đuổi kịp ngón tay trong vài chục mili giây.
+Hệ quả đo được: trên `lamp-4ace` cách tiếp cận chậm chỉ được detect ở delta
+1–4 count và cử chỉ giữ chỉ sống được nhờ nhiễu nền ở đó là 1 count; trên
+`lamp-52e6` (nhiễu nền 5 count) mọi lần chạm đều nhả sau 50–84 ms bất kể giữ
+bao lâu, nên cử chỉ giữ không thể hoạt động, và ở `touch_threshold: 2` nhiễu
+nền tạo đủ tap ma để ghép thành triple tap — tức là reboot.
+
+Ngưỡng xuất xưởng `6 / 3` lấy từ `calibrate` trên `lamp-4ace` (biên độ nhiễu
+nền tệ nhất 1 count; chạm thật 7–26 count lúc detect). Với bộ lọc và ngưỡng
+hiện tại, HAL trên `lamp-4ace` đã nhận single tap (`held_s=0.395`), giữ 2,7 s
+(`hold_tier` ở 2,0 s, action `hold`) và vuốt 10 pad (`swipe_resolved
+displacement=10.00 valid=True`) ngày 2026-09-22.
+
+Để hiệu chuẩn một máy, dừng HAL (HAL giữ bus) và dùng
+`robots/lamp/hardware/touch-cap/mpr121_opi_test.py`; script nạp chip giống hệt
+HAL khi truyền `--debounce 0 --sfi 0 --esi 0`:
+
+```bash
+sudo systemctl stop hal
+sudo ./mpr121_opi_test.py check        # bus rảnh chưa? dùng số lần kernel báo SDA kẹt thấp, không dùng gpio readall
+sudo ./mpr121_opi_test.py calibrate --touch 6 --release 3 --debounce 0 --sfi 0 --esi 0 --seconds 20
+sudo ./mpr121_opi_test.py test --touch 6 --release 3 --debounce 0 --sfi 0 --esi 0 --verbose
+sudo ./mpr121_opi_test.py trace --ignore 0,1,2,3   # filtered/baseline từng mẫu khi một lần chạm hành xử lạ
+sudo systemctl start hal
+```
+
+`calibrate` ghi nhiễu nền khi không chạm và đề xuất
+`touch >= 2.5 x biên độ nhiễu nền tệ nhất + 3`, `release ~ touch / 2`. `test`
+đóng dấu thời gian mỗi lần chạm và in chip giữ trạng thái chạm bao lâu; một
+lần nhấn thật phải giữ nguyên trạng thái chừng nào ngón tay còn trên pad, và
+một tap phải dài hơn `debounce_ms` (30 ms), nếu không HAL bỏ qua. Ghi giá trị
+vào `mpr121.json`, restart HAL và xác nhận `MPR121 event=start ...
+touch_threshold=<T>` trong journal. Giới hạn `electrodes` và `swipe_axis` vào
+đúng các pad phản hồi trong `test`: electrode không nối pad là một cái ăng-ten,
+nhiễu của nó đi thẳng vào bộ nhận cử chỉ. Không dùng `gpio readall` để đánh
+giá đường I²C trên sun60iw2 — data register đọc 0 với chân đã mux sang TWI
+controller, bus kẹt hay rảnh cũng vậy.
 
 MPR121 dùng chung ngưỡng cử chỉ từ `hal/drivers/button_gestures.py` với GPIO
 (được `button_actions.py` re-export) và gọi các action hiện có **khi Harness mode OFF**. Harness ON dùng chính sách riêng bên dưới:

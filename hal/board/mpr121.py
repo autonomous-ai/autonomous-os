@@ -11,8 +11,8 @@ class MPR121Config:
     bus: int
     address: int = 0x5A
     electrodes: tuple[int, ...] = tuple(range(12))
-    touch_threshold: int = 2
-    release_threshold: int = 1
+    touch_threshold: int = 6
+    release_threshold: int = 3
     autoconfig: bool = True
     poll_ms: int = 10
     debounce_ms: int = 30

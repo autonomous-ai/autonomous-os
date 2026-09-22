@@ -26,10 +26,10 @@ class TestMPR121Config(unittest.TestCase):
         self.assertIsNone(load_mpr121_config(root / "intern-v2", "orangepi_sun60"))
         self.assertIsNone(load_mpr121_config(root / "lamp", "raspberry_pi_5"))
 
-    def test_defaults_match_supplied_script(self):
+    def test_defaults_match_lamp_calibration(self):
         config = MPR121Config(bus=5)
         self.assertEqual(config.address, 0x5A)
-        self.assertEqual((config.touch_threshold, config.release_threshold), (2, 1))
+        self.assertEqual((config.touch_threshold, config.release_threshold), (6, 3))
         self.assertEqual(config.electrodes, tuple(range(12)))
 
     def test_device_selection_and_absence(self):
@@ -50,7 +50,7 @@ class TestMPR121Config(unittest.TestCase):
             {"bus": -1}, {"bus": True}, {"address": 0x40},
             {"electrodes": []}, {"electrodes": [12]}, {"electrodes": [1, 1]},
             {"electrodes": [True]}, {"touch_threshold": 256},
-            {"release_threshold": 2}, {"autoconfig": "true"},
+            {"release_threshold": 6}, {"autoconfig": "true"},
             {"poll_ms": 0}, {"debounce_ms": -1},
         ):
             with self.subTest(overrides=overrides), self.assertRaises(ValueError):

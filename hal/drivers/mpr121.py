@@ -452,9 +452,16 @@ class MPR121Handler:
         for electrode in range(12):
             write(0x41 + 2 * electrode, config.touch_threshold)
             write(0x42 + 2 * electrode, config.release_threshold)
+        # Baseline filter. Rising side (0x2B-0x2E) keeps the Adafruit defaults.
+        # Falling side (0x2F-0x32) uses the NXP AN3944 quick-start values: the
+        # baseline follows a downward step only after 255 consecutive samples,
+        # so it tracks slow drift but never a finger. The Adafruit falling
+        # values (NHDF 5, NCLF 1) let the baseline catch a finger within tens of
+        # milliseconds, so slow approaches never crossed the touch threshold and
+        # holds released on their own (measured on Lamp, 2026-09-22).
         for register, value in (
             (0x2B, 1), (0x2C, 1), (0x2D, 14), (0x2E, 0),
-            (0x2F, 1), (0x30, 5), (0x31, 1), (0x32, 0),
+            (0x2F, 1), (0x30, 1), (0x31, 0xFF), (0x32, 0x02),
             (0x33, 0), (0x34, 0), (0x35, 0),
             (0x5B, 0), (0x5C, 0x10), (0x5D, 0x20),
         ):

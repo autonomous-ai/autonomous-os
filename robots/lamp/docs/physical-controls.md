@@ -283,8 +283,8 @@ does not modify boot overlays automatically:
       "address": 90,
       "electrodes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
       "swipe_axis": [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
-      "touch_threshold": 2,
-      "release_threshold": 1,
+      "touch_threshold": 6,
+      "release_threshold": 3,
       "autoconfig": true,
       "poll_ms": 10,
       "debounce_ms": 30
@@ -297,8 +297,9 @@ does not modify boot overlays automatically:
 address 90 means `0x5A` (allowed addresses: 90–93). Selected electrodes must be
 unique numbers from 0–11, with at least one selected. Thresholds must satisfy
 `0 <= release_threshold < touch_threshold <= 255`. Polling accepts 1–1000 ms;
-debounce accepts 0–1000 ms. Tune thresholds against the installed electrodes
-and motor noise. Configuration is loaded at boot; restart HAL after changes.
+debounce accepts 0–1000 ms. Tune thresholds per unit with the calibration
+procedure below; the noise floor differs between builds. Configuration is
+loaded at boot; restart HAL after changes.
 
 A missing file or board entry, or `"enabled": false`, skips MPR121 and retains
 the existing GPIO/TTP223 handlers. There is no legacy MPR121 bus fallback.
@@ -310,6 +311,58 @@ reading the initial touch state, then polls every 10 ms by default. Touch and
 release transitions use 30 ms debounce. Overlapping touches across selected
 electrodes form one contact; release means **all selected electrodes** are
 released. A contact held at startup is ignored until release.
+
+### Baseline filter and threshold calibration
+
+The chip reports an electrode as touched when `baseline - filtered >=
+touch_threshold` and released when the delta drops below `release_threshold`;
+the baseline is frozen while the electrode is touched. What happens *before*
+the threshold is crossed is decided by the falling baseline filter (registers
+`0x2F`–`0x32`). `_initialize` programs it with the NXP AN3944 quick-start
+values `MHDF 1, NHDF 1, NCLF 255, FDLF 2`: the baseline follows a downward
+step only after 255 consecutive samples, so it tracks slow drift (a few counts
+per second at most) but never a finger. The rising side (`0x2B`–`0x2E`) keeps
+the Adafruit defaults `1, 1, 14, 0`.
+
+Until 2026-09-22 the driver used the Adafruit falling values (`NHDF 5, NCLF 1,
+FDLF 0`), which let the baseline catch up with a finger within tens of
+milliseconds. Measured effect: on `lamp-4ace` slow approaches were detected at
+a delta of 1–4 counts and a hold survived only because idle noise there is
+1 count; on `lamp-52e6` (idle noise 5 counts) every touch released after
+50–84 ms regardless of how long the pad was held, so hold gestures could not
+work, and at `touch_threshold: 2` idle noise produced enough phantom taps to
+assemble a triple tap — which reboots.
+
+The shipped thresholds `6 / 3` come from `calibrate` on `lamp-4ace`
+(worst idle excursion 1 count; real touches 7–26 counts at detection). With the
+current filter and thresholds, HAL on `lamp-4ace` resolved a single tap
+(`held_s=0.395`), a 2.7 s hold (`hold_tier` at 2.0 s, `hold` action) and a
+10-pad swipe (`swipe_resolved displacement=10.00 valid=True`) on 2026-09-22.
+
+To calibrate a unit, stop HAL (it owns the bus) and use
+`robots/lamp/hardware/touch-cap/mpr121_opi_test.py`, which programs the chip
+exactly like HAL when given `--debounce 0 --sfi 0 --esi 0`:
+
+```bash
+sudo systemctl stop hal
+sudo ./mpr121_opi_test.py check        # bus free? uses the kernel's SDA-stuck-low count, not gpio readall
+sudo ./mpr121_opi_test.py calibrate --touch 6 --release 3 --debounce 0 --sfi 0 --esi 0 --seconds 20
+sudo ./mpr121_opi_test.py test --touch 6 --release 3 --debounce 0 --sfi 0 --esi 0 --verbose
+sudo ./mpr121_opi_test.py trace --ignore 0,1,2,3   # filtered/baseline per sample when a touch behaves oddly
+sudo systemctl start hal
+```
+
+`calibrate` records idle noise with hands off and recommends
+`touch >= 2.5 x worst idle excursion + 3`, `release ~ touch / 2`. `test`
+timestamps every touch and prints how long the chip held it; a real press must
+stay asserted for as long as the finger is on the pad, and a tap must exceed
+`debounce_ms` (30 ms) or HAL discards it. Write the values into `mpr121.json`,
+restart HAL and confirm `MPR121 event=start ... touch_threshold=<T>` in the
+journal. Restrict `electrodes` and `swipe_axis` to the pads that actually
+respond in `test`: an electrode with no pad on it is an antenna, and its noise
+goes straight into the gesture engine. `gpio readall` cannot be used to judge
+the I²C lines on sun60iw2 — the data register reads 0 for pins muxed to the
+TWI controller whether the bus is stuck or free.
 
 MPR121 shares gesture thresholds from `hal/drivers/button_gestures.py` with
 GPIO (also re-exported by `button_actions.py`) and calls the existing action
