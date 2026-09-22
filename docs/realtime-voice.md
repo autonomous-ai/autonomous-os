@@ -1097,6 +1097,13 @@ turn anyway, and `voice_service` buffers the capture across the ~1 s handshake.
 Parking is skipped while a turn is in flight, and a resume that cannot connect
 reports unavailable (turn falls back to the main agent) while staying parked so
 the next turn retries.
+In wake-word mode the resume is overlapped with the user's sentence: `Session
+START` calls `prewarm()`, which starts the `idle-park-resume` handshake in the
+background (`idle-park-prewarm`, thread `rt-prewarm`), and the `prepare_turn()`
+that runs after the STT final joins it (up to `PREWARM_JOIN_TIMEOUT_S` = 4 s)
+instead of connecting serially — device-measured on lamp-4ace 22/09/2026 that
+serial connect cost ~2 s per post-idle turn. A capture that is never dispatched
+just leaves an idle session the park watchdog closes again.
 
 All providers treat teardown as terminal: once `disconnect()` sets the stop
 signal, send/receive workers neither reconnect nor emit transport-failure logs
