@@ -256,17 +256,29 @@ trực tiếp cần outcome được xác nhận cùng terminal thành công c�
 Với lời đã phát nhưng thiếu quyết định routing, HAL chạy kiểm tra độc lập bằng
 text model trong cửa sổ grace hiện có, dùng model, endpoint và credential của
 realtime summarizer. Đầu vào gồm yêu cầu gốc, lời đã nói và bằng chứng tìm kiếm
-công khai; bước kiểm tra không có tool hay phát âm thanh. Chỉ kết quả chính xác
-`COMPLETE` chấp nhận lượt hội thoại/tra cứu đã trả lời đủ. Filler, lỗi, truy cập
-tài khoản, hành động vật lý và yêu cầu hỗn hợp còn việc giữ fallback. Timeout,
+công khai; bước kiểm tra không có tool hay phát âm thanh. Kết quả chính xác
+`COMPLETE` chấp nhận lượt hội thoại/tra cứu đã trả lời đủ. Kết quả chính xác
+`CLARIFICATION` cũng chấp nhận lượt nói hiện tại khi yêu cầu thông tin còn thiếu
+dữ kiện từ người dùng và câu trả lời đặt câu hỏi tiếp nối cụ thể, cần thiết.
+Ví dụ, trả lời giá Bitcoin rồi hỏi thành phố để tra thời tiết sẽ giữ hội thoại
+ở realtime. Điều này chỉ xác nhận đã xử lý lượt hiện tại, không đánh dấu toàn
+bộ yêu cầu đã hoàn tất. Chỉ nói không thể trả lời mà không hỏi thêm dữ kiện
+cần thiết vẫn là `INCOMPLETE`. Filler, lỗi, truy cập tài khoản, hành động vật lý,
+nghiên cứu còn phải làm và yêu cầu hỗn hợp còn việc thực thi (như phát nhạc hoặc
+tạo nhắc nhở) vẫn fallback, kể cả khi câu trả lời cũng đặt câu hỏi. Timeout,
 thiếu credential hoặc kết quả sai định dạng không cung cấp xác nhận độc lập.
-Có thêm một lượt text model với hạn riêng `HAL_REALTIME_OUTCOME_TIMEOUT_S`
-(mặc định 10 giây từ terminal
-đầu tiên). Bước này chạy đồng thời với grace tool 6 giây; khi hết grace có thể
-chờ kết quả thêm tối đa 4 giây theo mặc định. Tool routing thật hủy kiểm tra.
-INCOMPLETE ghi đè `complete_response` sai sau filler; kiểm tra không khả dụng
-giữ quyết định provider, hoặc fallback nếu chưa có quyết định. Câu trả lời được
-xác nhận đi qua `realtime_handled` → `voice_agent_handled` → history sync, không
+Kiểm tra ban đầu dùng một lượt text model với hạn riêng
+`HAL_REALTIME_OUTCOME_TIMEOUT_S` (mặc định 10 giây từ terminal đầu tiên).
+Nếu cần kiểm tra phần nói tiếp, bước đó dùng chung hạn ban đầu, không mở thêm
+một timeout. Bước này chạy đồng thời với grace tool 6 giây; khi hết grace có thể
+chờ kết quả thêm tối đa 4 giây theo mặc định. Tool routing thật hủy kiểm tra;
+delegate tường minh vẫn ưu tiên hơn cả hai kết quả kiểm tra được chấp nhận.
+`INCOMPLETE` ghi đè `complete_response` sai sau filler; kiểm tra không khả dụng
+giữ quyết định provider, hoặc fallback nếu chưa có quyết định. Nếu phần nói tiếp
+đang bị giữ, kiểm tra không khả dụng vẫn giữ fallback dù có `complete_response`:
+người dùng chưa nghe phần đó nên không thể tính là đáp án đã phát. Câu trả lời hoặc
+câu hỏi bổ sung cần thiết đã xác nhận đi qua
+`realtime_handled` → `voice_agent_handled` → history sync, không
 chạy main agent. Kiểm tra ngữ nghĩa bằng model không chứng minh mọi thông tin
 trong câu trả lời đều đúng.
 
@@ -278,19 +290,40 @@ sau không kéo dài thời hạn. HAL mở iterator `receive()` kế tiếp c�
 cùng session sau `turn_complete`, giữ định danh lượt logic.
 Chỉ delegate/reject kết thúc cửa sổ sớm. `complete_response` ghi nhận xác nhận
 nhưng vẫn chờ để nhận delegate ở frame tiếp theo; tool phụ không
-xác nhận hoàn tất và không ngăn delegate đến sau. Sau xác nhận câu trả lời trực
-tiếp, HAL bỏ lời nói bổ sung do ACK kích hoạt nhưng vẫn nhận routing call. Sau
-terminal đầu tiên, cửa sổ NON_BLOCKING chỉ nhận tool và metadata đầu vào, không
-phát thêm text/audio. Câu trả lời hoặc filler ban đầu vẫn phát ngay; câu lỗi hoặc
-từ chối quyền truy cập được sinh sau đó không bị nối vào lời nói hay lịch sử. Lỗi
-receive trên nhóm model này cũng yêu cầu fallback sang main, kể cả đã phát filler.
+xác nhận hoàn tất và không ngăn delegate đến sau. Sau terminal đầu tiên, HAL
+giữ text/audio tiếp theo trong bộ đệm, chưa phát. Terminal sau hoặc
+`complete_response` có thể kích hoạt kiểm tra lời ban đầu cộng phần nói tiếp.
+HAL chỉ phát phần đang giữ khi chốt grace, không có delegate hay interruption,
+kiểm tra độc lập xác nhận lời ban đầu là `INCOMPLETE` và kết quả kiểm tra ngữ
+nghĩa chấp nhận toàn bộ câu trả lời. Nếu lời ban đầu đã hoàn chỉnh, cơ chế chặn
+lặp vẫn giữ nguyên; nếu kiểm tra ban đầu chưa xác nhận được, phần nói tiếp không
+được phát. Delegate/reject tường minh đến muộn vẫn ưu tiên khi HAL còn nhận
+routing, nên phần đang giữ không phát trước quyết định này.
+
+Bộ đệm phần nói tiếp giới hạn 2.000.000 byte PCM và 16.000 ký tự text; vượt
+giới hạn sẽ không được phát. Lời nói bổ sung hủy hiệu lực kiểm tra phần nói tiếp
+trước đó, chờ terminal/xác nhận mới để kiểm tra lại. Phần nói tiếp và terminal
+mới đều không kéo dài grace routing 6 giây hay hạn outcome 10 giây ban đầu.
+Nhờ đó, đáp án được xác nhận sau filler có thể phát mà không lặp lại câu trả lời
+đã hoàn chỉnh hoặc nối thêm lỗi/từ chối quyền truy cập chưa được xác nhận vào
+lời nói hay lịch sử. Lỗi receive trên nhóm model này cũng yêu cầu fallback sang
+main, kể cả đã phát filler.
 
 Nếu hết cả hai hạn chờ mà lượt không bị ngắt vẫn thiếu outcome, HAL phát
 `MainAgentFallbackOutput`, rồi `DelegateSignal`, giữ nguyên transcript gốc từ
 provider và định danh lượt. Fallback cục bộ không bịa function call và không gửi
 tool ACK. Route là `delegated`, không gắn `[HANDLED]`, kể cả khi filler đã phát;
-bằng chứng hoàn tất phải đến từ tác vụ phía sau. Model BLOCKING giữ cách kết
-thúc ngay hiện có. Prompt Gemini cho phép một câu xác nhận ngắn phát ngay trước
+bằng chứng hoàn tất phải đến từ tác vụ phía sau. Với lượt delegate có transcript
+lời realtime đã nói, dispatch thêm `[realtime-handoff]`: đây là yêu cầu đang chờ
+xử lý, không phải lịch sử đã handled. Main agent cần giải quyết hoặc hỏi thêm
+ngữ cảnh còn thiếu, không chọn `NO_REPLY` chỉ vì realtime đã nói. Đây là ngữ
+cảnh riêng cho bàn giao, không ghi đè toàn cục quyết định im lặng/bỏ tiếng ồn.
+Sau fallback hoặc delegate tường minh có lời realtime trước đó, Gemini đánh dấu
+session `requires_fresh_session`; cơ chế `prepare_turn` hiện có tạo lại session
+trước lần thu âm tiếp theo. Nhờ đó terminal hoặc output grace cũ không làm mất
+input mới của người dùng. Câu trả lời trực tiếp đã hoàn tất và bàn giao không
+có lời nói không chịu thêm yêu cầu tạo lại session này.
+Model BLOCKING giữ cách kết thúc ngay hiện có. Prompt Gemini cho phép một câu xác nhận ngắn phát ngay trước
 delegate; reject vẫn hoàn toàn im lặng. Yêu cầu email/tài khoản/connector, kể cả
 "your email", thuộc main agent: Gemini chỉ xác nhận trung tính, không tự kết luận
 có/không có tài khoản hay quyền truy cập, hoặc viện persona thiết bị để từ chối.
@@ -346,6 +379,12 @@ dùng `keyterm`; các model nova cũ hơn dùng `keywords` kèm intensifier `:3`
 Mọi lượt wake-word đã được STT final xác nhận đều đi qua dispatch. Nó mở một
 cửa sổ focus follow-up 20 giây (reset sau mỗi lượt được phép), nên câu nói kế
 tiếp có thể bỏ wake phrase và được gửi với type `voice_followup`.
+
+Sau bước kiểm tra gaze ở cuối câu, HAL cập nhật cờ focus của lượt thu trước khi
+mở realtime, kể cả khi transcript có nội dung. Vì vậy gaze cấp focus ở cuối
+câu sẽ cho phép chính câu đó vào realtime, thay vì chỉ cho phép dispatch xuống
+main agent. Focus đã chốt vẫn được giữ nếu hết hạn giữa câu; noise guard vẫn
+được áp dụng.
 
 Cửa sổ đó được chốt một lần lúc mở phiên cho **dispatch**, để cửa sổ hết hạn
 giữa câu không cắt lời người đang nói. Còn những cue tự nhận mình là người được

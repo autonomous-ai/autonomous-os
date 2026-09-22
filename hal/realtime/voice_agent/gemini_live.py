@@ -175,7 +175,7 @@ class GeminiLiveAgent(VoiceAgentBase):
     @property
     @override
     def requires_fresh_session(self) -> bool:
-        """Whether an unacknowledged tool call makes this session unusable."""
+        """Whether unresolved tools or a spoken handoff require a new session."""
         return getattr(self, "_requires_fresh_session", False) or bool(
             self._pending_tool_calls
         )
@@ -608,27 +608,58 @@ class GeminiLiveAgent(VoiceAgentBase):
         _turn_transcript = ""
         _spoken_response = ""
         _outcome_check: asyncio.Task[bool | None] | None = None
+        _continuation_check: asyncio.Task[bool | None] | None = None
+        _continuation: list[OutputEvent] = []
+        _continuation_text = ""
+        _continuation_bytes = 0
+        _continuation_overflow = False
+        _outcome_deadline = 0.0
         _grounded = False
         _grace_deadline: float = 0.0
         _deferred_finalize: Callable[[], Any] | None = None
         _receiver = self._session.receive().__aiter__()
 
         def _start_outcome_check() -> None:
-            nonlocal _outcome_check
+            nonlocal _outcome_check, _outcome_deadline
             if (_outcome_check is not None or _routing_received or execution_interrupted
                     or not _spoken_response.strip()):
                 return
             from hal.realtime.response_outcome import spoken_response_complete
             request = getattr(self, "_user_transcript", "") or _turn_transcript
+            if not _outcome_deadline:
+                _outcome_deadline = time.monotonic() + app_config.REALTIME_OUTCOME_TIMEOUT_S
+            answer = _spoken_response
+            grounded = _grounded
             async def check() -> bool | None:
-                timeout = app_config.REALTIME_OUTCOME_TIMEOUT_S
+                timeout = max(0.0, _outcome_deadline - time.monotonic())
                 return await asyncio.wait_for(spoken_response_complete(
-                    request, _spoken_response, grounded=_grounded, timeout=timeout,
+                    request, answer, grounded=grounded, timeout=timeout,
                 ), timeout=timeout)
             _outcome_check = asyncio.create_task(check())
 
+        async def _check_continuation() -> None:
+            nonlocal _continuation_check
+            if not _continuation_text or _continuation_overflow or _routing_received:
+                return
+            from hal.realtime.response_outcome import spoken_response_complete
+            if _continuation_check is not None:
+                _continuation_check.cancel()
+                await asyncio.gather(_continuation_check, return_exceptions=True)
+            request = getattr(self, "_user_transcript", "") or _turn_transcript
+            answer = _spoken_response + _continuation_text
+            grounded = _grounded
+
+            async def check() -> bool | None:
+                timeout = max(0.0, _outcome_deadline - time.monotonic())
+                return await asyncio.wait_for(spoken_response_complete(
+                    request, answer, grounded=grounded, timeout=timeout,
+                ), timeout=timeout)
+
+            _continuation_check = asyncio.create_task(check())
+
         async def _fallback_needed(delayed_playback_ack: bool = False) -> bool:
             independently_complete = None
+            continuation_released = False
             if _outcome_check is not None:
                 if _routing_received or execution_interrupted or delayed_playback_ack:
                     _outcome_check.cancel()
@@ -636,11 +667,43 @@ class GeminiLiveAgent(VoiceAgentBase):
                     try:
                         independently_complete = await _outcome_check
                     except asyncio.TimeoutError:
+                        logger.warning("[realtime] Spoken outcome check timed out")
                         independently_complete = None
                 logger.info("[realtime] Spoken outcome check: %s",
                             "complete" if independently_complete is True else
                             "incomplete" if independently_complete is False else "unconfirmed")
+            if _continuation_check is not None:
+                if (_routing_received or execution_interrupted or delayed_playback_ack
+                        or independently_complete is not False or _continuation_overflow):
+                    _continuation_check.cancel()
+                else:
+                    try:
+                        continuation_complete = await _continuation_check
+                    except asyncio.TimeoutError:
+                        logger.warning("[realtime] Continuation outcome check timed out")
+                        continuation_complete = None
+                    # A completed initial answer keeps the old duplicate guard.
+                    # Only a confirmed incomplete initial reply followed by a
+                    # checked, terminal-ended continuation can
+                    # be released, and a trailing delegate always wins first.
+                    if continuation_complete is True:
+                        for event in _continuation:
+                            self._recv_queue.put(event)
+                        independently_complete = True
+                        continuation_released = True
+                        logger.info("[realtime] Releasing confirmed continuation after initial response")
+                await asyncio.gather(_continuation_check, return_exceptions=True)
+            if _outcome_check is not None:
+                await asyncio.gather(_outcome_check, return_exceptions=True)
+            if _continuation:
+                logger.info("[realtime] Continuation decision: released=%s routing=%s audio_bytes=%d text_chars=%d",
+                            continuation_released, _routing_received,
+                            _continuation_bytes, len(_continuation_text))
             confirmed = independently_complete if independently_complete is not None else _outcome_received
+            if (_continuation or _continuation_overflow) and independently_complete is not True:
+                # A provider confirmation must not claim that withheld speech
+                # reached the user when the independent check was unavailable.
+                confirmed = False
             return (_requires_outcome and not _routing_received and not confirmed
                     and not execution_interrupted and not delayed_playback_ack)
 
@@ -649,6 +712,8 @@ class GeminiLiveAgent(VoiceAgentBase):
             fallback = await _fallback_needed(delayed_playback_ack)
             if fallback:
                 logger.warning("[realtime] No confirmed outcome after NON_BLOCKING response — forwarding to main")
+                if _spoken_response.strip():
+                    self._requires_fresh_session = True
             self._awaiting_playback_turn_complete = False
             self._first_audio_received = False
             self._user_transcript = ""
@@ -671,6 +736,8 @@ class GeminiLiveAgent(VoiceAgentBase):
             fallback = await _fallback_needed()
             if fallback:
                 logger.warning("[realtime] No confirmed outcome after NON_BLOCKING response — forwarding to main")
+                if _spoken_response.strip():
+                    self._requires_fresh_session = True
             self._user_transcript = ""
             self._awaiting_playback_turn_complete = True
             self._first_audio_received = False
@@ -844,13 +911,43 @@ class GeminiLiveAgent(VoiceAgentBase):
                         transcript_finished=getattr(_in_tx, "finished", False) is True,
                     )
 
-                # The first provider terminal has already ended the spoken
-                # response. Grace only collects routing/confirmation, not another
-                # generated reply to tool ACKs or context. Keep the initial
-                # answer/filler immediate without speaking later errors/denials.
+                # The initial response streams immediately. Post-terminal output
+                # stays off-speaker until an incomplete initial reply and a valid
+                # continuation are confirmed without a trailing routing tool.
                 accept_speech = not _direct_answer_confirmed and not (
                     _requires_outcome and _deferred_finalize is not None
                 )
+                if (not accept_speech and not _direct_answer_confirmed
+                        and not _routing_received and not execution_interrupted
+                        and not content.interrupted and not _continuation_overflow):
+                    # Hold post-terminal speech until the routing grace ends.
+                    # It can be the real answer after a filler, or unwanted ACK
+                    # chatter. Never let it reach the speaker before deciding.
+                    held_outputs = []
+                    for part in (content.model_turn.parts if content.model_turn else []):
+                        if not getattr(part, "thought", False) and part.inline_data and part.inline_data.data:
+                            _continuation_bytes += len(part.inline_data.data)
+                            held_outputs.append(AudioOutput(
+                                user_turn_id=response_user_turn_id or "",
+                                audio=pcm16_bytes_to_float32(part.inline_data.data),
+                            ))
+                    if content.output_transcription and content.output_transcription.text:
+                        text = content.output_transcription.text
+                        _continuation_text += text
+                        held_outputs.append(TextOutput(text=text, user_turn_id=response_user_turn_id or ""))
+                    if _continuation_bytes > 2_000_000 or len(_continuation_text) > 16_000:
+                        _continuation_overflow = True
+                        _continuation.clear()
+                        logger.warning("[realtime] Continuation buffer limit reached; preserving fallback")
+                    elif held_outputs:
+                        _continuation.extend(OutputEvent(gen=self._turn_gen, output=o) for o in held_outputs)
+                        # New chunks invalidate a check of an earlier terminal.
+                        if _continuation_check is not None:
+                            _continuation_check.cancel()
+                            await asyncio.gather(_continuation_check, return_exceptions=True)
+                            _continuation_check = None
+                        logger.debug("[realtime] Holding continuation: audio_bytes=%d text_chars=%d",
+                                     _continuation_bytes, len(_continuation_text))
                 has_model_output = accept_speech and bool(
                     content.model_turn or content.output_transcription
                 )
@@ -1031,6 +1128,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                             lambda dpa=delayed_playback_ack: _finalize_turn_complete(dpa)
                         )
                         _start_outcome_check()
+                        await _check_continuation()
                         continue
                     await _finalize_turn_complete(delayed_playback_ack)
                     return
@@ -1051,6 +1149,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                             logger.info("[realtime] NON_BLOCKING grace started at generation_complete (%.2fs)", _grace_s)
                             _deferred_finalize = _finalize_generation_complete
                         _start_outcome_check()
+                        await _check_continuation()
                         continue
                     await _finalize_generation_complete()
                     return
@@ -1075,6 +1174,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                     logger.info("[realtime] Function call: %s (call_id=%s, after_terminal=%s)",
                                 fc.name, fc.id, _deferred_finalize is not None)
                     if _requires_outcome and fc.name == "complete_response":
+                        await _check_continuation()
                         # An explicit direct-answer outcome, never an inferred
                         # success from audio or a terminal alone. Ack normally;
                         # this backend does not support scheduling=SILENT.
@@ -1094,6 +1194,12 @@ class GeminiLiveAgent(VoiceAgentBase):
                     if fc.name in {"delegate_to_main", "reject_turn", "end_conversation"}:
                         _outcome_received = True
                         _routing_received = True
+                    if (_requires_outcome and fc.name == "delegate_to_main"
+                            and _spoken_response.strip()):
+                        # Publish quarantine BEFORE the tool: its consumer may
+                        # release the next capture immediately. Late filler/ACK
+                        # output must not start a grace in that new capture.
+                        self._requires_fresh_session = True
                     self._recv_queue.put(
                         OutputEvent(
                             gen=getattr(self, "_turn_gen", 0),

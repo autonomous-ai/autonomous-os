@@ -7,7 +7,9 @@ from hal.realtime import response_outcome
 
 
 @pytest.mark.parametrize('reply,expected', [('COMPLETE', True), ('INCOMPLETE', False),
-                                         ('', None), ('COMPLETE maybe', None)])
+                                         ('CLARIFICATION', True),
+                                         ('', None), ('COMPLETE maybe', None),
+                                         ('CLARIFICATION maybe', None)])
 def test_exact_completion_only(monkeypatch, reply, expected):
     import anthropic
     captured = {}
