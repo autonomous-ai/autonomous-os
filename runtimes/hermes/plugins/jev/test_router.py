@@ -83,6 +83,7 @@ class RouterTest(unittest.TestCase):
         with patch.dict(sys.modules, modules):
             with self.assertRaisesRegex(ValueError, "inline hook budget"):
                 router.load_skill_context("openclaw-imports/computer-use")
+
             modules["tools.hook_output_spill"].get_spill_config = lambda: {"enabled": True, "max_chars": 131072}
             context = router.load_skill_context("openclaw-imports/computer-use")
             self.assertIn(native["content"], context)
@@ -90,6 +91,46 @@ class RouterTest(unittest.TestCase):
             modules["tools.hook_output_spill"].get_spill_config = lambda: {"enabled": True, "max_chars": 500}
             with self.assertRaisesRegex(ValueError, "inline hook budget"):
                 router.load_skill_context("openclaw-imports/computer-use")
+
+    def test_preload_diagnostics_correlate_turn_without_content(self):
+        plugin = self.make()
+        with self.assertLogs(router.LOG, level="INFO") as logs:
+            plugin.before_turn(user_message="private request", session_id="session-1",
+                               turn_id="turn-2", task_id="task-3")
+        message = "\n".join(logs.output)
+        for field in ("session_id=session-1", "turn_id=turn-2", "task_id=task-3", "context_chars="):
+            self.assertIn(field, message)
+        self.assertNotIn("private request", message)
+        self.assertNotIn("Loaded skill", message)
+        def fail_load(*args):
+            raise router.PreloadError("skill_inline_budget", "sensitive native detail")
+        plugin.load = fail_load
+        with self.assertLogs(router.LOG, level="INFO") as logs:
+            self.assertIsNone(plugin.before_turn(user_message="private request", turn_id="unsafe\ninjection"))
+        message = "\n".join(logs.output)
+        self.assertIn("reason=skill_inline_budget", message)
+        self.assertNotIn("sensitive", message)
+        self.assertNotIn("injection", message)
+
+    def test_shipped_computer_skill_fits_default_inline_budget(self):
+        # Guard the real fast-path instructions against growing back beyond the
+        # default Hermes hook spill cap. Native metadata has additional headroom.
+        skill_dir = Path(__file__).resolve().parents[4] / "skills" / "computer-use"
+        native = {"success": True, "name": "computer-use",
+                  "skill_dir": "/root/.hermes/skills/openclaw-imports/computer-use",
+                  "content": (skill_dir / "SKILL.md").read_text(),
+                  "linked_files": {"scripts": [str(p.relative_to(skill_dir))
+                                                 for p in (skill_dir / "scripts").glob("*.py")],
+                                   "references": [str(p.relative_to(skill_dir))
+                                                  for p in (skill_dir / "references").glob("*.md")]}}
+        modules = {
+            "tools.skills_tool": SimpleNamespace(skill_view=lambda **kw: json.dumps(native)),
+            "tools.hook_output_spill": SimpleNamespace(get_spill_config=lambda: {"enabled": True, "max_chars": 10000}),
+        }
+        with patch.dict(sys.modules, modules):
+            context = router.load_skill_context("openclaw-imports/computer-use")
+        self.assertLess(len(context), 9500)
+        self.assertIn("--inspect-after", context)
 
     def test_slow_preload_is_discarded_and_context_is_copied(self):
         plugin = self.make()

@@ -5,6 +5,14 @@ import json
 MAX_SKILL_RESPONSE = 128 * 1024
 
 
+class PreloadError(ValueError):
+    """Stable diagnostic codes, without logging skill contents or native errors."""
+
+    def __init__(self, reason, message):
+        super().__init__(message)
+        self.reason = reason
+
+
 def load_skill_context(name, task_id=None):
     from tools.skills_tool import skill_view
 
@@ -12,15 +20,15 @@ def load_skill_context(name, task_id=None):
     # with preprocessing enabled: rendering a skill can execute shell snippets.
     raw = skill_view(name=name, task_id=task_id, preprocess=False)
     if not isinstance(raw, str) or len(raw.encode("utf-8")) > MAX_SKILL_RESPONSE:
-        raise ValueError("invalid skill response size")
+        raise PreloadError("skill_response_size", "invalid skill response size")
     result = json.loads(raw)
     if not isinstance(result, dict) or result.get("success") is not True:
-        raise ValueError("native skill load rejected")
+        raise PreloadError("skill_rejected", "native skill load rejected")
     content = result.get("content")
     if not isinstance(content, str) or not content.strip():
-        raise ValueError("empty skill")
+        raise PreloadError("skill_empty", "empty skill")
     if "!`" in content:
-        raise ValueError("dynamic skill requires normal loading")
+        raise PreloadError("skill_dynamic", "dynamic skill requires normal loading")
     # Keep the native result intact, including absolute skill_dir, linked files,
     # setup requirements and warnings; do not silently strip readiness metadata.
     context = (
@@ -45,5 +53,5 @@ def load_skill_context(name, task_id=None):
         if config.get("enabled", True):
             cap = min(cap, int(config["max_chars"]))
     if len(context) > cap:
-        raise ValueError("skill context exceeds inline hook budget")
+        raise PreloadError("skill_inline_budget", "skill context exceeds inline hook budget")
     return context

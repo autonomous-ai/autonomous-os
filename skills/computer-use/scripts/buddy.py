@@ -10,6 +10,7 @@ from pathlib import Path
 import stat
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -258,6 +259,52 @@ def save_screenshot(data, output_dir=None):
         raise
 
 
+# Only desktop mutations supported by the existing server; each keeps its normal
+# snapshot, focus, permission and pause validation on the companion.
+INSPECT_AFTER_ACTIONS = frozenset({
+    "cua_action", "perform_ui_action", "open_app", "close_app", "open_url", "open_path", "click_button",
+    "click_at", "mouse_move", "drag", "scroll", "type_text", "key_combo",
+})
+
+
+def action_and_inspect(action, params, inspection_params, timeout_ms=15000, command_id=None):
+    """Issue one action and observe once; a failed observation never replays input."""
+    from buddy_inspect import inspect_ui, validate_inspect_params
+    validate_inspect_params(inspection_params)
+    if "app" not in inspection_params:
+        raise BuddyError("--inspect-after requires an explicit app target")
+    if isinstance(params, dict) and "app" in params and params["app"] != inspection_params["app"]:
+        raise BuddyError("--inspect-after app must match the action app")
+    if action not in INSPECT_AFTER_ACTIONS:
+        raise BuddyError("--inspect-after is supported only for desktop actions")
+    backend = {"cua_action": "cua", "perform_ui_action": "native"}.get(action)
+    if backend == "native" and "window_id" in inspection_params:
+        raise BuddyError("window_id requires Cua")
+    started = time.monotonic()
+    # Allocate the ID here so even uncertain transport outcomes retain a handle.
+    request_id = command_id or str(uuid.uuid4())
+    try:
+        action_result = command(action, params, timeout_ms, command_id=request_id)
+    except (BuddyError, ValueError, OSError) as exc:
+        # An error can follow partial input. Never guess whether replay is safe.
+        return {"ok": False, "action": {"id": request_id, "ok": False,
+                "outcome": "unconfirmed", "error": str(exc)},
+                "inspection": None, "retry_action": False,
+                "next_step": "stop on pause, permission, disconnect or timeout; otherwise inspect before choosing another action",
+                "timing": {"elapsed_ms": round((time.monotonic() - started) * 1000, 2)}}
+    action_done = time.monotonic()
+    try:
+        inspection = inspect_ui(inspection_params, command, known_backend=backend)
+    except (BuddyError, ValueError, OSError) as exc:
+        inspection = {"ok": False, "error": str(exc)}
+    finished = time.monotonic()
+    return {"ok": inspection["ok"], "action": action_result,
+            "inspection": inspection, "retry_action": False,
+            "timing": {"elapsed_ms": round((finished - started) * 1000, 2),
+                       "action_ms": round((action_done - started) * 1000, 2),
+                       "inspection_ms": round((finished - action_done) * 1000, 2)}}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", help="Buddy action, for example get_ui_tree or screenshot")
@@ -269,12 +316,20 @@ def main(argv=None):
     parser.add_argument("--question", help="Required for observe: ask about a fresh Mac screenshot")
     parser.add_argument("--goal", help="Required for suggest: describe the next UI step")
     parser.add_argument("--output-dir", type=Path, help="Device-local screenshot directory")
+    parser.add_argument("--inspect-after", help="JSON app/window_id target: observe once after a successful desktop action")
     args = parser.parse_args(argv)
     try:
         raw = args.params_file.read_text(encoding="utf-8") if args.params_file else (args.params or "{}")
         params = json.loads(raw)
         if not isinstance(params, dict):
             raise BuddyError("params must be a JSON object")
+        if args.inspect_after is not None:
+            if args.output_dir or args.question is not None or args.goal is not None:
+                raise BuddyError("--inspect-after cannot combine with --output-dir, --question or --goal")
+            result = action_and_inspect(args.action, params, json.loads(args.inspect_after),
+                                        args.timeout_ms, args.id)
+            print(json.dumps(result, ensure_ascii=False, allow_nan=False))
+            return 0 if result["ok"] else 1
         if args.action == "inspect":
             if args.id or args.output_dir or args.timeout_ms != 15000 or args.question is not None or args.goal is not None:
                 raise BuddyError("inspect accepts only --params or --params-file")

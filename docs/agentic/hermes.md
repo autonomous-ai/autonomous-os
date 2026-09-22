@@ -1137,6 +1137,11 @@ failures instead of grouping them as `deferred`:
 | `skipped` | `disabled`, `invalid_message`, `explicit_selection`, `system_message`, `unconfigured`, `cooldown`, `busy`, or `no_candidates` |
 | `timeout` | The decision wait budget expired |
 
+Logs include validated `session_id`, `turn_id` and `task_id` when supplied by
+Hermes, so a slow turn can be correlated without logging its prompt. Accepted
+preloads include `context_chars`. Native preload failures distinguish
+`skill_response_size`, `skill_rejected`, `skill_empty`, `skill_dynamic`, and
+`skill_inline_budget`; other native failures remain `skill_load_failed`.
 Logs include total `decision_ms`, and `catalog_ms`, `request_ms`, and native
 `load_ms` when available;
 `request_ms` measures the full proxy round trip, not model inference alone.

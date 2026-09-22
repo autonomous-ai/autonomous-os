@@ -1,6 +1,6 @@
 # Synchronous desktop workflow
 
-Use for every task that needs returned information, verification, or dependent actions. This is a device-agent → device OS → Mac Buddy loop. The agent runtime must execute commands and consume observations; this reference does not create a second agent or connect Agent management.
+The main skill already covers ordinary returned information, verification and dependent actions. Read this reference only for advanced observation, coordinates or recovery. This is a device-agent → device OS → Mac Buddy loop. The agent runtime must execute commands and consume observations; this reference does not create a second agent or connect Agent management.
 
 ## Compact observation first
 
@@ -155,7 +155,7 @@ Use coordinates in the returned JPEG's dimensions. If an image viewer resized th
 
 ## Available desktop commands
 
-All the simple actions in the parent skill also work synchronously here.
+All simple actions in the parent skill and [actions.md](actions.md) also work synchronously here.
 
 | Action | Params / purpose |
 |---|---|
@@ -178,7 +178,7 @@ Do not send observations, coordinate operations, nested params, or cancellation 
 
 ## Observe → act → verify → continue
 
-After a navigation, wait briefly and poll observations until the intended UI appears. Prefer checking state over a guessed long sleep. Never assume app launch focuses a search field. Observe focus before typing and re-observe after switching apps, opening a dialog, or changing tabs. Use one dependent action at a time; wait for its response before choosing the next action.
+After a navigation, wait briefly and poll observations until the intended UI appears. Prefer checking state over a guessed long sleep. Never assume app launch focuses a search field. Observe focus before typing and re-observe after switching apps, opening a dialog, or changing tabs. Use one dependent action at a time; wait for its response before choosing the next action. Prefer the main skill's `--inspect-after` option to return the post-action observation within the same helper call; consume that inspection instead of observing redundantly.
 
 Use keyboard shortcuts when they are appropriate to the observed app and focus, Accessibility for named controls, and vision for controls that need it. A search result is evidence only after reading actual results; a saved document requires checking its content/location. Unexpected dialogs, permission errors, and absent controls require diagnosis rather than blind repetition.
 

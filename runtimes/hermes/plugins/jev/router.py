@@ -1,6 +1,6 @@
 """Bounded skill selection and native preloading into the current turn only."""
 
-from .preload import load_skill_context
+from .preload import PreloadError, load_skill_context
 
 import contextvars
 import ipaddress
@@ -206,10 +206,14 @@ class Router:
 
     def before_turn(self, user_message=None, **kwargs):
         started = time.monotonic()
+        # Correlate routing with runtime events without ever logging prompt text.
+        correlation = {key: value for key in ("session_id", "turn_id", "task_id")
+                       if isinstance(value := kwargs.get(key), str)
+                       and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", value)}
 
         def report(outcome, reason, **fields):
             # Only caller-owned enums, validated numbers and skill lookup names.
-            details = " ".join(f"{key}={value}" for key, value in fields.items() if value is not None)
+            details = " ".join(f"{key}={value}" for key, value in {**correlation, **fields}.items() if value is not None)
             LOG.info("[hermes-jev] outcome=%s reason=%s decision_ms=%.0f %s", outcome, reason,
                      (time.monotonic() - started) * 1000, details)
 
@@ -271,6 +275,7 @@ class Router:
                     if not isinstance(context, str) or not context.strip():
                         raise DecisionError("skill_load_failed")
                     timings["load_ms"] = round((time.monotonic() - stage_start) * 1000)
+                    timings["context_chars"] = len(context)
                     if time.monotonic() >= deadline:
                         raise DecisionError("preload_timeout")
                     evaluated.update(outcome="preloaded", context=context)
@@ -278,7 +283,7 @@ class Router:
             except Exception as error:
                 if stage == "request":
                     timings["request_ms"] = round((time.monotonic() - stage_start) * 1000)
-                reason = (error.reason if isinstance(error, DecisionError) else
+                reason = (error.reason if isinstance(error, (DecisionError, PreloadError)) else
                           "skill_load_failed" if stage == "load" else
                           "catalog_error" if stage == "catalog" else
                           "network_error" if stage == "request" else "invalid_schema")

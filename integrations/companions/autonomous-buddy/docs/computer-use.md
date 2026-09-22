@@ -1,5 +1,51 @@
 # Computer use on the paired Mac
 
+## Fewer model round trips
+
+The main computer-use skill contains the ordinary Cua/native observation and action
+contract; reading the vision reference is no longer required before the first
+`inspect`. Advanced screenshot/coordinate and experimental suggestion instructions
+remain in references. A complete Hermes Jev preload satisfies the skill read.
+Do not issue a separate `desktop_info` before `inspect`.
+
+Use `buddy.py <action> --params ... --inspect-after '{"app":"Calendar"}'` to
+execute one supported desktop action and obtain a fresh observation in the same
+model tool call. The optional `window_id` must come from observed window metadata.
+The inspection target requires an explicit app and must match the action's app
+when supplied. All inspection parameters are validated before dispatching input.
+This is helper-side sequencing, not a new Mac command or an atomic transaction:
+normal server pause, focus, permission, cancellation and snapshot checks still apply.
+It removes one model round trip per successful action/observation pair; underlying
+commands remain sequential and there is no action retry or driver failover.
+After `cua_action`, the helper calls `cua_observe` directly; after
+`perform_ui_action`, it calls native `get_ui_tree` directly. These successful
+actions establish the backend, avoiding another `desktop_info` round trip
+(two backend commands instead of three). Each observation still passes Mac pause
+and driver permission checks. Such inspection returns `desktop:null`,
+`backend`, and `backend_source:"successful_action"`; it does not refresh or
+invent capabilities. Other actions still use the full preflight/inspect path.
+
+The JSON separates `action` and `inspection`, with `retry_action:false`. Action
+failure stops without inspection; its outcome remains unconfirmed. If observation
+fails after an acknowledged action, the result preserves that action response and
+exits nonzero. Never replay the input to recover from an observation failure. Pause,
+permission, disconnect and timeout blockers still stop desktop work for the turn.
+A fresh successful inspection is verification evidence, not automatic proof the
+whole requested task succeeded; read its contents before continuing.
+
+`inspect.desktop` includes `capabilities` and `protocol_version` so checking input
+guards does not require another preflight. `inspect.timing` reports total elapsed
+milliseconds and per-command IDs/elapsed time. Combined calls also report action
+and inspection elapsed milliseconds. These local wall-clock measurements include
+transport; correlate command IDs with OS/Buddy logs to isolate server work.
+Hermes Jev logs separately report routing time, context size and turn/session IDs.
+Local contract tests establish fewer required model calls, not a live end-to-end
+latency improvement. Compare time to first usable observation, total completion
+time, repeated skill reads and correctness on the same device/app state.
+`evals/natural-voice.json` adds `calendar_fast_path` and
+`inspection_failure_after_input` scenarios under the computer-use skill; these
+definitions require a runtime replay and do not themselves establish a pass.
+
 ## Cua Driver observation and execution
 
 Buddy's unified macOS app includes the official Cua Driver **0.28.2** at `Contents/Helpers/CuaDriver.app`. Users install only Buddy; no separate Cua download, installation or shell command is required. Packaging downloads the pinned upstream release and verifies its checksum at build time; binary artifacts are not committed. The legacy `native-*` development targets are outside this bundled distribution flow.

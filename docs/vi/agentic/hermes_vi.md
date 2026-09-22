@@ -1130,6 +1130,11 @@ và lỗi, thay vì gộp chung thành `deferred`:
 | `skipped` | `disabled`, `invalid_message`, `explicit_selection`, `system_message`, `unconfigured`, `cooldown`, `busy`, hoặc `no_candidates` |
 | `timeout` | Hết thời gian chờ quyết định |
 
+Log có `session_id`, `turn_id`, `task_id` đã kiểm tra định dạng khi Hermes cung cấp,
+để nối các event của lượt chậm mà không ghi prompt. Preload thành công có thêm
+`context_chars`. Lỗi preload phân biệt `skill_response_size`, `skill_rejected`,
+`skill_empty`, `skill_dynamic`, `skill_inline_budget`; lỗi native khác vẫn dùng
+`skill_load_failed`.
 Log có tổng `decision_ms` cùng `catalog_ms`, `request_ms` và thời gian nạp gốc
 `load_ms` khi có dữ liệu; `request_ms`
 đo toàn bộ lượt gọi proxy, không phải riêng thời gian model suy luận. Quyết định

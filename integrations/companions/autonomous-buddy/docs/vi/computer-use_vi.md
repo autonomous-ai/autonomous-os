@@ -1,5 +1,46 @@
 # Computer use trên Mac đã ghép đôi
 
+## Giảm số lượt gọi model
+
+Skill computer-use chính chứa đủ hợp đồng quan sát và thao tác Cua/native thông
+thường; không còn bắt buộc đọc tài liệu vision trước `inspect` đầu tiên. Hướng dẫn
+screenshot/tọa độ nâng cao và gợi ý thử nghiệm vẫn nằm trong reference. Hermes Jev
+preload đầy đủ được tính là đã đọc skill. Không gọi `desktop_info` riêng trước `inspect`.
+
+Dùng `buddy.py <action> --params ... --inspect-after '{"app":"Calendar"}'` để
+thực hiện một thao tác desktop được hỗ trợ và nhận quan sát mới trong cùng một
+lượt tool của model. `window_id` tùy chọn phải lấy từ metadata cửa sổ đã quan sát.
+Đích quan sát bắt buộc có app rõ ràng và trùng app của thao tác nếu được truyền.
+Toàn bộ tham số quan sát được kiểm tra trước khi gửi input. Đây là chuỗi lệnh trong
+helper, không phải lệnh Mac mới hay giao dịch nguyên tử: các kiểm tra pause, focus,
+quyền, hủy và snapshot phía server vẫn áp dụng. Mỗi cặp thao tác/quan sát thành công
+bớt một lượt model; các lệnh bên dưới vẫn tuần tự, không retry thao tác hay đổi driver.
+Sau `cua_action`, helper gọi thẳng `cua_observe`; sau `perform_ui_action`, gọi
+`get_ui_tree` native. Thao tác thành công đã xác định driver nên không cần thêm
+`desktop_info` (hai lệnh backend thay vì ba). Mỗi quan sát vẫn qua kiểm tra pause
+và quyền của driver trên Mac. Inspection này trả `desktop:null`, `backend` và
+`backend_source:"successful_action"`; không làm mới hay tự tạo capabilities.
+Các thao tác khác vẫn dùng đầy đủ preflight/inspect.
+
+JSON tách `action` và `inspection`, với `retry_action:false`. Thao tác lỗi dừng
+ngay, không quan sát; kết quả thao tác vẫn chưa xác nhận. Nếu quan sát lỗi sau khi
+thao tác được xác nhận, kết quả giữ nguyên response thao tác và thoát khác 0. Không
+phát lại input để khắc phục lỗi quan sát. Pause, thiếu quyền, mất kết nối và timeout
+vẫn dừng desktop work trong lượt hiện tại. Quan sát mới thành công là bằng chứng
+để kiểm tra, không tự chứng minh toàn bộ mục tiêu đã hoàn thành; phải đọc nội dung.
+
+`inspect.desktop` có `capabilities` và `protocol_version` để kiểm tra bảo vệ input
+mà không cần preflight khác. `inspect.timing` ghi tổng milliseconds và ID/thời gian
+từng lệnh. Lệnh gộp còn ghi thời gian thao tác và quan sát. Số đo wall-clock local
+này bao gồm truyền tải; nối ID lệnh với log OS/Buddy để tách thời gian server.
+Log Hermes Jev ghi riêng thời gian routing, kích thước context và ID turn/session.
+Test hợp đồng local xác nhận giảm số lượt model cần thiết, chưa xác nhận cải thiện
+latency toàn luồng thực tế. So sánh thời gian tới quan sát dùng được đầu tiên, tổng
+thời gian hoàn thành, số lần đọc skill lặp và tính đúng trên cùng trạng thái app/device.
+`evals/natural-voice.json` trong skill computer-use thêm hai tình huống
+`calendar_fast_path` và `inspection_failure_after_input`; đây là định nghĩa cần
+replay qua runtime, không tự chứng minh đã pass.
+
 ## Quan sát và thao tác bằng Cua Driver
 
 App macOS hợp nhất của Buddy chứa Cua Driver chính thức **0.28.2** tại `Contents/Helpers/CuaDriver.app`. Người dùng chỉ cài Buddy; không cần tải/cài Cua riêng hay chạy lệnh shell. Bước đóng gói tải release upstream cố định và kiểm tra checksum lúc build; không commit binary vào repo. Các target phát triển `native-*` cũ không thuộc luồng phân phối có Cua nhúng này.
