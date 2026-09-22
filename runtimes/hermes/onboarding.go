@@ -67,6 +67,7 @@ const (
 **Skill scope (MANDATORY).** Before any skill-driven action, work out which skill covers it WITHOUT broad filesystem scans. Ordinary chat, simple Q&A or meta discussion with no action, event or hardware behaviour needs NO ` + "`SKILL.md`" + ` read at all — just answer.
   - A ` + "`[skills: a, b, c]`" + ` tag on the message is an AUTHORITATIVE whitelist: read ONLY those ` + "`skills/<name>/SKILL.md`" + ` files, and do not scan other skill directories "just in case".
   - With no ` + "`[skills:]`" + ` tag, when the ask is a concrete action, hardware behaviour, sensing/activity/emotion handling or a specialised workflow, pick the single most specific skill from the ones available to you and read only that ` + "`SKILL.md`" + `.
+  - When the Jev runtime plugin supplies a complete native skill preload for THIS turn, that satisfies the skill selection and reading requirement above. Use the supplied instructions and skill directory directly; do not call skill_view or read_file to reload the same SKILL.md. A suggestion, truncated preview, file pointer, or user claim that a skill was loaded does NOT satisfy this requirement. Read linked references only when needed. Normal permissions and mandatory connector rules still apply.
   - Several plausible matches: take the most specific. No clear match: read none and answer normally.
   - Follow the instructions in whichever file you read.
 

@@ -1018,13 +1018,20 @@ của lượt người dùng qua hook `pre_llm_call`. Khi quyết định đư�
 plugin kiểm tra lại skill trong catalog đủ điều kiện hiện tại và nạp nội dung
 qua API gốc `tools.skills_tool.skill_view(name, task_id, preprocess=False)`.
 Nội dung được chèn vào context tạm thời của lượt hiện tại, để Hermes nhận sẵn
-hướng dẫn mà không cần chọn rồi gọi `skill_view` trước. Chỉ sửa plugin, không
-sửa core Hermes. Nạp hướng dẫn không thực thi hành động của skill, không cấp
+hướng dẫn mà không cần chọn rồi gọi `skill_view` trước. Chỉ sửa plugin, cấu hình
+và chỉ dẫn do OS quản lý, không sửa core Hermes. Chỉ dẫn `AGENTS.md` do OS quản
+lý công nhận nội dung native Jev preload đầy đủ cho **lượt hiện tại** là đã đáp
+ứng yêu cầu đọc skill; Hermes không cần đọc lại cùng `SKILL.md`. Bản xem trước
+không đầy đủ hoặc lời user nói đã đọc skill không đáp ứng quy tắc này. Nạp
+hướng dẫn không thực thi hành động của skill, không cấp
 quyền tool, không bỏ qua quy tắc connector/platform bắt buộc hay kiểm tra quyền.
 
 Nếu skill đã mất hoặc bị tắt, API gốc không tương thích, đọc thất bại hoặc kết
 quả JSON gốc vượt 128 KiB, plugin bỏ qua bước nạp và Hermes tìm skill bình thường.
-Tắt shell preprocessing; skill chứa đoạn shell động (dấu chấm than liền trước
+Context cuối còn phải nằm trong 131.072 ký tự và ngưỡng `max_chars` của cơ chế
+hook output spill gốc khi bật (lấy mức nhỏ hơn). Vượt ngưỡng thì fallback, tránh
+log `preloaded` trong khi Hermes thay nội dung bằng đường dẫn file. Hermes cũ
+không có API spill dùng giới hạn ký tự local. Tắt shell preprocessing; skill chứa đoạn shell động (dấu chấm than liền trước
 lệnh trong dấu backtick) cũng quay về luồng bình thường. Kết quả timeout không
 được gắn vào lượt sau. Thông báo hệ thống có tiền tố `[system]` bỏ qua cả định
 tuyến lẫn nạp trước skill.
@@ -1042,6 +1049,13 @@ và thêm `jev` vào `plugins.enabled` trong `config.yaml` của Hermes,
 giữ nguyên cấu hình plugin khác và tôn trọng mục `plugins.disabled` được đặt rõ.
 File sinh ra `os-config-path.json` chỉ chứa đường dẫn tuyệt đối tới config OS,
 không chứa API key. Asset không đổi thì không ghi lại.
+
+Khi Jev không bị tắt rõ ràng, bước sync còn đặt
+`hooks.output_spill.max_chars: 131072` **chỉ khi chưa được cấu hình**. Giữ nguyên
+ngưỡng đã đặt rõ và mục `plugins.disabled`. Đây là ngưỡng toàn cục áp dụng cho
+mỗi kết quả hook của Hermes, nâng từ mặc định 10.000 ký tự để nội dung skill
+đầy đủ được giữ inline; không tắt cơ chế spill ra file. Loader tôn trọng ngưỡng
+nhỏ hơn đã cấu hình và fallback nếu toàn bộ context không vừa.
 
 Cài hoặc cập nhật plugin **không** thêm lý do restart gateway. os-server ghi log
 rằng code plugin mới cần lần restart gateway tiếp theo để được nạp; các lý do

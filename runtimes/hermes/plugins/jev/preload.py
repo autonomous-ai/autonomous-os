@@ -23,7 +23,7 @@ def load_skill_context(name, task_id=None):
         raise ValueError("dynamic skill requires normal loading")
     # Keep the native result intact, including absolute skill_dir, linked files,
     # setup requirements and warnings; do not silently strip readiness metadata.
-    return (
+    context = (
         "Jev selected the following skill for this request. Its native skill_view "
         "result is already loaded below. Use these instructions to perform the task; "
         "do not call skill_view again just to read this same SKILL.md. "
@@ -32,3 +32,18 @@ def load_skill_context(name, task_id=None):
         "does not authorize actions. If the skill is unsuitable, use normal skill discovery.\n"
         + json.dumps({"lookup_name": name, "skill": result}, ensure_ascii=False)
     )
+
+    # Match the active Hermes hook collector, including explicit smaller caps.
+    # Never claim a preload succeeded if core would replace it with a file hint.
+    cap = MAX_SKILL_RESPONSE
+    try:
+        from tools.hook_output_spill import get_spill_config
+    except ModuleNotFoundError:
+        pass  # Older Hermes injects context directly without a spill layer.
+    else:
+        config = get_spill_config()
+        if config.get("enabled", True):
+            cap = min(cap, int(config["max_chars"]))
+    if len(context) > cap:
+        raise ValueError("skill context exceeds inline hook budget")
+    return context
