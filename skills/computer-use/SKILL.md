@@ -20,7 +20,7 @@ For a request to **open or interact with a website or app**, use the paired comp
 
 Use the latest trusted OS status or Buddy result available for this task. If it says unpaired, disconnected, or paused, stop immediately: no `desktop_info`, desktop commands, HW action markers, screenshots, or vision-reference reads. Report that specific state in one short sentence and retain the task. Do not try to pair, reconnect, launch Buddy, poll, or perform the task through Harness or a device-local browser as a fallback. A request to repair the connection is a separate task.
 
-If availability is unknown or the user says the connection has changed, check once from this skill's installed directory on the device:
+If availability is unknown or the user says the connection has changed, use `inspect` below when the task needs an app observation: it includes the fresh availability check. For a connection-only question or a workflow without an Accessibility observation, check once from this skill's installed directory on the device:
 
 ```sh
 python3 scripts/buddy.py desktop_info
@@ -33,13 +33,13 @@ This is a read-only check, not a connection attempt. Consume the complete JSON a
 - **Single, self-contained action without a requested result:** an inline HW marker is supported for compatibility; see the small action catalog below. Say the action is being requested, not that you verified success.
 - **Anything requiring observation, returned information, more than one dependent action, or a result beyond opening/typing:** read [reference/vision.md](reference/vision.md), then use the synchronous helper in `scripts/buddy.py`. This includes native apps, websites, and switching between apps. Do not end such a task with an open-app/open-URL marker and a confirmation.
 
-Prefer Accessibility observations and identified UI elements when available. Use screenshots and mouse/keyboard for custom controls, canvas, or incomplete Accessibility trees. Both belong to the same ongoing task. Browser-specific tools may supplement this only if available and targeting the user's actual Mac/browser; do not substitute a browser on the device.
+Prefer `python3 scripts/buddy.py inspect --params '{"app":"TARGET_APP"}'` for initial app observations. It checks availability itself and uses the bundled Cua driver when enabled, otherwise native AX. Users install only Buddy; do not ask them to install or launch Cua separately. Missing macOS permissions use Buddy's existing permission flow. Do not duplicate preflight. It works with Jev disabled. Read `reference/vision.md` for Cua window selection and token-based `cua_action`; never mix those tokens with native `perform_ui_action` refs. Cua errors are blockers to diagnose, not permission to silently switch drivers. Screenshots and mouse/keyboard remain available for custom controls through their documented permission and verification flow. Browser tools must target the user's actual Mac/browser, not a browser on the device.
 
 Use the documented helper commands directly. Reading `scripts/buddy.py`, running `--help`, and searching the device filesystem are not routine preflight steps; inspect implementation only to diagnose an actual helper usage/error response. Read the needed reference once per task, then spend subsequent tool calls observing and acting on the user's app.
 
 ## Optional action suggestions (experimental)
 
-This build enables Buddy Jev suggestions by default. Use `suggest` for suitable concrete next steps that press or focus a control after the availability gate passes; do not add a suggestion call to every desktop step or use it as routine preflight. Older or explicitly disabled builds may return a null suggestion with reason `disabled`; continue normal planning and skip further suggestion calls for that workflow. The device agent still owns planning, authorization, execution, and verification.
+The existing Jev path uses native `get_ui_tree` / `perform_ui_action`, separately from Cua; its refs cannot be passed to `cua_action`. This build enables Buddy Jev suggestions by default. Use `suggest` for suitable concrete next steps that press or focus a control after the availability gate passes; do not add a suggestion call to every desktop step or use it as routine preflight. Older or explicitly disabled builds may return a null suggestion with reason `disabled`; continue normal planning and skip further suggestion calls for that workflow. The device agent still owns planning, authorization, execution, and verification.
 
 After the availability gate passes, request one suggestion for a concrete next-step goal:
 

@@ -2027,6 +2027,11 @@ class VoiceService:
             pre_frames_from_vad,
             device_rate,
         )
+        # Overlap a parked-session resume with the sentence being spoken
+        # (see RealtimeOrchestrator.prewarm). Wake-word mode only: the
+        # always-listening path calls prepare_turn() at session open itself.
+        if realtime_allowed and hal_config.REALTIME_ENABLED and hal_config.WAKEWORD_ENABLED:
+            self._realtime.prewarm()
         # A partial match is provisional: STT can correct a name in its final
         # result ("Moon" → "Mom"). It improves observability while the user is
         # speaking, but a turn is not dispatched or committed to realtime until
@@ -2713,10 +2718,13 @@ class VoiceService:
                     gaze.release_reacquire_hold_if_pending()
                 except Exception as e:
                     logger.debug("gaze reacquire release skipped: %s", e)
-                wakeword_followup_active = (
-                    wakeword_followup_active
-                    or (hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active())
-                )
+            # Gaze can grant focus at speech end for this very utterance. Refresh
+            # before opening realtime even when STT produced words; otherwise
+            # only downstream dispatch sees the grant and bypasses realtime.
+            wakeword_followup_active = (
+                wakeword_followup_active
+                or (hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active())
+            )
 
             # Noise guard: a session can open on a noise blip that fools the entry
             # VAD, and STT then either finds no words or invents a short filler for

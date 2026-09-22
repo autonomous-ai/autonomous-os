@@ -1,4 +1,6 @@
-"""Bounded, fail-open skill suggestions; never executes or loads a skill."""
+"""Bounded skill selection and native preloading into the current turn only."""
+
+from .preload import load_skill_context
 
 import contextvars
 import ipaddress
@@ -19,7 +21,7 @@ ENABLED = True
 # Temporary diagnostic budget for validating the proxy path before latency tuning.
 TIMEOUT_SECONDS = 3.0
 MAX_RESPONSE = 65536
-# Advisory skill discovery only; these thresholds never authorize a tool action.
+# Skill selection only; these thresholds never authorize a tool action.
 MIN_CHOICE_PROBABILITY = .70
 MIN_CHOICE_MARGIN = .20
 MIN_FIT_PROBABILITY = .60
@@ -196,9 +198,9 @@ def request_decision(endpoint, key, timeout, payload):
 
 
 class Router:
-    def __init__(self, config_path=None, catalog=live_skills, request=request_decision):
+    def __init__(self, config_path=None, catalog=live_skills, request=request_decision, load=load_skill_context):
         self.config_path = config_path or Path(__file__).with_name("os-config-path.json")
-        self.catalog, self.request = catalog, request
+        self.catalog, self.request, self.load = catalog, request, load
         self.busy = threading.Lock()
         self.cooldown_until = 0.0
 
@@ -218,6 +220,9 @@ class Router:
         if not isinstance(user_message, str) or not user_message.strip() or len(user_message.encode()) > 8000:
             report("skipped", "invalid_message")
             return None
+        if user_message.lstrip().lower().startswith("[system]"):
+            report("skipped", "system_message")
+            return None
         if user_message.lstrip().startswith("/") or re.search(r"\[skills\s*:", user_message, re.IGNORECASE):
             report("skipped", "explicit_selection")
             return None
@@ -236,6 +241,7 @@ class Router:
             report("skipped", "busy")
             return None
         completed, output = threading.Event(), []
+        deadline = time.monotonic() + config[2]
 
         def decide():
             stage, stage_start = "catalog", time.monotonic()
@@ -251,11 +257,29 @@ class Router:
                 result = self.request(*config, payload_for(user_message, candidates))
                 timings["request_ms"] = round((time.monotonic() - stage_start) * 1000)
                 stage = "parse"
-                output.append(evaluate_decision(result, names))
+                evaluated = evaluate_decision(result, names)
+                selected = evaluated.get("selected")
+                if selected:
+                    stage, stage_start = "load", time.monotonic()
+                    # Recheck filters after inference: a skill may have been disabled.
+                    _, current_names = candidates_for(self.catalog())
+                    if time.monotonic() >= deadline:
+                        raise DecisionError("preload_timeout")
+                    if selected not in current_names.values():
+                        raise DecisionError("skill_unavailable")
+                    context = self.load(selected, kwargs.get("task_id"))
+                    if not isinstance(context, str) or not context.strip():
+                        raise DecisionError("skill_load_failed")
+                    timings["load_ms"] = round((time.monotonic() - stage_start) * 1000)
+                    if time.monotonic() >= deadline:
+                        raise DecisionError("preload_timeout")
+                    evaluated.update(outcome="preloaded", context=context)
+                output.append(evaluated)
             except Exception as error:
                 if stage == "request":
                     timings["request_ms"] = round((time.monotonic() - stage_start) * 1000)
                 reason = (error.reason if isinstance(error, DecisionError) else
+                          "skill_load_failed" if stage == "load" else
                           "catalog_error" if stage == "catalog" else
                           "network_error" if stage == "request" else "invalid_schema")
                 output.append({"outcome": "error", "reason": reason,
@@ -281,9 +305,8 @@ class Router:
             return None
         result = output[0]
         selected = result.pop("selected", None)
+        context = result.pop("context", None)
         report(**result, skill=selected)
-        if selected:
-            return {"context": "Advisory skill suggestion: consider skill_view(name=" + json.dumps(selected) +
-                    "). Use only if relevant; platform skill rules, including mandatory connectors, remain authoritative. "
-                    "Follow normal permissions. This suggestion does not authorize any action."}
+        if selected and context:
+            return {"context": context}
         return None

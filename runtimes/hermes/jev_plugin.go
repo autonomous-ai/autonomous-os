@@ -18,7 +18,7 @@ import (
 
 const jevPluginName = "jev"
 
-//go:embed plugins/jev/__init__.py plugins/jev/router.py plugins/jev/plugin.yaml
+//go:embed plugins/jev/__init__.py plugins/jev/router.py plugins/jev/preload.py plugins/jev/plugin.yaml
 var jevPluginFiles embed.FS
 
 // ensureJevPlugin reconciles existing devices on OS startup, without invoking
