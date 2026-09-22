@@ -42,6 +42,12 @@ lượt, model sẽ:
 - **Delegate** bằng cách gọi tool `delegate_to_main` → dừng output realtime và
   chuyển đúng lời người dùng ở lượt hiện tại, giữ nguyên ngôn ngữ, tới OS server
   (→ runtime chính đang được chọn) để xử lý.
+  Lúc đó model realtime đã tự nói filler rồi, nên os-server không "ừ" thêm
+  lần nữa cho turn delegate (prefix `[voice-instruction]`): không có opening
+  filler, và dead-air filler đầu tiên chỉ arm khi tool đầu tiên của agent chính
+  bắt đầu (`FillerManager.MarkDelegatedVoiceRun`). Turn delegate mà agent chính
+  kết thúc bằng NO_REPLY vì thế im lặng luôn, thay vì hứa một câu trả lời
+  không bao giờ tới.
 - **Từ chối rõ ràng** một turn chắc chắn không phải người nói với thiết bị bằng
   tool `reject_turn` → bỏ turn trước khi agent chính nhìn thấy STT text. Nó khác
   hẳn model im lặng: im lặng, timeout và lỗi transport vẫn fallback bình thường

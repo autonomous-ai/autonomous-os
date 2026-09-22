@@ -45,6 +45,10 @@ import (
 )
 
 // Explicit Harness/agent wording can select the skill; bare names only warrant discovery.
+// realtimeDelegationPrefix opens the message HAL sends when the realtime
+// model hands a turn to the main agent (hal/drivers/voice/_internal/turn_dispatch.py).
+const realtimeDelegationPrefix = "[voice-instruction]"
+
 var harnessAgentRequest = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}_])(?:ask|tell|have|message|use|delegate(?:\s+to)?|check(?:ing)?\s+with|hỏi|bảo|nhờ|kêu|hoi|bao|nho|keu|dùng|dung)\s+(?:(?:the|a|an|một|mot)\s+)?(?:(?:harness|agent)(?:\s|$)|[\p{L}\p{N}_-]+\s+agent(?:\s|$))`)
 var harnessPossibleNamedRequest = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}_])(?:ask|tell|message|check(?:ing)?\s+with|hỏi|bảo|nhờ|kêu|hoi|bao|nho|keu)\s+([\p{L}\p{N}_-]+)(?:\s|$)`)
 var buddyAgentRequest = regexp.MustCompile(`(?i)\b(?:autonomous\s+buddy|(?:ask|tell|use|with|via|nhờ|hỏi|bảo|nho|hoi|bao)\s+(?:the\s+)?buddy)\b`)
@@ -878,12 +882,23 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// to synthesize and play out before the real reply arrives — avoiding
 	// the hal-side speak() lock-timeout=2s race that the timer-based
 	// fire-at-lifecycle.start+FillerDelay path triggers.
+	//
+	// A turn the realtime model delegated (`[voice-instruction]`, see HAL
+	// turn_dispatch) already got a filler from that model. Acknowledging it
+	// again here promises an answer twice — and when the main agent then
+	// decides NO_REPLY (correct for an unclear utterance) the user is left
+	// waiting on a promise nobody keeps. Such turns get no opening filler
+	// and only start filling at the first tool boundary.
 	if isVoice {
-		DefaultFillerManager.MarkVoiceRun(runID, req.InteractionID)
-		// Owned by the utterance HAL is tracking, not by the run id: this
-		// fires now, while HAL is still waiting for the response that would
-		// tell it which run this turn became.
-		go PlayOpeningFillerNow(fillerOwner(req.InteractionID, runID))
+		if strings.HasPrefix(req.Message, realtimeDelegationPrefix) {
+			DefaultFillerManager.MarkDelegatedVoiceRun(runID, req.InteractionID)
+		} else {
+			DefaultFillerManager.MarkVoiceRun(runID, req.InteractionID)
+			// Owned by the utterance HAL is tracking, not by the run id: this
+			// fires now, while HAL is still waiting for the response that would
+			// tell it which run this turn became.
+			go PlayOpeningFillerNow(fillerOwner(req.InteractionID, runID))
+		}
 	}
 
 	var err error
