@@ -12,7 +12,7 @@ import pytest
 def capture(monkeypatch, frames, *, realtime=False, enabled=True, detector=None, legacy_limit=20,
             tts=None, on_read=None, on_close=None, on_connect=None, on_realtime=None,
             wake_enabled=False, focus=None, transcripts_final=True, close_transcript=None,
-            on_prepare=None):
+            on_prepare=None, on_drain=None, pending_cue=None):
     """Feed (elapsed seconds, speech energy, final transcript) without hardware."""
     from hal.drivers.voice import voice_service as module
 
@@ -42,6 +42,8 @@ def capture(monkeypatch, frames, *, realtime=False, enabled=True, detector=None,
     def close():
         if on_close:
             on_close()
+        if on_drain:
+            on_drain(stt, service)
         if close_transcript:
             stt._on_transcript_cb(close_transcript, True)
 
@@ -107,6 +109,7 @@ def capture(monkeypatch, frames, *, realtime=False, enabled=True, detector=None,
         module.VoiceService._stream_session(
             service, mic, 1024, 16000,
             preconnected_session=stt if on_connect is None else None, harness_voice={"enabled": False},
+            pending_listening_cue_id=pending_cue,
         )
         yield SimpleNamespace(service=service, stt=stt, dispatch=dispatch,
                               realtime=rt, metrics=metrics, consumed=consumed)

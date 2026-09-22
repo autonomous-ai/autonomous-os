@@ -2027,6 +2027,7 @@ class VoiceService:
 
         last_partial = [""]
         final_segments = []
+        stt_final_changed = threading.Event()
         final_sent = [False]
         # time.time() of the most recent STT final segment, 0 = none yet.
         final_ts = [0.0]
@@ -2216,7 +2217,8 @@ class VoiceService:
                     self._backchannel.on_partial(text)
                 fire_listening_cue()
                 return
-            # Accumulate final segments — don't send yet, wait for session close.
+            # Accumulate final segments; only the capture owner may commit
+            # after endpoint detection, or dispatch after STT has fully drained.
             # Flux model fires multiple EndOfTurn events for natural pauses within
             # one utterance, so sending immediately would split a single sentence.
             logger.info("STT final segment: '%s'", text)
@@ -2248,6 +2250,7 @@ class VoiceService:
             # Arrival time, not just the fact of it: the short end-of-turn clock
             # runs from HERE (see turn_should_close).
             final_ts[0] = time.time()
+            stt_final_changed.set()
 
         rt_audio_buffer: list = []
         # A noise-drop can be rebuilding a clean Gemini session in the
@@ -2757,48 +2760,88 @@ class VoiceService:
                     wakeword_followup_active or self._wakeword_focus.is_active()
                 )
             early_authorized = not hal_config.WAKEWORD_ENABLED or wakeword_followup_active
-            early_speech = True
-            if (early_words and needs_noise_guard(early_words)
-                    and hal_config.REALTIME_REQUIRE_SPEECH_ON_EMPTY_STT and audio_buffer):
-                try:
-                    early_speech = self._rt_noise_is_speech(
-                        self._np.frombuffer(b"".join(audio_buffer), dtype=self._np.int16)
-                    )
-                except Exception as e:
-                    logger.warning("Early realtime speech check failed: %s", e)
             overlap_drain = (
                 realtime_allowed and hal_config.REALTIME_ENABLED and self._running
-                and manual_capture is None and early_authorized and bool(early_words)
+                and manual_capture is None and early_authorized
                 and not harness_followup_active()
                 and endpoint_method in {"smart_turn", "turn_fallback", "turn_pause_limit", "silence_clock"}
-                and not is_noise_turn(early_words, early_duration, early_speech)
             )
             if overlap_drain:
                 from concurrent.futures import ThreadPoolExecutor
 
                 capture_complete.set()
-                interaction_id = voice_metrics.speech_end(endpoint_method, at=endpoint_ts)
-                post_capture_wait_filler = _WaitFiller(owner=interaction_id)
-                if should_arm_realtime_wait_filler(early_words):
-                    post_capture_wait_filler.arm()
-                with ThreadPoolExecutor(max_workers=1, thread_name_prefix="stt-final-drain") as worker:
-                    final_drain = worker.submit(stt_session.close)
+                drain_finished = threading.Event()
+
+                def close_stt():
                     try:
-                        start_realtime_turn()
-                        if realtime_turn_started and not realtime_deferred:
-                            logger.info("[realtime] Processing confirmed speech while STT final drain runs")
-                            early_realtime_result = run_realtime_turn(
-                                self._realtime, self._tts, self.strip_rt_markers,
-                                early_words, rt_audio_buffer, early_duration, early_speech,
-                                interaction_id=interaction_id, save_history=False, audio_turn=audio_turn,
-                                harness_followup=False, wait_filler=post_capture_wait_filler,
+                        stt_session.close()
+                    finally:
+                        drain_finished.set()
+                        stt_final_changed.set()
+
+                with ThreadPoolExecutor(max_workers=1, thread_name_prefix="stt-final-drain") as worker:
+                    final_drain = worker.submit(close_stt)
+                    try:
+                        last_final_snapshot = None
+                        while self._running:
+                            # Clear before snapshotting so a concurrent final
+                            # cannot be lost between the read and the wait.
+                            stt_final_changed.clear()
+                            final_snapshot = tuple(final_segments)
+                            if final_snapshot == last_final_snapshot:
+                                if drain_finished.is_set():
+                                    break
+                                stt_final_changed.wait(timeout=0.1)
+                                continue
+                            last_final_snapshot = final_snapshot
+                            early_words, _, early_duration = finalize_session(
+                                list(audio_buffer), [""], list(final_snapshot), last_speech_idx,
+                                capture_spoken_text,
                             )
+                            early_speech = True
+                            if (early_words and needs_noise_guard(early_words)
+                                    and hal_config.REALTIME_REQUIRE_SPEECH_ON_EMPTY_STT and audio_buffer):
+                                try:
+                                    early_speech = self._rt_noise_is_speech(
+                                        self._np.frombuffer(b"".join(audio_buffer), dtype=self._np.int16)
+                                    )
+                                except Exception as e:
+                                    logger.warning("Early realtime speech check failed: %s", e)
+                            if early_words and not is_noise_turn(early_words, early_duration, early_speech):
+                                interaction_id = voice_metrics.speech_end(endpoint_method, at=endpoint_ts)
+                                post_capture_wait_filler = _WaitFiller(owner=interaction_id)
+                                if should_arm_realtime_wait_filler(early_words):
+                                    post_capture_wait_filler.arm()
+                                start_realtime_turn()
+                                if realtime_turn_started and not realtime_deferred and self._running:
+                                    logger.info("[realtime] Processing confirmed speech while STT final drain runs")
+                                    early_realtime_result = run_realtime_turn(
+                                        self._realtime, self._tts, self.strip_rt_markers,
+                                        early_words, rt_audio_buffer, early_duration, early_speech,
+                                        interaction_id=interaction_id, save_history=False, audio_turn=audio_turn,
+                                        harness_followup=False, wait_filler=post_capture_wait_filler,
+                                    )
+                                break
+                            if drain_finished.is_set():
+                                break
+                            # Final callbacks wake this immediately. The timeout
+                            # only observes service cancellation, not speech end.
+                            stt_final_changed.wait(timeout=0.1)
                     finally:
                         try:
                             final_drain.result()
                         except Exception:
-                            post_capture_wait_filler.cancel()
+                            if post_capture_wait_filler is not None:
+                                post_capture_wait_filler.cancel()
                             raise
+                if not self._running:
+                    if post_capture_wait_filler is not None:
+                        post_capture_wait_filler.cancel()
+                    if pending_listening_cue_id is not None:
+                        from hal import app_state
+
+                        app_state.clear_listening_pending_cue(pending_listening_cue_id)
+                    return
             else:
                 stt_session.close()
             if pending_listening_cue_id is not None:

@@ -566,9 +566,7 @@ def run_realtime_turn(
             "[realtime] Entering realtime flow — committing audio (stt=%r)",
             combined[:100] if combined else "(empty)",
         )
-        # Fill the Gemini wait with `thinking` (cleared at first output).
-        # Delegated turns keep it — the main agent's wait is even longer.
-        _thinking_cue_start()
+        thinking_started = False
         # Audible half of the same wait (see _WaitFiller). Armed here rather
         # than per attempt so a 1011 retry does not restart the clock — from the
         # user's side it is one uninterrupted silence.
@@ -643,6 +641,13 @@ def run_realtime_turn(
                 execution_completed = False
                 look_replay: bool = False
                 audio_turn, outputs = _commit_turn_output(realtime, rt_audio_buffer, audio_turn)
+                if not thinking_started:
+                    # Start provider work before synchronous hardware feedback.
+                    # Keep emotion on this thread: a detached cue could finish
+                    # after reply/cancel and overwrite the next turn's emotion.
+                    # Retry/look replay is still the same user-visible wait.
+                    thinking_started = True
+                    _thinking_cue_start()
                 for output in outputs:
                     if not first_output_logged:
                         first_output_logged = True

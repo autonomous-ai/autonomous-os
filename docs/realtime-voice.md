@@ -2403,16 +2403,25 @@ Read the counters in the session-END log line: `substituted` at ~100 % of
    automatically replaying potentially executed tools.
 
    At a normal endpoint (`smart_turn`, `turn_fallback`, `turn_pause_limit` or
-   `silence_clock`), an authorized capture with already-final recognized words
-   that pass the existing noise guard can process realtime while
-   `stt_session.close()` drains on a worker. A partial alone cannot enable this
-   overlap, and a closed wake-word window still requires final confirmation.
+   `silence_clock`), an authorized capture can process realtime as soon as
+   recognized final words pass the existing noise guard, including a final
+   arriving while `stt_session.close()` drains on a worker. The final callback
+   wakes the capture owner; it does not commit or dispatch on the STT thread.
+   A partial alone cannot enable this overlap, and a closed wake-word window
+   still requires final confirmation. Stop during the drain prevents dispatch.
    A pending Harness follow-up also retains the complete-transcript path.
    STT close still completes before downstream dispatch: the final assembled
    transcript supplies history and main-agent input, and the early reply is
    consumed once. The metric retains the original speech-end timestamp and
    interaction ID. LIVE ON and manual Harness capture retain their existing
    paths.
+
+   The validated audio commit is queued before the synchronous HW thinking cue,
+   once per turn (not again on a retry or camera replay). Provider processing
+   can overlap hardware work. Output consumption still waits for that cue;
+   there is no detached emotion worker that could overwrite a newer turn.
+   First-output timing includes the hardware wait, and commit failure does not
+   start thinking.
 
    For non-native realtime TTS in both LIVE modes, sentence-end detection uses
    text after the existing voice/HW marker removal. A reply such as

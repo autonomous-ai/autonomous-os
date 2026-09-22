@@ -2345,14 +2345,22 @@ liên tục đồng ý.
    lỗi/fallback, không tự động phát lại những tool có thể đã chạy.
 
    Ở endpoint thông thường (`smart_turn`, `turn_fallback`, `turn_pause_limit`
-   hoặc `silence_clock`), capture đã được phép và có chữ STT final qua noise
-   guard hiện có được xử lý realtime trong khi `stt_session.close()` drain trên
-   worker. Chỉ có partial thì không mở nhánh chạy chồng này; cửa sổ wake-word
-   đang đóng vẫn cần final xác nhận. Follow-up Harness đang chờ cũng giữ nhánh
-   đợi transcript đầy đủ. STT close vẫn hoàn tất trước dispatch:
+   hoặc `silence_clock`), capture đã được phép được xử lý realtime ngay khi
+   chữ STT final vượt qua noise guard, kể cả final đến trong lúc
+   `stt_session.close()` đang drain trên worker. Callback final đánh thức thread
+   sở hữu capture; không commit hay dispatch trên thread STT. Chỉ có partial
+   thì không mở nhánh chạy chồng này; cửa sổ wake-word đang đóng vẫn cần final
+   xác nhận. Stop trong lúc drain sẽ chặn dispatch. Follow-up Harness đang chờ
+   cũng giữ nhánh đợi transcript đầy đủ. STT close vẫn hoàn tất trước dispatch:
    transcript cuối đã ghép được dùng cho history và input main agent, phản hồi
    sớm chỉ được xử lý một lần. Metric giữ timestamp speech-end gốc và cùng
    interaction ID. LIVE ON và capture Harness thủ công giữ đường xử lý hiện có.
+
+   Commit audio đã kiểm tra binding được đưa vào hàng đợi trước cue HW thinking
+   đồng bộ, một lần mỗi turn (không lặp khi retry hay replay camera). Provider
+   xử lý song song với HW; việc đọc output vẫn chờ cue này hoàn tất. Không tạo
+   worker emotion tách rời có thể ghi đè turn mới. Timing first-output vẫn tính
+   cả thời gian HW; commit lỗi thì không bật thinking.
 
    Với TTS realtime không dùng native audio ở cả hai chế độ LIVE, nhận diện kết
    câu dùng text sau bước loại marker giọng/HW hiện có. Câu như
