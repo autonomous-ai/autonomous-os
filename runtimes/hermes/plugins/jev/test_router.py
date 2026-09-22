@@ -13,8 +13,9 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-SPEC = importlib.util.spec_from_file_location("jev_router", Path(__file__).with_name("router.py"))
+SPEC = importlib.util.spec_from_file_location("jev_router", Path(__file__).with_name("router.py"), submodule_search_locations=[str(Path(__file__).parent)])
 router = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = router
 SPEC.loader.exec_module(router)
 
 
@@ -46,7 +47,79 @@ class RouterTest(unittest.TestCase):
         def capture(endpoint, key, timeout, payload):
             self.calls.append((endpoint, key, timeout, payload))
             return decision(payload)
-        return router.Router(self.pointer, lambda: [{"name": "connectors", "description": "Read email", "category": "openclaw-imports"}], request or capture)
+        return router.Router(self.pointer, lambda: [{"name": "connectors", "description": "Read email", "category": "openclaw-imports"}], request or capture, load=lambda name, task_id: "Loaded skill " + name + "; mandatory connectors")
+
+    def test_native_preload_and_fallbacks(self):
+        plugin = self.make()
+        native = {"success": True, "content": "Use this music skill.",
+                  "skill_dir": "/skills/music", "linked_files": {"references": ["play.md"]}}
+        calls = []
+        def view(**kwargs):
+            calls.append(kwargs)
+            return json.dumps(native)
+        plugin.load = router.load_skill_context
+        with patch.dict(sys.modules, {"tools.skills_tool": SimpleNamespace(skill_view=view)}):
+            with self.assertLogs(router.LOG, level="INFO") as logs:
+                context = plugin.before_turn(user_message="play music", task_id="task-A")["context"]
+            self.assertIn("Use this music skill.", context)
+            self.assertIn("/skills/music", context)
+            self.assertIn("play.md", context)
+            self.assertIn("outcome=preloaded", "\n".join(logs.output))
+            self.assertEqual(calls, [{"name": "connectors", "task_id": "task-A", "preprocess": False}])
+            for bad in ({"success": False, "error": "disabled"},
+                        {"success": True, "content": ""},
+                        {"success": True, "content": "!`echo unsafe`"},
+                        {"success": True, "content": "x" * (128 * 1024)}):
+                native = bad
+                plugin.cooldown_until = 0
+                self.assertIsNone(plugin.before_turn(user_message="play music"))
+
+    def test_slow_preload_is_discarded_and_context_is_copied(self):
+        plugin = self.make()
+        entered, release = threading.Event(), threading.Event()
+        scope = contextvars.ContextVar("loader_scope", default="wrong")
+        seen = []
+        def load(name, task_id):
+            seen.append((scope.get(), task_id))
+            entered.set()
+            release.wait(2)
+            return "late skill body from A"
+        plugin.load = load
+        token = scope.set("session-A")
+        try:
+            with patch.object(router, "TIMEOUT_SECONDS", .03):
+                self.assertIsNone(plugin.before_turn(user_message="A", task_id="task-A"))
+            self.assertTrue(entered.is_set())
+        finally:
+            release.set()
+            scope.reset(token)
+        with plugin.busy:
+            pass
+        self.assertEqual(seen, [("session-A", "task-A")])
+        plugin.cooldown_until = 0
+        plugin.load = lambda name, task_id: "current skill body from B"
+        result = plugin.before_turn(user_message="B", task_id="task-B")
+        self.assertEqual(result["context"], "current skill body from B")
+
+    def test_removed_skill_and_429_never_load(self):
+        plugin = self.make()
+        first_catalog = plugin.catalog
+        def request(*args):
+            plugin.catalog = lambda: []
+            return decision(args[-1])
+        plugin.request = request
+        with patch.object(plugin, "load", side_effect=AssertionError("must not load")):
+            self.assertIsNone(plugin.before_turn(user_message="play music"))
+        plugin.cooldown_until = 0
+        plugin.catalog = first_catalog
+        def limited(*args):
+            raise router.DecisionError("http_error", 429)
+        plugin.request = limited
+        with patch.object(plugin, "load", side_effect=AssertionError("must not load")):
+            with self.assertLogs(router.LOG, level="INFO") as logs:
+                self.assertIsNone(plugin.before_turn(user_message="play music"))
+            self.assertIn("http_status=429", "\n".join(logs.output))
+            self.assertGreater(plugin.cooldown_until, time.monotonic())
 
     def test_disabled_and_explicit_whitelist_never_request(self):
         plugin = self.make()
@@ -81,13 +154,13 @@ class RouterTest(unittest.TestCase):
                     pass
             finally:
                 platform.reset(token)
-        self.assertEqual(observed, ["restricted", "allowed", "restricted"])
+        self.assertEqual(observed, ["restricted", "allowed", "allowed", "restricted"])
         self.assertEqual(len(self.calls), 1)
 
-    def test_advisory_current_message_only_and_shared_proxy_config(self):
+    def test_preload_current_message_only_and_shared_proxy_config(self):
         plugin = self.make()
         hint = plugin.before_turn(user_message="read email", conversation_history=[{"secret": "history"}])
-        self.assertIn('skill_view(name="connectors")', hint["context"])
+        self.assertIn('Loaded skill connectors', hint["context"])
         self.assertIn("mandatory connectors", hint["context"])
         endpoint, key, timeout, payload = self.calls[0]
         self.assertEqual((endpoint, key, timeout), ("https://proxy.test/v1/jev/decisions", "secret", 3.0))
@@ -305,7 +378,7 @@ class RouterTest(unittest.TestCase):
                 plugin = self.make()
                 plugin.catalog = router.live_skills
                 hint = plugin.before_turn(user_message="open Calculator on my Mac")
-                self.assertIn('skill_view(name="openclaw-imports/computer-use")', hint["context"])
+                self.assertIn('Loaded skill openclaw-imports/computer-use', hint["context"])
                 self.assertTrue(seen_platforms)
                 self.assertEqual(set(seen_platforms), {"allowed"})
             finally:
