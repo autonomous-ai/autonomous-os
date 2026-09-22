@@ -42,7 +42,12 @@ from hal.realtime.models import (
     TurnDoneEvent,
 )
 from hal.realtime.utils import float32_to_pcm16_bytes, pcm16_bytes_to_float32
-from hal.realtime.voice_agent.base import VoiceAgentBase
+from hal.realtime.voice_agent.base import (
+    AudioTurnSessionChanged,
+    BoundAudioCommitEvent,
+    BoundAudioInputEvent,
+    VoiceAgentBase,
+)
 
 logger = logging.getLogger(__name__)
 # Per-turn token/cost lines go to their own file (gemini_usage.log) via a
@@ -171,6 +176,10 @@ class GeminiLiveAgent(VoiceAgentBase):
         # Gemini Live always streams native audio output at 24 kHz, regardless of
         # the 16 kHz input rate (`sample_rate`).
         return 24000
+
+    @property
+    def audio_session(self) -> object | None:
+        return self._session
 
     @property
     @override
@@ -425,9 +434,14 @@ class GeminiLiveAgent(VoiceAgentBase):
             )
             self._gated_audio_frames = 0
 
-    async def _async_send_input(self, _input: InputBase | None) -> None:
+    async def _async_send_input(
+        self, _input: InputBase | None, *, session: object | None = None,
+    ) -> None:
+        if session is not None:
+            self.validate_audio_session(session)
         if self._session is None or _input is None:
             return
+        audio_session = self._session if session is None else session
 
         # if isinstance(_input, AudioInput):
         #     detail = f"{len(_input.audio)} samples"
@@ -455,19 +469,23 @@ class GeminiLiveAgent(VoiceAgentBase):
         if isinstance(_input, AudioInput):
             # When VAD is disabled, send activityStart before first audio
             if self._vad_disabled and not self._activity_started:
-                await self._session.send_realtime_input(
+                await audio_session.send_realtime_input(
                     activity_start=types.ActivityStart()
                 )
+                if session is not None:
+                    self.validate_audio_session(session)
                 self._activity_started = True
                 logger.debug("[realtime] Sent activityStart (manual VAD)")
 
             pcm_bytes: bytes = float32_to_pcm16_bytes(_input.audio)
-            await self._session.send_realtime_input(
+            await audio_session.send_realtime_input(
                 audio=types.Blob(
                     data=pcm_bytes,
                     mime_type=f"audio/pcm;rate={self._config.sample_rate}",
                 )
             )
+            if session is not None:
+                self.validate_audio_session(session)
             # This is updated per frame; once AudioCommitEvent is processed it
             # represents the final frame that reached the provider.
             self._last_audio_sent_at = time.monotonic()
@@ -523,9 +541,14 @@ class GeminiLiveAgent(VoiceAgentBase):
             if not self._pending_tool_calls:
                 self._clear_pending_tool_calls()
 
-    async def _async_commit(self, turn_end_queued_at: float | None = None) -> None:
+    async def _async_commit(
+        self, turn_end_queued_at: float | None = None, *, session: object | None = None,
+    ) -> None:
+        if session is not None:
+            self.validate_audio_session(session)
         if self._session is None:
             return
+        audio_session = self._session if session is None else session
         if self._vad_disabled and self._activity_started:
             if self._tool_call_pending():
                 logger.debug(
@@ -534,7 +557,9 @@ class GeminiLiveAgent(VoiceAgentBase):
                 )
                 self._activity_started = False
                 return
-            await self._session.send_realtime_input(activity_end=types.ActivityEnd())
+            await audio_session.send_realtime_input(activity_end=types.ActivityEnd())
+            if session is not None:
+                self.validate_audio_session(session)
             self._activity_end_sent_at = time.monotonic()
             self._activity_started = False
             self._turn_done.clear()
@@ -1548,8 +1573,23 @@ class GeminiLiveAgent(VoiceAgentBase):
                 continue
 
             for attempt in range(self._max_retries):
+                session = (
+                    event.session
+                    if isinstance(event, (BoundAudioInputEvent, BoundAudioCommitEvent))
+                    else None
+                )
+                if session is not None and (
+                    not self.available or self.audio_session is not session
+                ):
+                    if isinstance(event, BoundAudioCommitEvent):
+                        self._recv_queue.put(TurnDoneEvent())
+                    break
                 self._ensure_connected()
                 if not self._connected.is_set():
+                    if session is not None:
+                        if isinstance(event, BoundAudioCommitEvent):
+                            self._recv_queue.put(TurnDoneEvent())
+                        break
                     logger.debug("[realtime] Not connected, skipping attempt %d/%d", attempt + 1, self._max_retries)
                     continue
                 try:
@@ -1557,24 +1597,38 @@ class GeminiLiveAgent(VoiceAgentBase):
                         if not self._turn_done.wait(timeout=10.0):
                             logger.warning("[realtime] Timed out waiting for turn to finish — forcing commit")
                         self._submit_and_wait(
-                            self._async_commit(event.queued_at), timeout=self._send_timeout_s
+                            self._async_commit(event.queued_at, session=session), timeout=self._send_timeout_s
                         )
                     elif isinstance(event, InputEvent) and event.input is not None:
                         self._submit_and_wait(
-                            self._async_send_input(event.input),
+                            self._async_send_input(event.input, session=session),
                             timeout=self._send_timeout_s,
                         )
                     break  # Success
+                except AudioTurnSessionChanged:
+                    # A reconnect cannot retry only the tail of captured speech.
+                    # Wake the bound consumer; it owns the complete replay buffer.
+                    if isinstance(event, BoundAudioCommitEvent):
+                        self._recv_queue.put(TurnDoneEvent())
+                    break
                 except (ConnectionClosed, genai_errors.APIError) as e:
                     if self._stop_event.is_set():
                         break
                     logger.exception("[realtime] Send failed (attempt %d/%d): %s", attempt + 1, self._max_retries, e)
                     self._reconnect()
+                    if session is not None:
+                        if isinstance(event, BoundAudioCommitEvent):
+                            self._recv_queue.put(TurnDoneEvent())
+                        break
                 except Exception as e:
                     if self._stop_event.is_set():
                         break
                     logger.exception("[realtime] Send error (attempt %d/%d): %s", attempt + 1, self._max_retries, e)
                     self._reconnect()
+                    if session is not None:
+                        if isinstance(event, BoundAudioCommitEvent):
+                            self._recv_queue.put(TurnDoneEvent())
+                        break
 
     @override
     def _recv_loop(self) -> None:

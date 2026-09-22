@@ -31,6 +31,22 @@ from hal.realtime.models import (
 logger = logging.getLogger(__name__)
 
 
+class AudioTurnSessionChanged(RuntimeError):
+    """Captured audio must be replayed in full after its session was replaced."""
+
+
+class BoundAudioInputEvent(InputEvent):
+    """Audio owned by one provider transport, including time spent queued."""
+
+    session: Any
+
+
+class BoundAudioCommitEvent(AudioCommitEvent):
+    """Commit owned by the same transport as the preceding audio frames."""
+
+    session: Any
+
+
 class VoiceAgentBase(ABC):
     """Sync interface for a realtime voice agent.
 
@@ -75,6 +91,15 @@ class VoiceAgentBase(ABC):
     def available(self) -> bool:
         """Whether the agent is connected and ready."""
         return self._connected.is_set()
+
+    @property
+    def audio_session(self) -> object:
+        """Identity pinned by a turn; reconnecting providers override this."""
+        return self
+
+    def validate_audio_session(self, session: object) -> None:
+        if not self.available or self.audio_session is not session:
+            raise AudioTurnSessionChanged("Audio turn provider session changed")
 
     @property
     def requires_fresh_session(self) -> bool:
@@ -129,19 +154,26 @@ class VoiceAgentBase(ABC):
                 self._recv_thread.join(timeout=5)
                 self._recv_thread = None
 
-    def append_audio(self, audio: npt.NDArray[np.float32]) -> None:
+    def append_audio(self, audio: npt.NDArray[np.float32], *, session: object | None = None) -> None:
         """Queue a single audio frame for sending (non-blocking)."""
+        if session is not None:
+            self.validate_audio_session(session)
+            self._send_queue.put(BoundAudioInputEvent(input=AudioInput(audio=audio), session=session))
+            return
         if self.available:
             self._send_queue.put(InputEvent(input=AudioInput(audio=audio)))
 
-    def commit_audio(self) -> None:
+    def commit_audio(self, *, session: object | None = None) -> None:
         """Queue a commit signal (non-blocking)."""
+        if session is not None:
+            self.validate_audio_session(session)
         if self.available:
             self._committed_at = time.monotonic()
             self._progress_deadline_at = 0.0
             self._output_deadline_at = 0.0
             logger.info("[realtime][timing] audio_commit_queued gen=%s", getattr(self, "_turn_gen", 0))
-            self._send_queue.put(AudioCommitEvent())
+            event = AudioCommitEvent() if session is None else BoundAudioCommitEvent(session=session)
+            self._send_queue.put(event)
 
     def allow_progress_until(self, deadline: float) -> None:
         """Let verified provider work survive the receive gap until a deadline.

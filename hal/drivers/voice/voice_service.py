@@ -34,7 +34,9 @@ from hal.realtime.models import InterruptedOutput as RTInterruptedOutput
 from hal.realtime.models.signal import DelegateSignal, EndCallSignal, RejectSignal
 from hal.realtime.models.output import ExecutionOutput, UserSpeechOutput
 from hal.realtime.models import TextOutput as RTTextOutput
-from hal.realtime.orchestrator import RealtimeOrchestrator
+from hal.realtime.orchestrator import (
+    RealtimeOrchestrator, AudioTurnSessionChanged, PREWARM_JOIN_TIMEOUT_S,
+)
 from hal.realtime.utils import StreamingResampler, pcm16_bytes_to_float32, resample_float32
 from hal.drivers.voice._internal import config as voice_cfg
 from hal.drivers.voice._internal.audio_dsp import resample_to_stt, rms
@@ -49,6 +51,7 @@ from hal.drivers.voice._internal.realtime_turn import (
     build_speaker_correction,
     build_turn_context,
     is_noise_turn,
+    harness_followup_active,
     needs_noise_guard,
     run_realtime_turn,
     should_drop_downstream_turn,
@@ -2064,6 +2067,9 @@ class VoiceService:
         # trailing-silence trim and speaker-ID all run between the two and
         # would otherwise be charged to the device's response time.
         endpoint_ts = 0.0
+        early_realtime_result = None
+        interaction_id = None
+        gaze_endpoint_checked = False
         pre_frames_from_vad = len(speech_pre_buffer or [])
         logger.info(
             "Session START — pre_from_vad=%d frames, device_rate=%dHz",
@@ -2150,6 +2156,8 @@ class VoiceService:
             word configured every utterance IS addressed to the device, so the
             cue fires on the first partial as before.
             """
+            if capture_complete.is_set():
+                return
             if manual_capture is not None:
                 return  # Manual capture owns its LED from recorder readiness to close.
             if listening_emotion_sent[0]:
@@ -2204,7 +2212,7 @@ class VoiceService:
                 # "Right" at conversations between two other people, and made
                 # testing the openers actively misleading: the cue sounds like
                 # acknowledgement while the turn is dropped unheard.
-                if addressed_to_us():
+                if not capture_complete.is_set() and addressed_to_us():
                     self._backchannel.on_partial(text)
                 fire_listening_cue()
                 return
@@ -2248,6 +2256,11 @@ class VoiceService:
         realtime_deferred = False
         realtime_turn_started = False
         realtime_start_failed = False
+        audio_turn = None
+        prepare_started = False
+        prepare_endpoint_waited = False
+        prepare_done = threading.Event()
+        prepare_error = []
         # Dead-air filler armed before the post-capture session handshake, so
         # the acknowledgement clock does not wait on the Gemini reconnect.
         post_capture_wait_filler = None
@@ -2269,6 +2282,26 @@ class VoiceService:
         # capture and play into the next mic session.
         self._backchannel.begin_session()
 
+        def prepare_capture_session() -> bool:
+            """Connect off the mic thread; retain audio until binding is ready."""
+            nonlocal prepare_started, prepare_endpoint_waited
+            if not prepare_started:
+                prepare_started = True
+
+                def prepare():
+                    try:
+                        self._realtime.prepare_turn()
+                    except Exception as error:
+                        prepare_error.append(error)
+                    finally:
+                        prepare_done.set()
+
+                threading.Thread(target=prepare, daemon=True, name="rt-capture-prepare").start()
+            if capture_complete.is_set() and not prepare_endpoint_waited:
+                prepare_endpoint_waited = True
+                prepare_done.wait(timeout=PREWARM_JOIN_TIMEOUT_S)
+            return prepare_done.is_set() and not prepare_error
+
         def start_realtime_turn() -> bool:
             """Open realtime as soon as the wake-word partial is available.
 
@@ -2279,43 +2312,52 @@ class VoiceService:
             """
             nonlocal realtime_deferred, realtime_turn_started, realtime_start_failed
             nonlocal sent_turn_speaker, turn_context_sent
+            nonlocal wakeword_followup_active
+            nonlocal audio_turn
             if not realtime_allowed or realtime_turn_started or realtime_start_failed:
                 return False
 
             if hal_config.WAKEWORD_ENABLED:
-                # Preserve the always-listening path below exactly. Wake-word
-                # turns defer all realtime I/O until capture is complete and a
-                # FINAL STT result confirms the phrase, so a rebuild cannot split
-                # one utterance across old/new sessions.
+                # A gaze/button grant during this capture authorizes this same
+                # utterance; latch it even if the window expires before endpoint.
+                wakeword_followup_active = (
+                    wakeword_followup_active or self._wakeword_focus.is_active()
+                )
+                # Closed-window wake phrases still require final confirmation.
+                # Authorized follow-ups may stream before STT drains.
                 if (
-                    not capture_complete.is_set()
+                    (not capture_complete.is_set() and not wakeword_followup_active)
                     or not (wake_word_confirmed.is_set() or wakeword_followup_active)
                     or not hal_config.REALTIME_ENABLED
                 ):
                     return False
-                # Same pre-turn hygiene as the always-listening path below: the
-                # tool-call quarantine lives in prepare_turn(), so skipping it
-                # here let an `express_emotion` turn silence the next one. Safe
-                # after the capture_complete guard — the utterance is fully
-                # buffered, so a rebuild cannot split it.
-                self._realtime.prepare_turn()
+                # Prepare before uploading this turn, including tool-call
+                # quarantine left by the previous response.
+                if not prepare_capture_session():
+                    return False
                 if self._realtime.rebuilding or not self._realtime.available:
                     logger.info(
                         "[realtime] Wake-word turn falls back — session unavailable after final confirmation"
                     )
                     return False
                 try:
+                    audio_turn = self._realtime.bind_audio_turn()
                     self._realtime.send_text(build_turn_context(turn_speaker_display))
                     sent_turn_speaker = turn_speaker_display
                     turn_context_sent = True
                     for audio_f32 in rt_audio_buffer:
-                        self._realtime.append_audio(audio_f32)
+                        self._realtime.append_audio(audio_f32, turn=audio_turn)
                     realtime_turn_started = True
                     logger.info(
                         "[realtime] Wake-word/follow-up authorized; flushed %d buffered frame(s)",
                         len(rt_audio_buffer),
                     )
                     return True
+                except AudioTurnSessionChanged:
+                    realtime_turn_started = True
+                    realtime_deferred = True
+                    logger.info("[realtime] Upload session changed; retaining full turn for replay")
+                    return False
                 except Exception as e:
                     realtime_start_failed = True
                     logger.warning(
@@ -2324,14 +2366,17 @@ class VoiceService:
                     )
                     return False
 
-            realtime_turn_started = True
             if not hal_config.REALTIME_ENABLED:
+                realtime_turn_started = True
                 return True
 
-            self._realtime.prepare_turn()
+            if not prepare_capture_session():
+                return False
+            realtime_turn_started = True
             realtime_deferred = self._realtime.rebuilding
             if not realtime_deferred and self._realtime.available:
                 try:
+                    audio_turn = self._realtime.bind_audio_turn()
                     # ALWAYS-LISTENING PATH. This fires at session open, so
                     # turn_speaker_display is still None here by construction —
                     # the voiceprint needs the completed capture. The speaker-ID
@@ -2340,15 +2385,19 @@ class VoiceService:
                     sent_turn_speaker = turn_speaker_display
                     turn_context_sent = True
                     for audio_f32 in rt_audio_buffer:
-                        self._realtime.append_audio(audio_f32)
+                        self._realtime.append_audio(audio_f32, turn=audio_turn)
                     if hal_config.WAKEWORD_ENABLED:
                         logger.info(
                             "[realtime] Wake-word gate opened; flushed %d buffered frame(s)",
                             len(rt_audio_buffer),
                         )
+                except AudioTurnSessionChanged:
+                    realtime_deferred = True
+                    logger.info("[realtime] Upload session changed; retaining full turn for replay")
                 except Exception as e:
                     logger.warning("[realtime] start turn failed: %s", e)
-                    rt_audio_buffer.clear()
+                    realtime_start_failed = True
+                    realtime_turn_started = False
             return True
         try:
             if preconnected_session:
@@ -2484,7 +2533,11 @@ class VoiceService:
                             and not realtime_deferred
                             and self._realtime.available
                         ):
-                            self._realtime.append_audio(audio_f32)
+                            try:
+                                self._realtime.append_audio(audio_f32, turn=audio_turn)
+                            except AudioTurnSessionChanged:
+                                realtime_deferred = True
+                                logger.info("[realtime] Pre-roll session changed; retaining full turn for replay")
 
                 # A partial can arrive while the STT pre-roll is sent. Open the
                 # gate now and flush that complete pre-roll exactly once.
@@ -2604,7 +2657,12 @@ class VoiceService:
                         and not realtime_deferred
                         and self._realtime.available
                     ):
-                        self._realtime.append_audio(audio_f32)
+                        try:
+                            self._realtime.append_audio(audio_f32, turn=audio_turn)
+                        except AudioTurnSessionChanged:
+                            # Keep recording the complete utterance locally. The
+                            # commit boundary will rebuild and replay it as one.
+                            realtime_deferred = True
 
                 energy = rms(data, self._np)
                 self._mic_level = energy
@@ -2677,7 +2735,72 @@ class VoiceService:
                 from hal.drivers.harness.led import set_capturing
 
                 set_capturing(False)
-            stt_session.close()
+            # A confirmed transcript can arrive before CloseStream drains. For
+            # already-authorized input, overlap that drain with the model reply.
+            # Do not use a provisional partial to bypass the existing noise gate.
+            capture_spoken_text = getattr(self._tts, "last_spoken_text", "") if self._tts else ""
+            early_words, early_duration = "", 0.0
+            if realtime_allowed and hal_config.REALTIME_ENABLED and manual_capture is None:
+                early_words, _, early_duration = finalize_session(
+                    list(audio_buffer), [""], list(final_segments), last_speech_idx,
+                    capture_spoken_text,
+                )
+            if early_words and hal_config.WAKEWORD_ENABLED:
+                try:
+                    from hal.drivers.tracking import gaze
+
+                    gaze.on_speech_end()
+                    gaze_endpoint_checked = True
+                except Exception as e:
+                    logger.debug("early gaze speech-end check skipped: %s", e)
+                wakeword_followup_active = (
+                    wakeword_followup_active or self._wakeword_focus.is_active()
+                )
+            early_authorized = not hal_config.WAKEWORD_ENABLED or wakeword_followup_active
+            early_speech = True
+            if (early_words and needs_noise_guard(early_words)
+                    and hal_config.REALTIME_REQUIRE_SPEECH_ON_EMPTY_STT and audio_buffer):
+                try:
+                    early_speech = self._rt_noise_is_speech(
+                        self._np.frombuffer(b"".join(audio_buffer), dtype=self._np.int16)
+                    )
+                except Exception as e:
+                    logger.warning("Early realtime speech check failed: %s", e)
+            overlap_drain = (
+                realtime_allowed and hal_config.REALTIME_ENABLED and self._running
+                and manual_capture is None and early_authorized and bool(early_words)
+                and not harness_followup_active()
+                and endpoint_method in {"smart_turn", "turn_fallback", "turn_pause_limit", "silence_clock"}
+                and not is_noise_turn(early_words, early_duration, early_speech)
+            )
+            if overlap_drain:
+                from concurrent.futures import ThreadPoolExecutor
+
+                capture_complete.set()
+                interaction_id = voice_metrics.speech_end(endpoint_method, at=endpoint_ts)
+                post_capture_wait_filler = _WaitFiller(owner=interaction_id)
+                if should_arm_realtime_wait_filler(early_words):
+                    post_capture_wait_filler.arm()
+                with ThreadPoolExecutor(max_workers=1, thread_name_prefix="stt-final-drain") as worker:
+                    final_drain = worker.submit(stt_session.close)
+                    try:
+                        start_realtime_turn()
+                        if realtime_turn_started and not realtime_deferred:
+                            logger.info("[realtime] Processing confirmed speech while STT final drain runs")
+                            early_realtime_result = run_realtime_turn(
+                                self._realtime, self._tts, self.strip_rt_markers,
+                                early_words, rt_audio_buffer, early_duration, early_speech,
+                                interaction_id=interaction_id, save_history=False, audio_turn=audio_turn,
+                                harness_followup=False, wait_filler=post_capture_wait_filler,
+                            )
+                    finally:
+                        try:
+                            final_drain.result()
+                        except Exception:
+                            post_capture_wait_filler.cancel()
+                            raise
+            else:
+                stt_session.close()
             if pending_listening_cue_id is not None:
                 # If STT produced a partial, its real listening emotion already
                 # consumed this cue. Otherwise restore the prior LED promptly
@@ -2692,7 +2815,7 @@ class VoiceService:
                 last_speech_idx,
                 # What the device last said, so a turn captured right after a
                 # reply does not open with the tail of that reply.
-                getattr(self._tts, "last_spoken_text", "") if self._tts else "",
+                capture_spoken_text,
             )
             capture_complete.set()
             if turn_endpoint is not None and endpoint_method == "max_duration":
@@ -2715,7 +2838,8 @@ class VoiceService:
             # Voice metrics clock starts here: the endpoint has been detected and
             # the transcript is assembled. Everything downstream carries this
             # id (see hal/telemetry/voice_metrics.py).
-            interaction_id = voice_metrics.speech_end(endpoint_method, at=endpoint_ts)
+            if interaction_id is None:
+                interaction_id = voice_metrics.speech_end(endpoint_method, at=endpoint_ts)
             logger.info(
                 "Session END — buffer frames=%d bytes=%d duration=%.2fs "
                 "transcript=%r interaction_id=%s",
@@ -2775,7 +2899,8 @@ class VoiceService:
                 try:
                     from hal.drivers.tracking import gaze
 
-                    gaze.on_speech_end()
+                    if not gaze_endpoint_checked:
+                        gaze.on_speech_end()
                 except Exception as e:
                     logger.debug("gaze speech-end check skipped: %s", e)
             else:
@@ -2939,7 +3064,8 @@ class VoiceService:
                         buf_duration,
                     )
             else:
-                if realtime_allowed and not voice_cfg.LIVE_MODE:
+                if (realtime_allowed and not voice_cfg.LIVE_MODE
+                        and early_realtime_result is None and post_capture_wait_filler is None):
                     post_capture_wait_filler = _WaitFiller(owner=interaction_id)
                     if should_arm_realtime_wait_filler(combined):
                         post_capture_wait_filler.arm()
@@ -2967,20 +3093,25 @@ class VoiceService:
             if (
                 realtime_turn_started
                 and realtime_deferred
+                and audio_turn is None
                 and rt_audio_buffer
                 and not is_noise_turn(combined, buf_duration, rt_audio_is_speech)
+                and early_realtime_result is None
             ):
                 if self._realtime.wait_until_available():
                     try:
+                        audio_turn = self._realtime.bind_audio_turn()
                         self._realtime.send_text(build_turn_context(turn_speaker_display))
                         sent_turn_speaker = turn_speaker_display
                         turn_context_sent = True
                         for audio_f32 in rt_audio_buffer:
-                            self._realtime.append_audio(audio_f32)
+                            self._realtime.append_audio(audio_f32, turn=audio_turn)
                         logger.info(
                             "[realtime] Flushed %d buffered frame(s) after noise-drop rebuild",
                             len(rt_audio_buffer),
                         )
+                    except AudioTurnSessionChanged:
+                        logger.info("[realtime] Deferred upload session changed; retaining full turn for replay")
                     except Exception as e:
                         # Do not commit a partial deferred turn. No audio was
                         # intended for the old activity; falling back preserves
@@ -3037,6 +3168,7 @@ class VoiceService:
                 and turn_context_sent
                 and turn_speaker_display
                 and turn_speaker_display != sent_turn_speaker
+                and early_realtime_result is None
                 and hal_config.REALTIME_ENABLED
                 and self._realtime.available
                 and not is_noise_turn(combined, buf_duration, rt_audio_is_speech)
@@ -3054,7 +3186,13 @@ class VoiceService:
                 except Exception as e:
                     logger.warning("[realtime] speaker correction send failed: %s", e)
 
-            if realtime_turn_started:
+            if early_realtime_result is not None:
+                rt = early_realtime_result
+                if rt.handled and (combined or rt.transcript):
+                    self._realtime.save_turn(
+                        user_text=combined or "(audio only)", agent_text=rt.transcript or "(audio only)",
+                    )
+            elif realtime_turn_started:
                 rt = run_realtime_turn(
                     self._realtime,
                     self._tts,
@@ -3065,6 +3203,7 @@ class VoiceService:
                     rt_audio_is_speech,
                     interaction_id=interaction_id,
                     wait_filler=post_capture_wait_filler,
+                    audio_turn=audio_turn,
                 )
             else:
                 # No realtime turn was opened this capture. Distinguish the two

@@ -19,6 +19,7 @@ import logging
 import threading
 import time
 from collections.abc import Generator
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -57,7 +58,16 @@ from hal.realtime.models.signal import (
 )
 from hal.realtime.models.output import ExecutionOutput, InterruptedOutput, UserSpeechOutput
 from hal.realtime.summarizer import RealtimeSummarizer
-from hal.realtime.voice_agent.base import VoiceAgentBase
+from hal.realtime.voice_agent.base import AudioTurnSessionChanged, VoiceAgentBase
+
+
+@dataclass(frozen=True)
+class AudioTurnBinding:
+    """One capture's agent and provider socket; never follows a reconnect."""
+
+    agent: VoiceAgentBase
+    session: object
+
 
 logger = logging.getLogger(__name__)
 
@@ -1125,14 +1135,40 @@ class RealtimeOrchestrator:
                 logger.exception("Failed to disconnect realtime agent")
         logger.info("Realtime orchestrator stopped")
 
-    def append_audio(self, frame: npt.NDArray[np.float32]) -> None:
+    def bind_audio_turn(self) -> AudioTurnBinding:
+        """Bind after prepare_turn; a lost binding requires full audio replay."""
+        with self._lifecycle_lock:
+            agent = self._agent
+            if not self.available or agent is None:
+                raise AudioTurnSessionChanged("No ready session for audio turn")
+            session = agent.audio_session
+            if session is None:
+                raise AudioTurnSessionChanged("Provider transport is not connected")
+            agent.validate_audio_session(session)
+            return AudioTurnBinding(agent=agent, session=session)
+
+    def _validate_audio_turn(self, turn: AudioTurnBinding) -> VoiceAgentBase:
+        if self._agent is not turn.agent or not self._started.is_set():
+            raise AudioTurnSessionChanged("Audio turn orchestrator session changed")
+        turn.agent.validate_audio_session(turn.session)
+        return turn.agent
+
+    def append_audio(self, frame: npt.NDArray[np.float32], *, turn: AudioTurnBinding | None = None) -> None:
         """Queue a single audio frame to the model (non-blocking)."""
         self._last_activity_monotonic = time.monotonic()
+        if turn is not None:
+            self._validate_audio_turn(turn).append_audio(frame, session=turn.session)
+            return
         if self._agent is not None:
             self._agent.append_audio(frame)
 
-    def commit_audio(self) -> None:
+    def commit_audio(self, *, turn: AudioTurnBinding | None = None) -> None:
         """Queue commit signal (non-blocking)."""
+        if turn is not None:
+            agent = self._validate_audio_turn(turn)
+            self._mark_turn_start()
+            agent.commit_audio(session=turn.session)
+            return
         self._mark_turn_start()
         if self._agent is not None:
             self._agent.commit_audio()
@@ -1166,17 +1202,21 @@ class RealtimeOrchestrator:
             )
             self._idle_reset_pending = True
 
-    def flush_output(self) -> None:
+    def flush_output(self, *, turn: AudioTurnBinding | None = None) -> None:
         """Discard buffered outputs from a prior turn before committing a new one.
 
         Prevents a stale response (from an earlier, possibly noise-triggered turn)
         being read and spoken on the current turn — see VoiceAgentBase.flush_output.
         """
+        if turn is not None:
+            self._validate_audio_turn(turn).flush_output()
+            return
         if self._agent is not None:
             self._agent.flush_output()
 
     def stream_output(
         self,
+        *, turn: AudioTurnBinding | None = None,
     ) -> Generator[OutputBase | DelegateSignal | RejectSignal | LookReplaySignal, None, None]:
         """Yield outputs from the model one by one as they arrive.
 
@@ -1192,6 +1232,8 @@ class RealtimeOrchestrator:
         """
         self.execution_completed = False
         self.execution_turn_id = ""
+        if turn is not None:
+            self._validate_audio_turn(turn)
         if self._agent is None:
             return
         execution_agent = self._agent
@@ -1200,6 +1242,8 @@ class RealtimeOrchestrator:
         produced = False  # did this turn yield any real output (vs stay silent)?
         replay_pending = False  # look-replay signalled — the turn continues
         for output in execution_agent.receive(stop_on_done=True):
+            if turn is not None:
+                self._validate_audio_turn(turn)
             if isinstance(output, MainAgentFallbackOutput):
                 # This is a local fail-safe, not a provider function call: there
                 # is no call ID to acknowledge. Preserve the user's request even
@@ -1387,6 +1431,9 @@ class RealtimeOrchestrator:
                 break
             produced = True
             yield output
+
+        if turn is not None:
+            self._validate_audio_turn(turn)
 
         # Capture the consumed terminal before any post-turn recycle swaps agents.
         self.execution_completed = (

@@ -274,6 +274,14 @@ consumer turn on `generation_complete` and releases the next manual-VAD commit i
 This avoids an otherwise unnecessary silent-watchdog delay after the reply;
 any late `turn_complete` is discarded before the next turn.
 
+**Investigation note (2026-09-22, not implemented):** Google's
+[Gemini 3.8 Live Extended Thinking documentation](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-live-extended-thinking)
+defines `interaction_status=IN_PROGRESS` versus `IDLE`; `IDLE` means reasoning,
+processing and tool work have finished. Verify whether the Autonomous proxy and
+installed SDK expose this field before using it to finish routing grace. Preserve
+pending tool replies, playback ownership and cancellation; retain a fallback for
+missing status. Do not equate `turnComplete` alone with this idle state.
+
 For Gemini `extended-thinking` models, tools are `NON_BLOCKING`: a spoken filler
 such as “I can help with that.” must not consume the user's task (#453).
 The provider adds `complete_response`, which confirms that a direct spoken
@@ -453,8 +461,9 @@ at the end of a sentence therefore authorizes that same sentence for realtime,
 instead of only authorizing downstream main-agent dispatch. Existing focus stays
 latched if it expires mid-sentence; the noise guard still applies.
 
-That window is latched once at session start for **dispatch**, so a window that
-expires mid-sentence cannot cut off someone already speaking. The cues that
+That window is latched at session start and refreshed during capture and at
+speech end for **dispatch**, so a window that expires mid-sentence cannot cut
+off someone already speaking. The cues that
 claim to be the addressee — the listening LED, the backchannel — ask
 `is_addressed()` instead, which re-reads the window **live**. Gaze is why: it
 can open the window in the middle of the very sentence it acknowledges.
@@ -1182,7 +1191,8 @@ the next turn retries.
 In wake-word mode the resume is overlapped with the user's sentence: `Session
 START` calls `prewarm()`, which starts the `idle-park-resume` handshake in the
 background (`idle-park-prewarm`, thread `rt-prewarm`), and the `prepare_turn()`
-that runs after the STT final joins it (up to `PREWARM_JOIN_TIMEOUT_S` = 4 s)
+running on the capture preparation worker joins it (up to
+`PREWARM_JOIN_TIMEOUT_S` = 4 s)
 instead of connecting serially — device-measured on lamp-4ace 22/09/2026 that
 serial connect cost ~2 s per post-idle turn. A capture that is never dispatched
 just leaves an idle session the park watchdog closes again.
@@ -2328,23 +2338,27 @@ Read the counters in the session-END log line: `substituted` at ~100 % of
 
    | Mode | `[TURN CONTEXT]` sent | Speaker known? |
    |------|----------------------|----------------|
-   | Always-listening (`wakeword=false`) | at session **open**, before any audio | No → face fallback, then corrected |
-   | Wake-word / follow-up | after capture, once a final wake phrase confirms | Yes |
-   | Deferred (noise-drop rebuild) | after capture, on the replacement session | Yes |
+   | Always-listening (`wakeword=false`) | during capture once preparation completes, before uploading retained audio | Face fallback; corrected only if identity is ready before commit |
+   | Open focus / gaze granted during capture | during that same capture once preparation completes | Face fallback; corrected only if identity is ready before commit |
+   | Closed wake-word window | after capture and final wake-phrase confirmation | Any identity ready before commit |
+   | Deferred (noise-drop rebuild) | on the ready replacement session, before replaying retained audio | Any identity available then |
 
-   Both post-capture rows are additionally gated on the turn **not** being noise.
-   They run after the noise guard has already classified the capture, so an
+   Opening or flushing a turn after capture is additionally gated on it **not**
+   being noise. The noise guard has already classified the capture, so an
    empty-STT non-speech turn opens nothing: no `[TURN CONTEXT]`, no audio, and no
    replacement session. Skipping the send is what makes the skip-commit path free
    — otherwise the turn's whole buffer entered (and was billed by) an open
    activity that the very next step discarded. Sessions opened *earlier* in the
-   capture (always-listening) have already streamed audio and are still discarded.
+   capture (always-listening or authorized focus) have already streamed audio
+   and are still discarded.
 
    In always-listening mode the speaker-ID prepass (`identify_and_decorate`, run
    **once** at session end) resolves the voice speaker *after* the context already
    went out with the face name. HAL then sends a `[TURN CONTEXT UPDATE]` correction
    naming the real speaker — still **before** `commit_audio()`, so it is part of the
-   same turn. A short transcript in the AI-rejection ambiguity range defers this
+   same turn. When the reply starts during STT final drain, identity resolves
+   afterwards for downstream dispatch; HAL does not inject a correction into
+   that already-processed reply. A short transcript in the AI-rejection ambiguity range defers this
    external embedding call until after realtime decides; an explicit rejection
    avoids the call entirely, while every non-rejected downstream turn still gets
    the same one-time identity result. It is skipped when the context already carried
@@ -2374,8 +2388,31 @@ Read the counters in the session-END log line: `substituted` at ~100 % of
    drain and on every early return/error, so processing feedback can still play
    after capture. Button listening-cue retries expire if a capture starts; they
    must not reappear after the user finishes. LIVE ON and manual Harness capture
-   retain their existing behavior. This does not change the metric clock or
-   remove the wait for the final STT transcript.
+   retain their existing behavior. The endpoint metric clock is unchanged.
+
+   **LIVE OFF capture and final drain.** With wake-word gating disabled or focus
+   already granted (including gaze granting it during this capture), HAL can
+   upload audio before STT closes. `prepare_turn()` runs on `rt-capture-prepare`,
+   leaving the microphone thread free to retain the complete ordered audio
+   buffer while a session connects. Upload starts only after preparation and
+   `bind_audio_turn()` succeed. The binding owns one agent and, for Gemini, one
+   provider socket across queued audio, commit and output. If that session is
+   found invalid at the pre-commit boundary, recovery uses a fresh agent and
+   replays the complete buffer; queued Gemini frames/commit cannot migrate to a replacement socket.
+   A session failure after commit follows the error/fallback path rather than
+   automatically replaying potentially executed tools.
+
+   At a normal endpoint (`smart_turn`, `turn_fallback`, `turn_pause_limit` or
+   `silence_clock`), an authorized capture with already-final recognized words
+   that pass the existing noise guard can process realtime while
+   `stt_session.close()` drains on a worker. A partial alone cannot enable this
+   overlap, and a closed wake-word window still requires final confirmation.
+   A pending Harness follow-up also retains the complete-transcript path.
+   STT close still completes before downstream dispatch: the final assembled
+   transcript supplies history and main-agent input, and the early reply is
+   consumed once. The metric retains the original speech-end timestamp and
+   interaction ID. LIVE ON and manual Harness capture retain their existing
+   paths.
 
    For non-native realtime TTS in both LIVE modes, sentence-end detection uses
    text after the existing voice/HW marker removal. A reply such as

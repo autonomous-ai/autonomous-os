@@ -19,6 +19,7 @@ from hal import config as hal_config
 from hal import presets
 from hal.clock import device_now
 from hal.realtime.config import gemini_needs_idle_workaround
+from hal.realtime.voice_agent.base import AudioTurnSessionChanged
 from hal.realtime.models import AudioOutput as RTAudioOutput
 from hal.realtime.models import TextOutput as RTTextOutput
 from hal.realtime.models.signal import DelegateSignal, LookReplaySignal, RejectSignal
@@ -471,6 +472,31 @@ def harness_followup_active() -> bool:
         return False
 
 
+def _commit_turn_output(realtime, audio_frames, audio_turn=None):
+    """Commit one session; replay a lost upload before any response is consumed."""
+    if audio_turn is None:
+        realtime.flush_output()
+        realtime.commit_audio()
+        logger.info("[realtime] Audio committed — streaming output")
+        return None, realtime.stream_output()
+    try:
+        realtime.flush_output(turn=audio_turn)
+        realtime.commit_audio(turn=audio_turn)
+    except AudioTurnSessionChanged:
+        if not realtime.recover_session("audio-upload-session-changed"):
+            raise
+        audio_turn = realtime.bind_audio_turn()
+        realtime.send_text(build_turn_context())
+        for frame in audio_frames:
+            realtime.append_audio(frame, turn=audio_turn)
+        realtime.flush_output(turn=audio_turn)
+        realtime.commit_audio(turn=audio_turn)
+    # A change after commit may have executed tools even without spoken output.
+    # Let the existing error/fallback path handle it; never blindly repeat tools.
+    logger.info("[realtime] Audio committed — streaming output")
+    return audio_turn, realtime.stream_output(turn=audio_turn)
+
+
 def run_realtime_turn(
     realtime,
     tts,
@@ -481,6 +507,9 @@ def run_realtime_turn(
     audio_is_speech: bool = True,
     interaction_id: str = "",
     wait_filler: "Optional[_WaitFiller]" = None,
+    save_history: bool = True,
+    audio_turn=None,
+    harness_followup: Optional[bool] = None,
 ) -> RealtimeTurnResult:
     """Commit the captured audio to the realtime agent and stream its reply.
 
@@ -507,7 +536,7 @@ def run_realtime_turn(
     native_started = False  # cleanup guard: True between begin and end
     native_played = False    # did native audio actually play this turn (for handled)
 
-    if combined and harness_followup_active():
+    if combined and (harness_followup if harness_followup is not None else harness_followup_active()):
         logger.info("[realtime] Harness follow-up active — delegating without realtime reply")
         return RealtimeTurnResult(delegated=True, delegate_msg=combined, route=ROUTE_DELEGATED)
 
@@ -591,8 +620,10 @@ def run_realtime_turn(
                     )
                     if not realtime.recover_session("gemini-1011-replay"):
                         break
+                    if audio_turn is not None:
+                        audio_turn = realtime.bind_audio_turn()
                     for _frame in rt_audio_buffer:
-                        realtime.append_audio(_frame)
+                        realtime.append_audio(_frame, **({"turn": audio_turn} if audio_turn is not None else {}))
                     text_parts = []
                     sentence_buf = ""
                     first_sentence_sent = False
@@ -601,9 +632,6 @@ def run_realtime_turn(
                 # Drop any output still queued from a previous turn so this turn
                 # only reads its OWN response (stale async replies desync onto a
                 # later turn → "talks on its own" + double TTS).
-                realtime.flush_output()
-                realtime.commit_audio()
-                logger.info("[realtime] Audio committed — streaming output")
                 # Time-to-first-* for this turn. Without these two numbers the
                 # only measurable span was commit → first spoken sentence (3-6s
                 # on lamp-0c89), which mixes the model's own latency with how
@@ -614,7 +642,8 @@ def run_realtime_turn(
 
                 execution_completed = False
                 look_replay: bool = False
-                for output in realtime.stream_output():
+                audio_turn, outputs = _commit_turn_output(realtime, rt_audio_buffer, audio_turn)
+                for output in outputs:
                     if not first_output_logged:
                         first_output_logged = True
                         logger.info(
@@ -767,7 +796,7 @@ def run_realtime_turn(
                         "frame joins the replayed turn"
                     )
                     for _frame in rt_audio_buffer:
-                        realtime.append_audio(_frame)
+                        realtime.append_audio(_frame, **({"turn": audio_turn} if audio_turn is not None else {}))
                     text_parts = []
                     sentence_buf = ""
                     first_sentence_sent = False
@@ -873,7 +902,7 @@ def run_realtime_turn(
                         transcript[:200] if transcript else "(empty)",
                     )
                     # Save turn to realtime memory
-                    if combined or transcript:
+                    if save_history and (combined or transcript):
                         realtime.save_turn(
                             user_text=combined or "(audio only)",
                             agent_text=transcript or "(audio only)",

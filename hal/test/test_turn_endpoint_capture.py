@@ -10,7 +10,9 @@ import pytest
 
 @contextmanager
 def capture(monkeypatch, frames, *, realtime=False, enabled=True, detector=None, legacy_limit=20,
-            tts=None, on_read=None, on_close=None, on_connect=None):
+            tts=None, on_read=None, on_close=None, on_connect=None, on_realtime=None,
+            wake_enabled=False, focus=None, transcripts_final=True, close_transcript=None,
+            on_prepare=None):
     """Feed (elapsed seconds, speech energy, final transcript) without hardware."""
     from hal.drivers.voice import voice_service as module
 
@@ -28,11 +30,22 @@ def capture(monkeypatch, frames, *, realtime=False, enabled=True, detector=None,
     service._realtime.available = True
     service._realtime.rebuilding = False
     service._realtime.sample_rate = 16000
+    if on_prepare is not None:
+        service._realtime.prepare_turn.side_effect = on_prepare
+    service._wakeword_focus.is_active.side_effect = focus or (lambda: False)
+    service._decorator.starts_with_wake_word.return_value = False
+    service._decorator.matches_wake_word_loosely.return_value = False
     service._decorator.classify_wake_word.side_effect = lambda text: (text, "voice")
     service._decorator.identify_and_decorate.side_effect = lambda text, *a, **kw: (text, None, None)
     stt = Mock()
     stt.is_closed.return_value = False
-    stt.close.side_effect = on_close
+    def close():
+        if on_close:
+            on_close()
+        if close_transcript:
+            stt._on_transcript_cb(close_transcript, True)
+
+    stt.close.side_effect = close
     if on_connect is not None:
         service._stt.create_session.return_value = stt
 
@@ -67,13 +80,13 @@ def capture(monkeypatch, frames, *, realtime=False, enabled=True, detector=None,
         if on_read is not None:
             on_read(elapsed)
         if transcript:
-            stt._on_transcript_cb(transcript, True)
+            stt._on_transcript_cb(transcript, transcripts_final)
         return np.full((1024, 1), 10000 if speech else 0, dtype=np.int16), False
 
     mic = Mock()
     mic.read.side_effect = read
     monkeypatch.setattr(module, "time", SimpleNamespace(time=lambda: clock[0], monotonic=lambda: clock[0]))
-    monkeypatch.setattr(module.hal_config, "WAKEWORD_ENABLED", False)
+    monkeypatch.setattr(module.hal_config, "WAKEWORD_ENABLED", wake_enabled)
     monkeypatch.setattr(module.hal_config, "REALTIME_ENABLED", realtime)
     for name, value in {
         "LIVE_MODE": False, "TURN_END_ENABLED": enabled,
@@ -84,7 +97,8 @@ def capture(monkeypatch, frames, *, realtime=False, enabled=True, detector=None,
         monkeypatch.setattr(module.voice_cfg, name, value)
     with patch.object(module, "turn_should_close", return_value=True), \
          patch.object(module, "dispatch_turn") as dispatch, \
-         patch.object(module, "run_realtime_turn", return_value=module.RealtimeTurnResult()) as rt, \
+         patch.object(module, "run_realtime_turn", side_effect=on_realtime,
+                      return_value=module.RealtimeTurnResult()) as rt, \
          patch.object(module, "voice_metrics") as metrics, \
          patch.object(module, "build_turn_context", return_value="test context"), \
          patch.object(module, "_WaitFiller"), \

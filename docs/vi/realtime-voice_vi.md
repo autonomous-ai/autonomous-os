@@ -272,6 +272,14 @@ ngay ở `generation_complete`, đồng thời nhả commit manual-VAD kế ti�
 còn chờ silent-watchdog vô ích sau khi đã trả lời; `turn_complete` đến muộn sẽ
 được bỏ trước lượt sau.
 
+**Ghi chú điều tra (2026-09-22, chưa triển khai):**
+[Tài liệu Gemini 3.8 Live Extended Thinking của Google](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-live-extended-thinking)
+phân biệt `interaction_status=IN_PROGRESS` và `IDLE`; `IDLE` báo đã xong suy luận,
+xử lý và tool. Cần xác minh Autonomous proxy cùng SDK đang cài có chuyển tiếp
+trường này trước khi dùng nó để kết thúc grace định tuyến. Giữ pending tool,
+ownership playback và cancel; vẫn cần fallback khi thiếu status. Không coi riêng
+`turnComplete` tương đương trạng thái idle này.
+
 Với Gemini `extended-thinking`, tool dùng `NON_BLOCKING`: câu filler như
 “I can help with that.” không được làm mất tác vụ người dùng (#453).
 Provider thêm `complete_response` để xác nhận câu trả lời trực tiếp đã đáp ứng
@@ -440,8 +448,8 @@ câu sẽ cho phép chính câu đó vào realtime, thay vì chỉ cho phép dis
 main agent. Focus đã chốt vẫn được giữ nếu hết hạn giữa câu; noise guard vẫn
 được áp dụng.
 
-Cửa sổ đó được chốt một lần lúc mở phiên cho **dispatch**, để cửa sổ hết hạn
-giữa câu không cắt lời người đang nói. Còn những cue tự nhận mình là người được
+Cửa sổ đó được chốt lúc mở phiên và cập nhật trong lúc thu cùng cuối câu cho
+**dispatch**, để cửa sổ hết hạn giữa câu không cắt lời người đang nói. Còn những cue tự nhận mình là người được
 gọi — LED listening, backchannel — thì hỏi `is_addressed()`, và hàm này đọc lại
 cửa sổ **theo thời gian thực**. Lý do là gaze: nó có thể mở cửa sổ ngay giữa
 chính câu nói mà nó đang xác nhận. Đo trên lamp-0c89 04/09/2026 — lúc bắt đầu
@@ -1141,8 +1149,8 @@ pre-turn recycle vốn đã làm cho turn đó — và `voice_service` giữ đ�
 để turn sau thử lại.
 Ở chế độ wake-word, việc nối lại được chạy chồng lên câu user đang nói: `Session
 START` gọi `prewarm()`, khởi động handshake `idle-park-resume` ở nền
-(`idle-park-prewarm`, thread `rt-prewarm`), và `prepare_turn()` chạy sau STT final
-sẽ đợi nó xong (tối đa `PREWARM_JOIN_TIMEOUT_S` = 4 giây) thay vì nối lại tuần
+(`idle-park-prewarm`, thread `rt-prewarm`), và `prepare_turn()` chạy trên worker
+chuẩn bị capture sẽ đợi nó xong (tối đa `PREWARM_JOIN_TIMEOUT_S` = 4 giây) thay vì nối lại tuần
 tự — đo trên lamp-4ace 22/09/2026, nối tuần tự tốn ~2 giây mỗi turn sau khoảng
 nghỉ. Capture không được dispatch chỉ để lại một session idle mà watchdog park sẽ
 đóng lại.
@@ -2274,23 +2282,26 @@ liên tục đồng ý.
 
    | Mode | Gửi `[TURN CONTEXT]` | Biết người nói? |
    |------|---------------------|-----------------|
-   | Always-listening (`wakeword=false`) | lúc **mở** session, trước khi có audio | Không → fallback khuôn mặt, rồi mới sửa |
-   | Wake-word / follow-up | sau khi capture xong, khi final xác nhận wake phrase | Có |
-   | Deferred (rebuild sau noise-drop) | sau khi capture xong, trên session thay thế | Có |
+   | Always-listening (`wakeword=false`) | trong lúc thu khi chuẩn bị xong, trước khi upload audio đã giữ | Fallback khuôn mặt; chỉ sửa nếu identity có trước commit |
+   | Focus đang mở / gaze cấp focus trong lúc thu | ngay trong capture đó khi chuẩn bị xong | Fallback khuôn mặt; chỉ sửa nếu identity có trước commit |
+   | Cửa sổ wake-word đang đóng | sau capture và final xác nhận wake phrase | Identity đã sẵn sàng trước commit, nếu có |
+   | Deferred (rebuild sau noise-drop) | trên session thay thế đã sẵn sàng, trước khi phát lại audio đã giữ | Identity có tại thời điểm đó, nếu có |
 
-   Cả hai dòng chạy sau capture còn bị chặn thêm một điều kiện: lượt đó **không**
-   phải noise. Chúng chạy sau khi noise guard đã phân loại xong capture, nên một
+   Việc mở hoặc flush lượt sau capture còn có điều kiện: lượt đó **không** phải
+   noise. Noise guard đã phân loại xong capture, nên một
    lượt STT rỗng mà không phải tiếng nói sẽ không mở gì cả: không `[TURN CONTEXT]`,
    không audio, không session thay thế. Chính việc không gửi mới làm cho đường
    skip-commit trở nên miễn phí — nếu không, toàn bộ buffer của lượt đó đã vào (và
    bị tính tiền trong) một activity đang mở mà ngay bước sau lại vứt đi. Session
-   được mở *sớm hơn* trong lúc capture (always-listening) thì đã stream audio rồi
-   nên vẫn bị discard như cũ.
+   được mở *sớm hơn* trong lúc capture (always-listening hoặc focus đã cấp) thì
+   đã stream audio rồi nên vẫn bị discard như cũ.
 
    Ở mode always-listening, prepass speaker-ID (`identify_and_decorate`, chạy **một
    lần** cuối session) chỉ giải được người nói *sau khi* context đã gửi đi kèm tên
    từ khuôn mặt. HAL gửi tiếp một correction `[TURN CONTEXT UPDATE]` nêu đúng người
-   nói — vẫn **trước** `commit_audio()` nên thuộc cùng một lượt. Transcript ngắn
+   nói — vẫn **trước** `commit_audio()` nên thuộc cùng một lượt. Khi phản hồi bắt
+   đầu trong lúc STT drain final, identity được giải sau đó cho dispatch; HAL
+   không chèn correction vào phản hồi đã xử lý. Transcript ngắn
    trong vùng mơ hồ AI-rejection sẽ hoãn external embedding call tới khi realtime
    quyết định xong; một lần reject rõ ràng tránh luôn call này, còn mọi turn không
    reject vẫn nhận cùng một kết quả identity duy nhất trước khi đi hạ nguồn. Bỏ qua
@@ -2320,7 +2331,28 @@ liên tục đồng ý.
    và ở mọi nhánh thoát sớm/lỗi, nên filler lúc xử lý vẫn phát được sau capture.
    Retry câu listening của nút hết hiệu lực nếu capture bắt đầu; không được phát
    lại sau khi user nói xong. LIVE ON và capture Harness thủ công giữ hành vi
-   hiện tại. Thay đổi này không sửa mốc đo metric hay bỏ việc chờ transcript STT cuối.
+   hiện tại. Mốc đo metric tại endpoint không đổi.
+
+   **Capture LIVE OFF và drain final.** Khi tắt wake-word gate hoặc focus đã
+   được cấp (kể cả gaze cấp ngay trong capture này), HAL có thể upload audio
+   trước khi STT đóng. `prepare_turn()` chạy trên `rt-capture-prepare`, để thread
+   microphone tiếp tục giữ toàn bộ audio đúng thứ tự trong lúc kết nối session.
+   Chỉ upload sau khi chuẩn bị và `bind_audio_turn()` thành công. Binding giữ
+   đúng một agent và, với Gemini, đúng một socket provider xuyên suốt audio
+   trong hàng đợi, commit và output. Nếu phát hiện binding không còn hợp lệ ở
+   bước trước commit, recovery tạo agent mới rồi phát lại toàn bộ buffer; frame/commit Gemini trong hàng đợi
+   không được chuyển sang socket thay thế. Lỗi session sau commit đi theo nhánh
+   lỗi/fallback, không tự động phát lại những tool có thể đã chạy.
+
+   Ở endpoint thông thường (`smart_turn`, `turn_fallback`, `turn_pause_limit`
+   hoặc `silence_clock`), capture đã được phép và có chữ STT final qua noise
+   guard hiện có được xử lý realtime trong khi `stt_session.close()` drain trên
+   worker. Chỉ có partial thì không mở nhánh chạy chồng này; cửa sổ wake-word
+   đang đóng vẫn cần final xác nhận. Follow-up Harness đang chờ cũng giữ nhánh
+   đợi transcript đầy đủ. STT close vẫn hoàn tất trước dispatch:
+   transcript cuối đã ghép được dùng cho history và input main agent, phản hồi
+   sớm chỉ được xử lý một lần. Metric giữ timestamp speech-end gốc và cùng
+   interaction ID. LIVE ON và capture Harness thủ công giữ đường xử lý hiện có.
 
    Với TTS realtime không dùng native audio ở cả hai chế độ LIVE, nhận diện kết
    câu dùng text sau bước loại marker giọng/HW hiện có. Câu như
