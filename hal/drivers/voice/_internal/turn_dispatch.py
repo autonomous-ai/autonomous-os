@@ -314,6 +314,18 @@ def dispatch_turn(
                     sensing_msg = f"{sensing_msg}\n[transcript] {final_msg}"
             else:
                 sensing_msg = final_msg
+            if sensing_msg and rt.transcript.strip():
+                # A spoken acknowledgement is not a completed answer. Unlike
+                # handled history, this turn still belongs to the main agent.
+                # Keep this scoped to handoffs after realtime speech; ordinary
+                # delegation and explicit noise/rejection routing are unchanged.
+                sensing_msg += (
+                    "\n[realtime-handoff] Realtime spoke before handing off, but "
+                    "did not confirm a completed answer for this turn. This is "
+                    "an active request, not a handled history entry. Resolve the "
+                    "request or ask a brief clarification if context is missing; "
+                    "do not choose NO_REPLY merely because realtime already spoke."
+                )
             # Hand off the just-captured frame (if any) so the agent reuses it.
             if vision_hint and sensing_msg:
                 sensing_msg = f"{vision_hint}\n{sensing_msg}"

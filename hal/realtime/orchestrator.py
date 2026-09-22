@@ -68,6 +68,10 @@ INITIAL_CONNECT_RETRY_MAX_DELAY_S: float = 60.0
 # park threshold has tens of seconds of margin below the server's idle cut, so a
 # coarse poll is enough and keeps the thread cheap.
 IDLE_PARK_POLL_S: float = 5.0
+# How long prepare_turn() waits for a prewarm() resume already in flight. Above
+# a normal handshake (~1-2s) so a prewarm is never abandoned for a second
+# synchronous connect; bounded so a hung proxy still falls back to the main agent.
+PREWARM_JOIN_TIMEOUT_S: float = 4.0
 # Upper bound on how long prepare_turn()'s in-flight marker suppresses parking.
 # voice_service can prepare a turn and then abandon it (wake word never
 # confirmed) without ever calling stream_output, which would otherwise pin the
@@ -774,6 +778,20 @@ class RealtimeOrchestrator:
             self._turns_since_recycle = 0
             self._idle_reset_pending = False
 
+    def prewarm(self) -> bool:
+        """Resume a parked session in the background as soon as speech starts.
+
+        Wake-word turns defer every realtime I/O until the STT final confirms
+        the phrase, so the parked-session resume (~2s handshake, device-measured
+        lamp-4ace 22/09/2026) otherwise runs serially AFTER capture. Starting it
+        here overlaps the handshake with the user's own sentence; prepare_turn()
+        joins it. No-op unless parked. A turn that is then never dispatched just
+        leaves an idle session the park watchdog closes again.
+        """
+        if not getattr(self, "_idle_parked", False) or self.rebuilding:
+            return False
+        return self._rebuild_in_background("idle-park-prewarm", "rt-prewarm")
+
     def prepare_turn(self) -> None:
         """Prepare the realtime session before the caller streams turn audio."""
         # A new capture starts a new logical turn. Clear any marker left by a
@@ -785,6 +803,13 @@ class RealtimeOrchestrator:
         provider: str = config.REALTIME_PROVIDER.strip().lower()
         agent = getattr(self, "_agent", None)
         if getattr(self, "_idle_parked", False):
+            # A prewarm() started the resume while the user was still speaking;
+            # join it instead of falling back for "rebuild in flight".
+            if self.rebuilding:
+                self._rebuild_done.wait(timeout=PREWARM_JOIN_TIMEOUT_S)
+                if not self._idle_parked:
+                    self._skip_post_idle_recycle = True
+                    return
             # The idle watchdog closed the transport; connect a fresh session
             # now, before any audio is streamed. Identical to the pre-turn idle
             # recycle below (a parked session is idle by definition), so the
@@ -805,13 +830,15 @@ class RealtimeOrchestrator:
         # activityEnd can all be rejected with 1008. Fire-and-forget expression
         # calls intentionally skip their Gemini acknowledgement to avoid a
         # duplicate reply, so replace that session before the next capture.
+        # A spoken handoff also quarantines the session: late provider output
+        # must not start a response/grace belonging to the next user capture.
         if (
             provider == "gemini"
             and agent is not None
             and agent.requires_fresh_session
         ):
             logger.info(
-                "[realtime] Rebuilding Gemini session after unresolved tool call before streaming audio"
+                "[realtime] Rebuilding Gemini session after unresolved tool or spoken handoff before streaming audio"
             )
             if self._rebuild_now(
                 "gemini-unresolved-tool-call", discard_old_on_failure=True

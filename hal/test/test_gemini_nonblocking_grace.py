@@ -247,10 +247,117 @@ def test_completion_ack_does_not_repeat_spoken_answer_or_hide_later_delegate():
     _assert_done(agent, events)
 
 
+@pytest.mark.parametrize('generation', [False, True])
+@pytest.mark.parametrize('initial_result,final_result,delegate,terminal,release', [
+    (False, True, False, True, True),
+    (False, True, True, True, False),
+    (False, False, False, True, False),
+    (False, None, False, True, False),
+    (True, True, False, True, False),
+    (None, True, False, True, False),
+    (False, True, False, False, False),
+    (False, True, False, 'confirmation', True),
+    (False, True, True, 'confirmation', False),
+    (None, True, False, 'confirmation', False),
+])
+def test_continuation_after_filler_waits_for_outcome_and_late_routing(
+        monkeypatch, generation, initial_result, final_result, delegate, terminal, release):
+    from hal.realtime import response_outcome
+    monkeypatch.setattr(gemini_live.app_config, 'REALTIME_NONBLOCKING_TOOL_GRACE_S', 0.08)
+    monkeypatch.setattr(gemini_live.app_config, 'REALTIME_OUTCOME_TIMEOUT_S', 0.12)
+
+    filler = 'Let me check that weather for you.'
+    answer = 'Ho Chi Minh City is rainy today.'
+
+    def speech(text):
+        message = _terminal()
+        message.server_content.turn_complete = False
+        message.server_content.output_transcription = SimpleNamespace(text=text)
+        message.server_content.model_turn = SimpleNamespace(parts=[
+            SimpleNamespace(thought=False, text=None,
+                            inline_data=SimpleNamespace(data=b'\x00\x00' * 4)),
+        ])
+        return message
+
+    messages = [speech(filler), _terminal(generation=generation), speech(answer)]
+    if terminal == 'confirmation':
+        messages.append(_tool('complete_response'))
+    elif terminal:
+        messages.append(_terminal(generation=generation))
+    if delegate:
+        messages.append(_tool())
+    agent = _agent(messages)
+    agent._user_transcript = 'What is the weather in Ho Chi Minh City?'
+    observed = []
+
+    async def check(request, spoken, **kwargs):
+        # Even while the classifier runs, the candidate must stay off-speaker.
+        queued = list(agent._recv_queue.queue)
+        assert not any(isinstance(e, OutputEvent) and isinstance(e.output, TextOutput)
+                       and e.output.text == answer for e in queued)
+        observed.append(spoken)
+        return initial_result if spoken == filler else final_result
+
+    monkeypatch.setattr(response_outcome, 'spoken_response_complete', check)
+    events = _receive(agent)
+    texts = [e.output.text for e in events if isinstance(e, OutputEvent)
+             and isinstance(e.output, TextOutput)]
+    assert texts == ([filler, answer] if release else [filler])
+    audio = [e for e in events if isinstance(e, OutputEvent) and isinstance(e.output, AudioOutput)]
+    assert len(audio) == (2 if release else 1)
+    assert bool(_calls(events)) is delegate
+    assert events[-1].fallback_to_main is (not delegate and not release and initial_result is not True)
+    assert events[-1].user_transcript == 'What is the weather in Ho Chi Minh City?'
+    if release:
+        assert observed == [filler, filler + answer]
+    _assert_done(agent, events)
+
+
+@pytest.mark.parametrize('delegate', [False, True])
+@pytest.mark.parametrize('spoken', [False, True])
+def test_spoken_handoff_quarantines_before_consumer_can_start_next_capture(
+        monkeypatch, delegate, spoken):
+    from hal.realtime import response_outcome
+
+    async def check(*args, **kwargs):
+        return False
+
+    monkeypatch.setattr(response_outcome, 'spoken_response_complete', check)
+    messages = []
+    if spoken:
+        message = _terminal()
+        message.server_content.turn_complete = False
+        message.server_content.output_transcription = SimpleNamespace(text='Let me check.')
+        messages.append(message)
+    messages.append(_tool() if delegate else _terminal())
+    if delegate:
+        messages.append(_terminal())
+    agent = _agent(messages)
+    boundaries = []
+
+    class ObservedQueue(queue.Queue):
+        def put(self, event):
+            if isinstance(event, TurnDoneEvent) or (
+                    isinstance(event, OutputEvent) and isinstance(event.output, FunctionCallOutput)):
+                boundaries.append(getattr(agent, '_requires_fresh_session', False))
+            super().put(event)
+
+    agent._recv_queue = ObservedQueue()
+    _receive(agent)
+    assert boundaries
+    assert all(value is spoken for value in boundaries)
+
+
 @pytest.mark.parametrize("generation", [False, True])
 @pytest.mark.parametrize("outcome", ["complete_response", "delegate_to_main", None])
-def test_first_terminal_stops_extra_speech_and_audio_but_keeps_routing(generation, outcome):
+def test_first_terminal_stops_extra_speech_and_audio_but_keeps_routing(monkeypatch, generation, outcome):
+    from hal.realtime import response_outcome
     direct_answer = outcome == "complete_response"
+
+    async def check(*args, **kwargs):
+        return direct_answer
+
+    monkeypatch.setattr(response_outcome, 'spoken_response_complete', check)
     initial_text = "Two plus two is four." if direct_answer else "I can help with that."
     extra_text = "Sorry, there was a system error." if direct_answer else "I cannot access your email."
     request = "What is two plus two?" if direct_answer else "Read my newest email."
@@ -428,6 +535,61 @@ def test_late_delegate_wins_over_independent_completion(monkeypatch):
     calls = [e.output.name for e in events if isinstance(e, OutputEvent)
              and isinstance(e.output, FunctionCallOutput)]
     assert calls == ['delegate_to_main']
+
+
+@pytest.mark.parametrize('generation', [True, False])
+@pytest.mark.parametrize('verdict,needs_main', [
+    ('CLARIFICATION', False), ('INCOMPLETE', True), ('unexpected', True),
+])
+def test_weather_clarification_routes_through_real_outcome_parser(
+        monkeypatch, generation, verdict, needs_main):
+    import anthropic
+    import json
+    from hal.realtime import response_outcome
+
+    request = 'Can you tell me the weather today and Bitcoin pricing?'
+    answer = ("Bitcoin is trading at around 86,400 USD today. "
+              "To give you the correct weather, I'll need to know which city you're in.")
+    captured = []
+
+    class Stream:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        @property
+        def text_stream(self):
+            async def chunks():
+                yield verdict
+            return chunks()
+
+    class Client(Stream):
+        def __init__(self, **kwargs):
+            self.messages = self
+
+        def stream(self, **kwargs):
+            captured.append(json.loads(kwargs['messages'][0]['content']))
+            return Stream()
+
+    # Mock only the text-model transport, preserving classification parsing and
+    # Gemini terminal routing together. No live API or device action is needed.
+    monkeypatch.setattr(anthropic, 'AsyncAnthropic', Client)
+    monkeypatch.setattr(response_outcome.app_config, 'REALTIME_SUMMARIZER_API_KEY', 'test')
+    speech = _terminal(generation=generation)
+    speech.server_content.output_transcription = SimpleNamespace(text=answer)
+    agent = _agent([speech, _terminal()])
+    agent._user_transcript = request
+    events = _receive(agent)
+    done = next(e for e in events if isinstance(e, TurnDoneEvent))
+    assert captured == [{'request': request, 'spoken_answer': answer,
+                         'public_search_evidence': False}]
+    assert done.fallback_to_main is needs_main
+    assert done.execution_completed is (not needs_main)
+    assert done.user_transcript == request
+    assert not _calls(events)
+    _assert_done(agent, events)
 
 
 def test_filler_confirmation_cannot_override_incomplete_check(monkeypatch):
