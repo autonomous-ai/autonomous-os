@@ -44,11 +44,11 @@ Cua:
 python3 scripts/buddy.py cua_action --params '{"snapshot_id":"OBSERVED_BUDDY_ID","element_token":"OBSERVED_TOKEN","ui_action":"click"}' --inspect-after '{"app":"Calendar"}'
 ```
 
-Cua actions: `click`, `type_text` with `text`, or `press_key` with `key` and optional `modifiers`. Never mix native refs/Jev suggestions and Cua tokens. Cua binds the observed PID/window; do not supply arbitrary coordinates or foreground overrides.
+Cua actions: `click` (optional `ax_action:"open"` for observed `AXOpen`), `type_text` with `text`, or `press_key` with `key`/`modifiers`. For menu shortcuts use `press_key` with `delivery_mode:"foreground"`: it briefly focuses the observed window and restores prior focus. Default is background. Never mix native refs with Cua tokens or supply coordinates. Avoid `outside_window` elements; handle an observed modal first.
 
 **Prefer `--inspect-after '{"app":"TARGET_APP"}'` on supported UI actions:** one action and fresh observation in one tool call. Optional `window_id` must be observed. Consume `action` and `inspection` separately. After native/Cua token actions, inspection reuses that driver directly (`desktop:null`, no refreshed capabilities); other actions run full inspect. Failed inspection never justifies replaying the successful action. Action failure returns no inspection and unconfirmed outcome. Availability/permission/timeout blockers end the turn; otherwise inspect before choosing another action. No retries.
 
-Snapshots expire in 30s; single-use. After every action/error obtain fresh evidence; a successful returned `inspection` already supplies it. New observations invalidate old refs; never insert one between selecting and acting on a ref. `suspected_noop`: do not repeat the same route; choose another observed control or shortcut. `AXOpen` alone does not prove Cua `click` support. `ok` proves dispatch, not completion. Verify results/content/destination; `set_value` may still need form submission.
+Snapshots expire in 30s; single-use. After every action/error obtain fresh evidence; a successful returned `inspection` already supplies it. New observations invalidate old refs; never insert one between selecting and acting on a ref. `suspected_noop`: do not repeat the same route; choose another observed control or shortcut. `ok` proves dispatch, not completion. Verify results/content/destination; `set_value` may still need form submission.
 
 Other commands:
 
@@ -64,7 +64,7 @@ For named-app keyboard input include `app` when `target_app_input` is advertised
 
 Use `--params-file /absolute/path/request.json` (UTF-8 object) for arbitrary text; never interpolate user/screen text into shell commands. Source/`--help` reads are diagnosis only.
 
-For macOS Calendar date queries: activate with `open_app`; use `key_combo` keys `["cmd","shift","t"]` (Go to Date) with `--inspect-after`. Fill the observed date dialog, submit, then `["cmd","1"]` (Day view). Verify date and read events. Use auto/navigation to expose dialogs hidden behind large Year trees. Year/Month or clipped output cannot prove an empty day. Preserve timezone/all-day distinctions. Reply once established, without memory writes.
+For macOS Calendar: use Cua `press_key`, `key:"t"`, `modifiers:["cmd","shift"]`, `delivery_mode:"foreground"` on the observed window (Go to Date), with `--inspect-after`. Fill the observed date dialog and submit; then `key:"1"`, `modifiers:["cmd"]` in foreground (Day view). Native fallback uses `key_combo` after activation. Use auto/navigation to expose dialogs behind large Year trees. Verify date/events; clipped output cannot prove an empty day. Preserve timezone/all-day distinctions. Reply once established.
 
 ## Keep the task moving
 

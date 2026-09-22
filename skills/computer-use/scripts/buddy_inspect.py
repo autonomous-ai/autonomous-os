@@ -1,5 +1,7 @@
 """Read-only desktop observations through Cua or native Accessibility."""
 
+import math
+import re
 import time
 
 MAX_ITEMS = 120
@@ -70,15 +72,80 @@ def compact_tree(tree, navigation=False):
     return result
 
 
+def _frame(value):
+    """Accept finite observed rectangles only, without coordinate conversion."""
+    if not isinstance(value, dict):
+        return None
+    values = [value.get(key) for key in ("x", "y", "w", "h")]
+    try:
+        if any(type(number) not in (int, float) or not math.isfinite(number) for number in values):
+            return None
+        x, y, width, height = values
+        if width <= 0 or height <= 0 or not math.isfinite(x + width) or not math.isfinite(y + height):
+            return None
+    except OverflowError:
+        return None
+    return x, y, x + width, y + height
+
+
 def compact_cua(observation):
-    """Drop driver API advice, but preserve all observed text and action evidence."""
-    if "_note" not in observation:
-        return observation
-    # The upstream driver calls its bound max_elements, whereas the Buddy
-    # wrapper accepts max_nodes. Do not expose incompatible routing advice.
-    # tree_markdown is NOT generally redundant: static text can exist only
-    # there. Keep it alongside structured tokens, frames and completeness.
-    return {key: value for key, value in observation.items() if key != "_note"}
+    """Preserve evidence and annotate geometry; never claim hit-test visibility."""
+    # Driver max_elements advice is incompatible with Buddy's max_nodes. Keep
+    # tree_markdown: static text can exist there alone, including calendar year.
+    result = {key: value for key, value in observation.items() if key != "_note"}
+    elements = observation.get("elements")
+    if not isinstance(elements, list):
+        return result
+    windows = [element for element in elements if isinstance(element, dict) and element.get("role") == "AXWindow"]
+    window = _frame(windows[0].get("frame")) if len(windows) == 1 else None
+    by_index, duplicate = {}, set()
+    for element in elements:
+        if isinstance(element, dict) and type(element.get("element_index")) is int:
+            index = element["element_index"]
+            if index in by_index:
+                duplicate.add(index)
+            by_index[index] = element
+    menu_roles = {"AXMenu", "AXMenuBar", "AXMenuItem", "AXMenuBarItem"}
+    annotated = []
+    modal = False
+    for element in elements:
+        if not isinstance(element, dict):
+            annotated.append(element)
+            continue
+        modal |= element.get("role") == "AXSheet" or element.get("modal") is True
+        current, seen, menu, ancestry_unknown = element, set(), False, False
+        while current is not None:
+            if current.get("role") in menu_roles:
+                menu = True
+                break
+            parent = current.get("parent_index")
+            if parent is None:
+                break
+            if type(parent) is not int or parent in seen or parent in duplicate or parent not in by_index:
+                ancestry_unknown = True
+                break
+            seen.add(parent)
+            current = by_index[parent]
+        bounds = _frame(element.get("frame"))
+        geometry = "unknown"
+        if not menu and not ancestry_unknown and window and bounds:
+            x, y, right, bottom = bounds
+            left, top, window_right, window_bottom = window
+            if right <= left or bottom <= top or x >= window_right or y >= window_bottom:
+                geometry = "outside_window"
+            elif x >= left and y >= top and right <= window_right and bottom <= window_bottom:
+                geometry = "inside_window"
+            else:
+                geometry = "partially_visible"
+        copy = dict(element, window_geometry=geometry)
+        if menu:
+            copy["window_geometry_exemption"] = "menu"
+        annotated.append(copy)
+    result["elements"] = annotated
+    result["geometry_note"] = "Window geometry is not proof of visibility or clickability. Avoid targeting outside-window elements; menus are exempt."
+    if modal:
+        result["interaction_hint"] = "An AXSheet or modal element is observed. Inspect and handle that dialog before interacting with the underlying window."
+    return result
 
 
 def validate_inspect_params(params):
@@ -152,14 +219,22 @@ def _observe_backend(params, command, backend, desktop):
         arguments = dict(target)
         if navigation:
             arguments.update(max_nodes=500, max_depth=2 if backend == "cua" else 4)
-        elif backend == "native":
+        elif backend == "native" or mode == "detail":
             arguments.update(max_nodes=500, max_depth=12)
         raw = command(action, arguments).get("result")
         if not isinstance(raw, dict):
             raise ValueError("invalid Cua observation" if backend == "cua" else "invalid Accessibility result")
         # Validate native trees before deciding whether to request another view.
         observation = compact_cua(raw) if backend == "cua" else compact_tree(raw, navigation=navigation)
-        incomplete = raw.get("elements_complete") is False if backend == "cua" else raw.get("truncated") is True
+        incomplete = raw.get("truncated") is True
+        if backend == "cua":
+            # elements_complete=false can mean static text exists only in the
+            # markdown; it does not establish that the AX traversal was cut.
+            markdown = raw.get("tree_markdown")
+            footer = markdown.rstrip().split("\n")[-1] if isinstance(markdown, str) and markdown.strip() else ""
+            incomplete |= raw.get("tree_truncated") is True or bool(
+                re.fullmatch(r"\s*(?:⚠️?\s+)?AX tree truncated at \d+ (?:nodes|elements)(?:[ .(][^\n]*)?", footer)
+            )
         return observation, incomplete
 
     navigation = mode == "navigation"

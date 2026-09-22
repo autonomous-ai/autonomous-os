@@ -123,7 +123,7 @@ class ActionInspectTests(unittest.TestCase):
         self.assertEqual([x[0] for x in self.calls], ["cua_action", "cua_observe"])
         self.assertIs(self.calls[0][1], action)
         self.assertEqual(self.calls[-1][1], {"app": "Calendar", "window_id": 7})
-        self.assertIs(result["inspection"]["observation"], fresh)
+        self.assertEqual(result["inspection"]["observation"]["snapshot_id"], fresh["snapshot_id"])
 
     def test_native_typed_action_observes_without_preflight(self):
         with patch.object(buddy, "command", side_effect=self.command):

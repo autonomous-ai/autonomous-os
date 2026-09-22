@@ -33,6 +33,7 @@ actor CuaObservationStore {
         let window: Int
         let observed: Date
         let tokens: Set<String>
+        let actions: [String: Set<String>]
     }
 
     init(call: @escaping Call) { self.call = call }
@@ -97,7 +98,13 @@ actor CuaObservationStore {
             throw ExecutorError.actionFailed("Cua returned inconsistent element tokens")
         }
         let id = "cua-" + UUID().uuidString
-        snapshot = Snapshot(id: id, pid: pid, window: window, observed: Date(), tokens: tokens)
+        var actions: [String: Set<String>] = [:]
+        for element in elements {
+            if let token = element["element_token"] as? String {
+                actions[token, default: []].formUnion(element["actions"] as? [String] ?? [])
+            }
+        }
+        snapshot = Snapshot(id: id, pid: pid, window: window, observed: Date(), tokens: tokens, actions: actions)
         result["cua_snapshot_id"] = upstream
         result["snapshot_id"] = id
         result["backend"] = "cua"
@@ -121,7 +128,17 @@ actor CuaObservationStore {
                                   "element_token": token, "delivery_mode": "background"]
         let allowed: Set<String>
         switch action {
-        case "click": allowed = ["snapshot_id", "element_token", "ui_action"]
+        case "click":
+            allowed = ["snapshot_id", "element_token", "ui_action", "ax_action"]
+            if let raw = params["ax_action"] {
+                let names = ["press": "AXPress", "show_menu": "AXShowMenu", "pick": "AXPick",
+                             "confirm": "AXConfirm", "cancel": "AXCancel", "open": "AXOpen"]
+                guard let requested = raw as? String, let axName = names[requested],
+                      saved.actions[token]?.contains(axName) == true else {
+                    throw ExecutorError.invalidParam("ax_action must name an action advertised by the observed element")
+                }
+                args["action"] = requested
+            }
         case "type_text":
             allowed = ["snapshot_id", "element_token", "ui_action", "text"]
             guard let text = params["text"] as? String, !text.isEmpty, text.count <= 20_000 else {
@@ -129,7 +146,15 @@ actor CuaObservationStore {
             }
             args["text"] = text
         case "press_key":
-            allowed = ["snapshot_id", "element_token", "ui_action", "key", "modifiers"]
+            allowed = ["snapshot_id", "element_token", "ui_action", "key", "modifiers", "delivery_mode"]
+            if let raw = params["delivery_mode"] {
+                guard let mode = raw as? String, ["background", "foreground"].contains(mode) else {
+                    throw ExecutorError.invalidParam("delivery_mode must be background or foreground")
+                }
+                // Foreground is an explicit single-call escalation. The driver
+                // targets this snapshot's exact window and restores prior focus.
+                args["delivery_mode"] = mode
+            }
             guard let key = params["key"] as? String, !key.isEmpty, key.count <= 32 else {
                 throw ExecutorError.invalidParam("key")
             }

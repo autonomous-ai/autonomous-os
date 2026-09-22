@@ -1,6 +1,7 @@
 """Observation compaction and preflight tests; no desktop/network access."""
 import importlib.util
 import json
+import copy
 from pathlib import Path
 import unittest
 
@@ -97,7 +98,7 @@ class InspectTest(unittest.TestCase):
             return {"result": observation}
         result = inspect.inspect_ui({"app": "Calculator", "window_id": 456}, command)
         self.assertTrue(result["ok"])
-        self.assertIs(result["observation"], observation)
+        self.assertEqual(result["observation"].get("tree_markdown"), observation.get("tree_markdown"))
         self.assertEqual(calls, [("desktop_info", {}),
                                  ("cua_observe", {"app": "Calculator", "window_id": 456})])
 
@@ -111,7 +112,7 @@ class InspectTest(unittest.TestCase):
                 return {"result": {"paused": False, "cua": {"installed": True, "enabled": True}}}
             return {"result": observation}
         result = inspect.inspect_ui({}, command)
-        self.assertIs(result["observation"], observation)
+        self.assertEqual(result["observation"].get("tree_markdown"), observation.get("tree_markdown"))
         self.assertNotIn("snapshot_id", result["observation"])
         self.assertEqual(calls, ["desktop_info", "cua_observe"])
 
@@ -156,7 +157,7 @@ class InspectTest(unittest.TestCase):
                             return {"result": {"paused": False, "accessibility": True,
                                                "cua": {"installed": backend == "cua", "enabled": True}}}
                         token = "fresh" if params.get("max_depth") in (2, 4) else "old"
-                        value = ({"snapshot_id": token, "elements_complete": False, "elements": [{"element_token": token}]}
+                        value = ({"snapshot_id": token, "elements_complete": False, "tree_truncated": True, "elements": [{"element_token": token}]}
                                  if backend == "cua" else dict(tree([node(token, value=token)]), truncated=True))
                         value["snapshot_id"] = token
                         observations.append(value)
@@ -191,7 +192,7 @@ class InspectTest(unittest.TestCase):
                                            "cua": {"installed": backend == "cua", "enabled": True}}}
                     if params.get("max_depth") in (2, 4):
                         raise PermissionError("paused or permission revoked")
-                    return {"result": {"elements_complete": False} if backend == "cua" else dict(tree([]), truncated=True)}
+                    return {"result": {"elements_complete": False, "tree_truncated": True} if backend == "cua" else dict(tree([]), truncated=True)}
                 with self.assertRaises(PermissionError):
                     inspect.inspect_ui({"app": "Calendar"}, command, known_backend=known)
                 self.assertEqual(calls.count("cua_observe" if backend == "cua" else "get_ui_tree"), 2)
@@ -236,8 +237,10 @@ class InspectTest(unittest.TestCase):
         result = inspect.compact_cua(raw)
         self.assertNotIn("_note", result)
         self.assertIn("_note", raw)
-        self.assertEqual(result, {key: value for key, value in raw.items() if key != "_note"})
-        self.assertIs(result["elements"], raw["elements"])
+        for key, value in raw.items():
+            if key not in ("_note", "elements"):
+                self.assertEqual(result[key], value)
+        self.assertEqual({key: value for key, value in result["elements"][0].items() if key != "window_geometry"}, raw["elements"][0])
         self.assertEqual(result["tree_markdown"], raw["tree_markdown"])
 
     def test_cua_note_removed_in_full_navigation_and_auto_outputs(self):
@@ -250,6 +253,108 @@ class InspectTest(unittest.TestCase):
             self.assertNotIn("_note", result["observation"])
             self.assertEqual(result["observation"]["tree_markdown"], "tree-only text")
             self.assertFalse(result["observation"]["elements_complete"])
+
+    def test_cua_geometry_annotations_keep_evidence_and_input_immutable(self):
+        elements = [{"element_index": 0, "role": "AXWindow", "frame": {"x": 10, "y": 20, "w": 100, "h": 100}}]
+        for index, (x, y, w, h) in enumerate(((20, 30, 10, 10), (5, 25, 10, 10), (0, 0, 10, 20)), 1):
+            elements.append({"element_index": index, "element_token": f"s:{index}", "role": "AXButton",
+                             "parent_index": 0, "actions": ["AXPress"], "secure": False,
+                             "frame": {"x": x, "y": y, "w": w, "h": h}})
+        raw = {"elements": elements, "tree_markdown": "2026", "elements_complete": False}
+        before = copy.deepcopy(raw)
+        result = inspect.compact_cua(raw)
+        self.assertEqual([item["window_geometry"] for item in result["elements"]],
+                         ["inside_window", "inside_window", "partially_visible", "outside_window"])
+        for original, annotated in zip(elements, result["elements"]):
+            self.assertEqual({key: value for key, value in annotated.items() if key != "window_geometry"}, original)
+        self.assertEqual(raw, before)
+        self.assertEqual(result["tree_markdown"], "2026")
+        self.assertFalse(result["elements_complete"])
+        self.assertNotIn("interaction_hint", result)
+
+    def test_cua_menu_descendants_exempt_from_window_geometry(self):
+        frame = {"x": 500, "y": 500, "w": 10, "h": 10}
+        raw = {"elements": [
+            {"element_index": 0, "role": "AXWindow", "frame": {"x": 0, "y": 0, "w": 100, "h": 100}},
+            {"element_index": 1, "role": "AXMenuBar", "frame": frame},
+            {"element_index": 2, "role": "AXGroup", "parent_index": 1, "frame": frame},
+            {"element_index": 3, "role": "AXButton", "parent_index": 2, "frame": frame}]}
+        result = inspect.compact_cua(raw)
+        for element in result["elements"][1:]:
+            self.assertEqual(element["window_geometry"], "unknown")
+            self.assertEqual(element["window_geometry_exemption"], "menu")
+
+    def test_cua_bad_geometry_or_ancestry_never_guesses(self):
+        window = {"element_index": 0, "role": "AXWindow", "frame": {"x": 0, "y": 0, "w": 100, "h": 100}}
+        valid = {"x": 5, "y": 5, "w": 10, "h": 10}
+        invalid = [None, {}, {"x": 5, "y": 5, "w": 0, "h": 10},
+                   {"x": True, "y": 5, "w": 10, "h": 10},
+                   {"x": float("nan"), "y": 5, "w": 10, "h": 10},
+                   {"x": float("inf"), "y": 5, "w": 10, "h": 10}]
+        for frame in invalid:
+            result = inspect.compact_cua({"elements": [window, {"frame": frame}]})
+            self.assertEqual(result["elements"][1]["window_geometry"], "unknown")
+        for ancestors in ([{"element_index": 1, "parent_index": 8, "frame": valid}],
+                          [{"element_index": 1, "parent_index": 1, "frame": valid}],
+                          [{"element_index": 1, "parent_index": [], "frame": valid}]):
+            result = inspect.compact_cua({"elements": [window, *ancestors]})
+            self.assertEqual(result["elements"][-1]["window_geometry"], "unknown")
+        for windows in ([], [window, dict(window, element_index=2)], [dict(window, frame={})]):
+            result = inspect.compact_cua({"elements": windows + [{"frame": valid}]})
+            self.assertEqual(result["elements"][-1]["window_geometry"], "unknown")
+
+    def test_cua_sheet_and_explicit_modal_hint_only_from_observation(self):
+        for modal in ({"role": "AXSheet"}, {"role": "AXWindow", "modal": True}):
+            result = inspect.compact_cua({"elements": [modal]})
+            self.assertIn("dialog", result["interaction_hint"])
+        self.assertNotIn("interaction_hint", inspect.compact_cua({"elements": [{"role": "AXWindow", "modal": "true"}]}))
+
+    def test_cua_structured_incomplete_does_not_discard_complete_markdown(self):
+        for known in (None, "cua"):
+            calls = []
+            raw = {"snapshot_id": "full", "elements_complete": False, "total_element_count": 151,
+                   "returned_element_count": 151, "elements": [],
+                   "tree_markdown": '- AXStaticText "December 31, 2026: meeting"'}
+            def command(action, params):
+                calls.append((action, params))
+                if action == "desktop_info":
+                    return {"result": {"paused": False, "cua": {"installed": True, "enabled": True}}}
+                return {"result": raw}
+            result = inspect.inspect_ui({"app": "Calendar"}, command, known_backend=known)
+            self.assertEqual([action for action, _ in calls].count("cua_observe"), 1)
+            self.assertEqual(calls[-1][1], {"app": "Calendar"})
+            self.assertEqual(result["observation"]["tree_markdown"], raw["tree_markdown"])
+            self.assertFalse(result["observation"]["elements_complete"])
+            self.assertFalse(result["navigation_only"])
+
+    def test_cua_explicit_truncation_sources_trigger_only_one_overview(self):
+        for marker in ({"truncated": True}, {"tree_truncated": True},
+                       {"tree_markdown": "- AXStaticText value\nAX tree truncated at 150 elements"},
+                       {"tree_markdown": "- AXStaticText value\n\n⚠️  AX tree truncated at 150 nodes (app has a very large accessibility tree — Arc, Electron, or similar). Element indices above are still valid. Use pixel clicks for elements not visible in this partial tree.\n"}):
+            calls = []
+            def command(action, params):
+                calls.append(params)
+                return {"result": dict(marker, snapshot_id=str(len(calls)), elements=[])}
+            result = inspect.inspect_ui({}, command, known_backend="cua")
+            self.assertEqual(calls, [{}, {"max_nodes": 500, "max_depth": 2}])
+            self.assertEqual(result["observation"]["snapshot_id"], "2")
+            self.assertTrue(result["navigation_only"])
+
+    def test_cua_detail_uses_full_bounds_and_never_auto_overviews(self):
+        calls = []
+        def command(action, params):
+            calls.append(params)
+            return {"result": {"elements": [], "tree_truncated": True}}
+        inspect.inspect_ui({"app": "Calendar", "mode": "detail", "window_id": 7}, command, known_backend="cua")
+        self.assertEqual(calls, [{"app": "Calendar", "window_id": 7, "max_nodes": 500, "max_depth": 12}])
+
+    def test_cua_truncation_words_inside_ui_text_do_not_trigger_overview(self):
+        calls = []
+        def command(action, params):
+            calls.append(params)
+            return {"result": {"elements": [], "tree_markdown": '- AXStaticText "AX tree truncated at 150 elements"'}}
+        inspect.inspect_ui({}, command, known_backend="cua")
+        self.assertEqual(len(calls), 1)
 
     def test_invalid_mode_is_rejected_before_any_command(self):
         for mode in (None, "other", {}, [], 1):

@@ -31,6 +31,7 @@ final class CuaObservationTests: XCTestCase {
     actor Driver {
         var mutations = 0
         var failMutation = false
+        var lastArguments: [String: Any] = [:]
         var windows: [[String: Any]] = [["window_id": 11, "title": "Calculator"]]
         func fail() { failMutation = true }
         func multipleWindows() { windows.append(["window_id": 12, "title": "Another document"]) }
@@ -38,13 +39,13 @@ final class CuaObservationTests: XCTestCase {
             if tool == "list_windows" { return ["windows": windows] }
             if tool == "get_window_state" {
                 return ["pid": 123, "window_id": 11, "snapshot_id": "s00000001",
-                        "elements": [["element_token": "s00000001:2", "label": "2"]],
+                        "elements": [["element_token": "s00000001:2", "label": "2", "actions": ["AXOpen"]]],
                         "tree_markdown": "AXStaticText = 4", "elements_complete": true]
             }
             mutations += 1
+            lastArguments = args
             XCTAssertEqual(args["pid"] as? Int, 123)
             XCTAssertEqual(args["window_id"] as? Int, 11)
-            XCTAssertEqual(args["delivery_mode"] as? String, "background")
             if failMutation { throw ExecutorError.actionFailed("uncertain") }
             return ["effect": "unverifiable"]
         }
@@ -61,6 +62,58 @@ final class CuaObservationTests: XCTestCase {
         do { _ = try await store.perform(params: params); XCTFail("replayed consumed snapshot") } catch {}
         let count = await driver.mutations
         XCTAssertEqual(count, 1)
+        let arguments = await driver.lastArguments
+        XCTAssertEqual(arguments["delivery_mode"] as? String, "background")
+        XCTAssertNil(arguments["action"])
+    }
+
+    func testExplicitAXOpenAndForegroundKeyAreBoundToObservedWindow() async throws {
+        let driver = Driver()
+        let store = CuaObservationStore { try await driver.call($0, $1) }
+        for extra: [String: Any] in [["ui_action": "click", "ax_action": "open"],
+                                    ["ui_action": "press_key", "key": "l", "modifiers": ["cmd"], "delivery_mode": "foreground"]] {
+            let observed = try await store.observe(pid: 123, params: [:])
+            var params: [String: Any] = ["snapshot_id": observed["snapshot_id"]!, "element_token": "s00000001:2"]
+            params.merge(extra) { _, new in new }
+            _ = try await store.perform(params: params)
+            let arguments = await driver.lastArguments
+            XCTAssertEqual(arguments["pid"] as? Int, 123)
+            XCTAssertEqual(arguments["window_id"] as? Int, 11)
+            if extra["ui_action"] as? String == "click" {
+                XCTAssertEqual(arguments["action"] as? String, "open")
+                XCTAssertEqual(arguments["delivery_mode"] as? String, "background")
+            } else {
+                XCTAssertEqual(arguments["delivery_mode"] as? String, "foreground")
+                XCTAssertEqual(arguments["key"] as? String, "l")
+                XCTAssertEqual(arguments["modifiers"] as? [String], ["cmd"])
+            }
+            do { _ = try await store.perform(params: params); XCTFail("replayed explicit action") } catch {}
+        }
+        let count = await driver.mutations
+        XCTAssertEqual(count, 2)
+    }
+
+    func testExplicitActionOptionsRejectInvalidOrUnadvertisedValues() async throws {
+        let driver = Driver()
+        let store = CuaObservationStore { try await driver.call($0, $1) }
+        let observed = try await store.observe(pid: 123, params: [:])
+        let invalid: [[String: Any]] = [
+            ["ui_action": "click", "ax_action": "press"],
+            ["ui_action": "click", "ax_action": "arbitrary"],
+            ["ui_action": "click", "ax_action": 1],
+            ["ui_action": "click", "delivery_mode": "foreground"],
+            ["ui_action": "type_text", "text": "x", "ax_action": "open"],
+            ["ui_action": "press_key", "key": "l", "delivery_mode": "global"],
+            ["ui_action": "press_key", "key": "l", "delivery_mode": true],
+            ["ui_action": "press_key", "key": "l", "delivery_mode": "foreground", "window_id": 99],
+        ]
+        for extra in invalid {
+            var params: [String: Any] = ["snapshot_id": observed["snapshot_id"]!, "element_token": "s00000001:2"]
+            params.merge(extra) { _, new in new }
+            do { _ = try await store.perform(params: params); XCTFail("accepted invalid options: \(extra)") } catch {}
+        }
+        let count = await driver.mutations
+        XCTAssertEqual(count, 0)
     }
 
     func testNewObservationAndExplicitInvalidationRejectOldReferences() async throws {
