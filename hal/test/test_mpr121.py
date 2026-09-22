@@ -172,7 +172,7 @@ class TestMPR121(unittest.TestCase):
             self.assertIn(mock.call(0x5A, 0x42 + electrode * 2, 1), calls)
         for register, value in ((0x2F, 1), (0x30, 1), (0x31, 0xFF), (0x32, 0x02),
                                 (0x33, 0), (0x34, 0), (0x35, 0),
-                                (0x5B, 0), (0x5C, 0x10), (0x5D, 0x20),
+                                (0x5B, 0), (0x5C, 0x10), (0x5D, 0x30),
                                 (0x7D, 200), (0x7F, 180), (0x7E, 130), (0x7B, 0x0B)):
             self.assertIn(mock.call(0x5A, register, value), calls)
         self.assertEqual(calls[-1], mock.call(0x5A, 0x5E, 0x8F))

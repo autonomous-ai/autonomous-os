@@ -297,9 +297,18 @@ Driver đặt bộ lọc baseline chiều xuống (`0x2F`–`0x32`) thành
 [giá trị quick-start NXP AN3944](https://www.nxp.com/docs/en/application-note/AN3944.pdf).
 Thiết lập này làm chậm baseline khi giảm để tránh bám nhanh theo ngón tay
 đang tiếp cận. Bộ lọc baseline chiều lên và khi đang chạm giữ nguyên.
-HAL đặt các register này, không cấu hình qua `mpr121.json`; chỉ đổi ngưỡng
-chạm không làm thay đổi cách baseline bám tín hiệu. Khi chỉnh ngưỡng, kiểm
-tra độ ổn định lúc không chạm, tap, giữ và vuốt trên các pad đã lắp.
+`CONFIG2` (`0x5D`) là `0x30`: thời gian nạp 0,5 µs, bộ lọc cấp hai 10 mẫu
+(`SFI=2`) và chu kỳ lấy mẫu 1 ms, nên dữ liệu electrode cập nhật mỗi ~10 ms,
+khớp với chu kỳ poll 10 ms. Bộ lọc 10 mẫu giảm nửa nhiễu nền so với mặc định
+4 mẫu (đo trên `lamp-52e6`: 2 → 1 count). Debounce trên chip (`0x5B`) giữ 0:
+debounce contact (30 ms) và footprint vuốt (5 ms) làm ở phần mềm, còn debounce
+trên chip sẽ làm mọi footprint trễ hai mẫu. HAL đặt các register này, không
+cấu hình qua `mpr121.json`; chỉ đổi ngưỡng chạm không làm thay đổi bộ lọc.
+Khi chỉnh ngưỡng, kiểm tra độ ổn định lúc không chạm, tap, giữ và vuốt trên
+các pad đã lắp; `robots/lamp/hardware/touch-cap/mpr121_opi_test.py` nạp chip
+giống HAL khi chạy với `--debounce 0 --sfi 2 --esi 0` (`calibrate` đo nhiễu
+nền và đề xuất ngưỡng, `test --verbose` in thời gian giữ từng lần chạm,
+`trace` in filtered/baseline từng mẫu). Dừng HAL trước; HAL giữ bus.
 
 Thiếu file, thiếu entry board, hoặc `"enabled": false` thì bỏ qua MPR121 và
 giữ các handler GPIO/TTP223 hiện có. Không có bus MPR121 cũ để fallback.
