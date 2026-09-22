@@ -1012,14 +1012,24 @@ would map them 1:1 and round-trip cleanly. (See the fold-vs-move rule in
 > contract, the install/presync pattern, migration, skills, hooks, reset, and the
 > full checklist.
 
-## 13. Optional Jev skill suggestions
+## 13. Optional Jev skill preloading
 
-The OS-managed `jev` plugin suggests one installed skill before a
-Hermes user turn's first model call. It uses Hermes's `pre_llm_call` hook; it does
-not execute tools, load skills, select models, or filter memory. The returned
-context suggests `skill_view(name=...)`; Hermes must still assess relevance and
-follow normal permissions and mandatory connector/platform rules. The hint may
-remain in conversation context.
+The OS-managed `jev` plugin selects one installed skill before a Hermes user
+turn's first model call through the `pre_llm_call` hook. On an accepted decision,
+it revalidates the skill against the live eligible catalog and loads its content
+through native `tools.skills_tool.skill_view(name, task_id, preprocess=False)`.
+The skill is injected into ephemeral context for the current turn, so Hermes
+receives its instructions without first having to choose and call `skill_view`.
+This changes the plugin only, not Hermes core. Loading instructions does not
+execute the skill's actions, authorize tools, or bypass mandatory
+connector/platform rules and permission checks.
+
+Preloading fails open to normal Hermes discovery if the selected skill is
+missing or disabled, the native API is unsupported, reading fails, or the native
+JSON result exceeds 128 KiB. Shell preprocessing is disabled; skills containing
+dynamic shell snippets (an exclamation mark followed by a backtick-delimited
+command) also fail open. Timeout results cannot be attached to a later turn.
+System notices prefixed with `[system]` bypass routing and preloading.
 
 ### Installation on existing devices
 
@@ -1078,42 +1088,45 @@ using Hermes's native `agent.skill_utils` helpers: `iter_skill_index_files`,
 name hiding an OS skill behind a bundled skill with the same name. Other bundled,
 authored, and plugin skill categories are excluded. Metadata reads are bounded;
 conversation history and skill bodies are not sent. Each candidate description
-is capped at 500 characters. Suggested `skill_view` lookups use the qualified
+is capped at 500 characters. Native `skill_view` lookups use the qualified
 `openclaw-imports/<relative directory>` path to avoid name collisions.
 
 If there are more than 32 eligible candidates, the router skips Jev entirely
 rather than truncating the catalog. Empty messages, messages over 8,000 UTF-8
-bytes, slash commands, and explicit `[skills:...]` selections also bypass the
+bytes, slash commands, `[system]` notices, and explicit `[skills:...]` selections also bypass the
 router. The catalog worker inherits the current Hermes context so
-session/platform skill filters still apply. This is an advisory experiment for
+session/platform skill filters still apply. This preloading experiment covers
 OS platform skills; normal Hermes discovery continues to handle other skills.
 
-A suggestion requires choice probability at least 0.70, a margin of at least
+A selection requires choice probability at least 0.70, a margin of at least
 0.20 over the runner-up, and fit at least 0.60. These are provisional thresholds
-for advisory skill selection, not action authorization; skill and platform
+for skill preloading, not action authorization; skill and platform
 permission checks still apply. Buddy and OS intent thresholds remain unchanged
 at choice 0.90, margin 0.40, and fit 0.95. Uncertain or invalid decisions leave
 normal Hermes behavior unchanged. The decision wait is temporarily hardcoded to 3 seconds for proxy validation before latency tuning; there are no retries or redirects. An error or timeout starts
 a 30-second cooldown. One worker per router is allowed; a busy router bypasses
 immediately. A timed-out worker may finish its request in the background, but
-its late result cannot inject a hint.
+its late result cannot inject skill content. HTTP 429 follows the same fallback
+and 30-second cooldown; no provider error body or `Retry-After` diagnostics are
+added by preloading.
 
-Structured logs distinguish successful suggestions from valid abstentions and
+Structured logs distinguish accepted selections from valid abstentions and
 failures instead of grouping them as `deferred`:
 
 | Outcome | Meaning / reason |
 |---|---|
-| `suggested` | A valid decision passed all acceptance thresholds |
+| `preloaded` | A valid decision passed all acceptance thresholds and native skill content was loaded for this turn |
 | `abstained` | A valid decision selected `none` or failed `low_choice`, `low_margin`, or `low_fit` |
-| `error` | `http_error`, `network_error`, `invalid_json`, `response_too_large`, `provider_error`, `invalid_schema`, `catalog_error`, `thread_error`, or `config_error` |
-| `skipped` | `disabled`, `invalid_message`, `explicit_selection`, `unconfigured`, `cooldown`, `busy`, or `no_candidates` |
+| `error` | `http_error`, `network_error`, `invalid_json`, `response_too_large`, `provider_error`, `invalid_schema`, `catalog_error`, `thread_error`, `config_error`, `skill_unavailable`, `skill_load_failed`, or `preload_timeout` |
+| `skipped` | `disabled`, `invalid_message`, `explicit_selection`, `system_message`, `unconfigured`, `cooldown`, `busy`, or `no_candidates` |
 | `timeout` | The decision wait budget expired |
 
-Logs include `decision_ms`, and `catalog_ms` / `request_ms` when available;
+Logs include total `decision_ms`, and `catalog_ms`, `request_ms`, and native
+`load_ms` when available;
 `request_ms` measures the full proxy round trip, not model inference alone.
 Valid decisions include numeric `choice_probability`, `margin`, and `fit` where
 applicable. `candidate` records the qualified selected name even when a valid
-decision is rejected, or `none` when no skill was chosen; accepted suggestions
+decision is rejected, or `none` when no skill was chosen; accepted selections
 also include `skill`. HTTP errors include `http_status`. Logs exclude prompts, credentials,
 response bodies, and exception text.
 
@@ -1142,17 +1155,17 @@ based on the [TypeSafe skill-suggestion cookbook](https://docs.typesafe.ai/cookb
 
 | Area | Reference plugin | OS plugin |
 |---|---|---|
-| Hook | `pre_llm_call`, returns optional user-message context | Same hook and return shape; no system-prompt modification |
+| Hook | `pre_llm_call`, returns optional user-message context | Same hook; accepted skill content is loaded natively into ephemeral current-turn context; no system-prompt modification |
 | Skill data | Filesystem roster; shortlist receives full descriptions and up to 700 body characters | Bounded metadata from `openclaw-imports` files with native Hermes eligibility filters, descriptions capped at 500 characters, no body text; qualified skill lookup avoids name collisions |
 | Decision | Stage 1 ranks and gates skill need; stage 2 reranks a shortlist of 3 (per chunk) | One request with choice, `none`, and per-candidate fit |
 | Large catalogs | Splits into chunks of 240 choices | Skips when more than 32 eligible skills |
-| Acceptance | Catalog pin: gate 0.30 and winner fit 0.40; newer upstream also arbitrates disagreeing choice/fit signals | Choice 0.70, margin 0.20, fit 0.60; provisional advisory thresholds, uncalibrated for this workload |
+| Acceptance | Catalog pin: gate 0.30 and winner fit 0.40; newer upstream also arbitrates disagreeing choice/fit signals | Choice 0.70, margin 0.20, fit 0.60; provisional preloading thresholds, uncalibrated for this workload |
 | Latency | Default hook budget 10 seconds, answer cache and retry-capable client | Temporary 3-second diagnostic budget, no retries/cache, busy bypass and cooldown |
 | Credentials | TypeSafe API with separate key | Shared OS proxy credentials |
 
 The OS implementation is a narrower experiment, not an equivalent implementation
 of the two-stage recipe. Its provisional thresholds and shorter deadline may suppress
-useful suggestions; mock tests and limited synthetic probes cannot establish
+useful selections; mock tests and limited synthetic probes cannot establish
 calibrated routing accuracy or coverage.
 Do not transfer the reference's benchmark results to this plugin. To evaluate
 the enabled experiment, compare both policies on the same representative requests and installed roster,
