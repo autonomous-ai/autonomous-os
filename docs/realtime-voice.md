@@ -2366,6 +2366,17 @@ Read the counters in the session-END log line: `substituted` at ~100 % of
    filler timer. Its delay and ownership remain unchanged; silence endpointing
    remains 0.8s after STT final, with the separately configured fallback clock.
 
+   In hands-free LIVE OFF capture, optional interruptible speech (OS fillers and
+   gesture cues, excluding agent replies and realtime-owned audio) cannot claim
+   TTS from before STT connection until microphone capture ends. Otherwise a
+   delayed filler sets `speaking` and the echo guard terminates the user's next
+   sentence with `tts_started`. The reservation is released before STT final
+   drain and on every early return/error, so processing feedback can still play
+   after capture. Button listening-cue retries expire if a capture starts; they
+   must not reappear after the user finishes. LIVE ON and manual Harness capture
+   retain their existing behavior. This does not change the metric clock or
+   remove the wait for the final STT transcript.
+
    **The verdict is cached.** Recognition used to run once per turn, every turn:
    a ten-turn conversation paid for ten external calls to be told the same name.
    `SpeakerDecorator` now reuses the last verdict for `SPEAKER_ID_CACHE_S`

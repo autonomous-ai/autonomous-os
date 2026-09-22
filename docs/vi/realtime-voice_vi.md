@@ -2312,6 +2312,16 @@ liên tục đồng ý.
    Delay và ownership giữ nguyên; endpoint im lặng vẫn là 0.8s sau STT final,
    cùng ngưỡng fallback được cấu hình riêng.
 
+   Trong capture hands-free LIVE OFF, speech phụ có thể ngắt (filler từ OS và
+   cue của gesture, không gồm câu trả lời agent hay audio thuộc realtime) không
+   được chiếm TTS từ trước khi kết nối STT đến khi ngừng thu mic. Nếu không,
+   filler đến trễ đặt `speaking` và echo guard cắt câu mới của user với endpoint
+   `tts_started`. Quyền giữ capture được nhả trước khi chờ STT trả transcript cuối
+   và ở mọi nhánh thoát sớm/lỗi, nên filler lúc xử lý vẫn phát được sau capture.
+   Retry câu listening của nút hết hiệu lực nếu capture bắt đầu; không được phát
+   lại sau khi user nói xong. LIVE ON và capture Harness thủ công giữ hành vi
+   hiện tại. Thay đổi này không sửa mốc đo metric hay bỏ việc chờ transcript STT cuối.
+
    **Kết quả được cache.** Trước đây nhận dạng chạy mỗi lượt, lượt nào cũng chạy:
    một cuộc mười lượt trả tiền mười lần gọi ra ngoài để nghe đúng một cái tên.
    `SpeakerDecorator` giờ dùng lại kết quả gần nhất trong `SPEAKER_ID_CACHE_S`

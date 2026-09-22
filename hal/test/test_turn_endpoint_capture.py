@@ -1,5 +1,6 @@
 """Exercise hands-free endpoint policy through the real microphone capture loop."""
 from contextlib import contextmanager
+import threading
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -8,7 +9,8 @@ import pytest
 
 
 @contextmanager
-def capture(monkeypatch, frames, *, realtime=False, enabled=True, detector=None, legacy_limit=20):
+def capture(monkeypatch, frames, *, realtime=False, enabled=True, detector=None, legacy_limit=20,
+            tts=None, on_read=None, on_close=None, on_connect=None):
     """Feed (elapsed seconds, speech energy, final transcript) without hardware."""
     from hal.drivers.voice import voice_service as module
 
@@ -18,6 +20,9 @@ def capture(monkeypatch, frames, *, realtime=False, enabled=True, detector=None,
     service._np = np
     service._tts = Mock(last_spoken_text="")
     service._tts_is_speaking.return_value = False
+    if tts is not None:
+        service._tts = tts
+        service._tts_is_speaking.side_effect = lambda: tts.speaking
     service._music_is_playing.return_value = False
     service._turn_detector = detector
     service._realtime.available = True
@@ -27,6 +32,28 @@ def capture(monkeypatch, frames, *, realtime=False, enabled=True, detector=None,
     service._decorator.identify_and_decorate.side_effect = lambda text, *a, **kw: (text, None, None)
     stt = Mock()
     stt.is_closed.return_value = False
+    stt.close.side_effect = on_close
+    if on_connect is not None:
+        service._stt.create_session.return_value = stt
+
+        def start(callback):
+            stt._on_transcript_cb = callback
+            on_connect()
+            return True
+
+        stt.start.side_effect = start
+
+        class ConnectWorker:
+            def __init__(self, target, **_):
+                self.target = target
+
+            def start(self):
+                self.target()
+
+            def is_alive(self):
+                return False
+
+        monkeypatch.setattr(module, "threading", SimpleNamespace(Thread=ConnectWorker, Event=threading.Event))
     remaining = iter(frames)
     consumed = []
 
@@ -37,6 +64,8 @@ def capture(monkeypatch, frames, *, realtime=False, enabled=True, detector=None,
             pytest.fail("Capture read beyond its expected endpoint")
         clock[0] = 1000.0 + elapsed
         consumed.append(elapsed)
+        if on_read is not None:
+            on_read(elapsed)
         if transcript:
             stt._on_transcript_cb(transcript, True)
         return np.full((1024, 1), 10000 if speech else 0, dtype=np.int16), False
@@ -63,7 +92,7 @@ def capture(monkeypatch, frames, *, realtime=False, enabled=True, detector=None,
          patch("hal.drivers.tracking.gaze.on_speech_end"):
         module.VoiceService._stream_session(
             service, mic, 1024, 16000,
-            preconnected_session=stt, harness_voice={"enabled": False},
+            preconnected_session=stt if on_connect is None else None, harness_voice={"enabled": False},
         )
         yield SimpleNamespace(service=service, stt=stt, dispatch=dispatch,
                               realtime=rt, metrics=metrics, consumed=consumed)

@@ -1931,6 +1931,30 @@ class VoiceService:
     # STT streaming session — fires while user is speaking
     # ------------------------------------------------------------------
     def _stream_session(
+        self, mic, frame_size: int, device_rate: int,
+        preconnected_session=None, speech_pre_buffer=None,
+        pending_listening_cue_id=None, harness_voice=None, manual_capture=None,
+    ):
+        # Reserve before connecting STT, not just while _listening is True:
+        # a delayed cue/filler can otherwise cut off the buffered opening words.
+        tts = self._tts
+        reserve = getattr(tts, "begin_input_capture", None)
+        token = reserve() if reserve and not voice_cfg.LIVE_MODE and manual_capture is None else None
+
+        def release_input():
+            if token is not None:
+                tts.end_input_capture(token)
+
+        try:
+            return VoiceService._stream_session_impl(
+                self, mic, frame_size, device_rate, preconnected_session,
+                speech_pre_buffer, pending_listening_cue_id, harness_voice,
+                manual_capture, release_input,
+            )
+        finally:
+            release_input()
+
+    def _stream_session_impl(
         self,
         mic,
         frame_size: int,
@@ -1940,6 +1964,7 @@ class VoiceService:
         pending_listening_cue_id=None,
         harness_voice=None,
         manual_capture=None,
+        release_input=lambda: None,
     ):
         """Stream audio to STT provider until silence or TTS interrupts.
 
@@ -2643,6 +2668,9 @@ class VoiceService:
         finally:
             self._backchannel.reset()
             self._listening = False
+            # No more microphone frames will be captured. Processing feedback
+            # may now speak while the STT provider drains its final transcript.
+            release_input()
             if manual_capture is not None:
                 from hal.drivers.harness.led import set_capturing
 

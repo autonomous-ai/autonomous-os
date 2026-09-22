@@ -123,6 +123,11 @@ Khi Harness OFF, MPR121 cũng hỗ trợ giữ rồi nhả để thực hiện a
 
 ## Cắt Lamp giữa câu (barge-in)
 
+Ở chế độ hands-free LIVE OFF, cue listening đến trễ bị bỏ nếu capture mic đã
+bắt đầu. Retry cũng hết hiệu lực khi capture bắt đầu trong lúc chờ, kể cả nếu
+capture đã kết thúc trước lần thử tiếp theo. Nhờ vậy cue không cắt câu user;
+cú click vẫn dừng speech và cấp wake focus như trước.
+
 Cử chỉ 1 chạm là **cơ chế barge-in và huỷ attention chính** của Lamp: trước hết nó dừng mọi session object tracking đang chạy; sau đó chạm đỉnh Lamp (touchpad) hoặc nhấn nút GPIO một lần khi Lamp đang nói → cắt câu TTS đang phát giữa chừng, dừng nhạc, unmute mic để Lamp lắng nghe câu kế. Nếu loa đang bị mute bởi user/scene thì cũng được gỡ (trừ khi đang ghi âm enroll giọng) để cue và câu trả lời nghe lại được. Dừng tracking vẫn hoạt động khi hardware mic kill switch đang tắt; nó không wake hoặc unmute mic. Cue "Nghe đây" (theo ngôn ngữ) chỉ phát khi switch cho phép action voice.
 
 Khi wake word đang bật, cú click cũng **được tính như một wake event**: `single_click_action` gọi `voice_service.grant_wakeword_focus(source)`, mở đúng cửa sổ follow-up focus (`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, mặc định 20 s) mà câu wake phrase mở ra. Không có nó thì thiết bị nói "Nghe đây" rồi lại bỏ câu trả lời của user vì thiếu wake phrase. Cửa sổ được kiểm tra lại ở thời điểm dispatch, không chỉ latch lúc mở mic session, nên click giữa lúc session đang chạy vẫn authorize câu user đang nói. No-op khi wake word tắt (mọi câu đã dispatch sẵn) hoặc timeout follow-up = 0.

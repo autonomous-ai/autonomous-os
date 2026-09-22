@@ -130,6 +130,12 @@ With Harness OFF, MPR121 also supports release-to-commit holds and the same hold
 
 ## Interrupting Lamp while it speaks (barge-in)
 
+In hands-free LIVE OFF mode, a delayed listening cue is dropped if microphone
+capture has already started. Its retry also expires when a capture starts during
+backoff, even if that capture finishes before the next attempt. This keeps the
+cue from truncating the user's sentence; the click still stops speech and grants
+wake focus normally.
+
 The 1-tap gesture is Lamp's primary **barge-in and attention-cancel mechanism**: it first stops any active object-tracking session, then tap top of Lamp (touchpad) or press the GPIO button once during an in-flight TTS to cancel the current utterance mid-word, stop any music, and unmute the mic so Lamp listens for the next thing the user says. A user/scene speaker mute is also relaxed (unless a voice enrollment is recording) so the cue and the reply are audible again. Stopping tracking also works while the hardware mic kill switch is off; it does not wake or unmute the mic. A localized "Listening" cue plays after the cancel when the switch permits the voice action.
 
 When wake word is enabled, the click also **counts as a wake event**: `single_click_action` calls `voice_service.grant_wakeword_focus(source)`, which opens the same follow-up focus window (`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, default 20 s) a spoken wake phrase opens. Without it the device would announce "Listening" and then drop the user's answer for missing the wake phrase. The window is re-checked at dispatch time, not only latched at mic-session start, so a click during an already-open session still authorizes the sentence being spoken. No-op when wake word is off (every utterance already dispatches) or when the follow-up timeout is 0.

@@ -283,6 +283,9 @@ class TTSService:
         self._speed = max(0.25, min(4.0, speed))
         self._instructions = instructions
         self._lock = threading.Lock()
+        self._input_capture_lock = threading.RLock()
+        self._input_captures: set[object] = set()
+        self._input_capture_generation = 0
         self._speaking = False
         self._interruptible = False
         # Queues the active _speak_sync is draining, so stop() can wake a
@@ -934,6 +937,60 @@ class TTSService:
             logger.exception("suppression check failed")
             return False
 
+    def begin_input_capture(self):
+        """Reserve user input against optional speech, before STT connects."""
+        token = object()
+        with self._input_capture_lock:
+            self._input_captures.add(token)
+            self._input_capture_generation += 1
+        return token
+
+    def end_input_capture(self, token) -> None:
+        """Release a reservation; safe on both endpoint and exception cleanup."""
+        with self._input_capture_lock:
+            self._input_captures.discard(token)
+
+    @property
+    def input_capture_state(self):
+        """Active capture and generation, for dropping delayed gesture cues."""
+        with self._input_capture_lock:
+            return bool(self._input_captures), self._input_capture_generation
+
+    def prepare_listening_cue(self, expected_state) -> bool:
+        """Drop stale cues before they can stop speech for a newer capture."""
+        with self._input_capture_lock:
+            if self.input_capture_state != expected_state or self._input_captures:
+                return False
+            self.stop()
+            return True
+
+    def _claim_speech(self, text, interruptible, realtime_feedback, turn_id, realtime_reply):
+        """Called with the TTS lock held; serialize admission with user capture.
+
+        Optional cues/fillers can be dropped. Answers and realtime-owned audio
+        retain their existing ownership, stop, and echo behavior.
+        """
+        from contextlib import nullcontext
+
+        with getattr(self, "_input_capture_lock", None) or nullcontext():
+            if self._optional_speech_blocked(text, interruptible, realtime_feedback, realtime_reply):
+                self._lock.release()
+                return False
+            self._stop_event.clear()
+            self._speaking = True
+            self._interruptible = interruptible
+            self._last_spoken_text = text
+            self._realtime_feedback = realtime_feedback
+            self._begin_playback(f"run:{turn_id}" if turn_id else "", realtime_reply)
+            return True
+
+    def _optional_speech_blocked(self, text, interruptible, realtime_feedback, realtime_reply):
+        if (interruptible and not realtime_feedback and not realtime_reply
+                and getattr(self, "_input_captures", None)):
+            logger.info("TTS optional speech dropped -- user capture active: %s", text[:50])
+            return True
+        return False
+
     def speak(self, text: str, interruptible: bool = False, realtime_feedback: bool = False,
               turn_id: str = "", realtime_reply: bool = False) -> bool:
         """Synthesize and play text. Returns True if started, False if busy or unavailable.
@@ -942,6 +999,8 @@ class TTSService:
         (agent replies only — see _realtime_feedback)."""
         if not self.available:
             logger.warning("TTS not available")
+            return False
+        if self._optional_speech_blocked(text, interruptible, realtime_feedback, realtime_reply):
             return False
 
         if self._speaker_muted():
@@ -978,16 +1037,8 @@ class TTSService:
                 logger.info("TTS busy, skipping: %s", text[:50])
                 return False
 
-        # Clear any leftover stop signal from a previous stop() call
-        self._stop_event.clear()
-
-        # Mark speaking IMMEDIATELY so VoiceService stops streaming to Deepgram
-        # before TTS API call (which can take 3-5s)
-        self._speaking = True
-        self._interruptible = interruptible
-        self._last_spoken_text = text
-        self._realtime_feedback = realtime_feedback
-        self._begin_playback(f"run:{turn_id}" if turn_id else "", realtime_reply)
+        if not self._claim_speech(text, interruptible, realtime_feedback, turn_id, realtime_reply):
+            return False
 
         thread = threading.Thread(
             target=self._speak_sync,
@@ -2069,6 +2120,10 @@ class TTSService:
         if not self.available:
             logger.warning("TTS not available (cached path)")
             return False
+        if not prerender and self._optional_speech_blocked(
+            text, interruptible, realtime_feedback, realtime_reply,
+        ):
+            return False
 
         # Prerender only warms the cache (no playback), so it is NOT muted.
         if not prerender and self._speaker_muted():
@@ -2107,12 +2162,8 @@ class TTSService:
                 logger.info("TTS busy, skipping cached: %s", text[:50])
                 return False
 
-        self._stop_event.clear()
-        self._speaking = True
-        self._interruptible = interruptible
-        self._last_spoken_text = text
-        self._realtime_feedback = realtime_feedback
-        self._begin_playback(f"run:{turn_id}" if turn_id else "", realtime_reply)
+        if not self._claim_speech(text, interruptible, realtime_feedback, turn_id, realtime_reply):
+            return False
 
         threading.Thread(
             target=self._cached_play_thread,
