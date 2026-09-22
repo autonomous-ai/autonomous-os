@@ -68,6 +68,29 @@ class TransportTests(MockServerCase):
             self.send(action, {"app": "Calendar", "max_nodes": 500, "max_depth": 30})
         self.assertEqual(len(self.server.requests), 2)
 
+    def test_cua_validation_rejects_trace_mistakes_without_network(self):
+        base = {"snapshot_id": "cua-observed", "element_token": "s1:0", "ui_action": "press_key", "key": "t"}
+        bad = [dict(base, window_id=61920), dict(base, ui_action="hotkey"),
+               dict(base, key=""), dict(base, modifiers="cmd"), dict(base, modifiers=[{}]),
+               dict(base, delivery_mode="automatic"), dict(base, pid=123),
+               {"snapshot_id": "cua-observed", "window_id": 61920, "ui_action": "press_key", "key": "t"},
+               {"snapshot_id": "cua-observed", "element_token": "s1:0", "ui_action": "type_text", "text": ""},
+               {"snapshot_id": "cua-observed", "element_token": "s1:0", "ui_action": "click", "ax_action": "unknown"}]
+        for params in bad:
+            with self.subTest(params=params), self.assertRaises(buddy.BuddyValidationError):
+                self.send("cua_action", params)
+        self.assertEqual(self.server.requests, [])
+
+    def test_valid_cua_actions_forward_exactly_once_without_rewriting(self):
+        base = {"snapshot_id": "cua-observed", "element_token": "s1:0"}
+        for extra in ({"ui_action": "click", "ax_action": "open"},
+                      {"ui_action": "press_key", "key": "t", "modifiers": ["cmd", "shift"], "delivery_mode": "foreground"},
+                      {"ui_action": "type_text", "text": "Ngày 31/12/2026"}):
+            params = dict(base, **extra)
+            self.send("cua_action", params)
+            self.assertEqual(self.server.requests[-1]["params"], params)
+        self.assertEqual(len(self.server.requests), 3)
+
     def test_command_preserves_unicode_nested_params_and_cancellation_id(self):
         params = {"from": {"x": -20, "y": 7}, "text": "Tiếng Việt `$(private)`\n"}
         response = self.send("drag", params, command_id="known-unique-id", timeout_ms=60000)

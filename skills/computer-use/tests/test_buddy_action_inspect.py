@@ -55,6 +55,18 @@ class ActionInspectTests(unittest.TestCase):
         self.assertGreaterEqual(result["timing"]["elapsed_ms"], 0)
         self.assertEqual(self.calls[0][2]["command_id"], "action-id")
 
+    def test_unverified_dispatch_points_to_inspection_without_retry(self):
+        for effect in ("suspected_noop", "unverifiable"):
+            self.calls = []
+            self.action_response["result"] = {"effect": effect}
+            with patch.object(buddy, "command", side_effect=self.command):
+                result = self.run_action()
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["action"]["result"]["effect"], effect)
+            self.assertIn("do not repeat", result["next_step"])
+            self.assertFalse(result["retry_action"])
+            self.assertEqual([x[0] for x in self.calls], ["key_combo", "desktop_info", "get_ui_tree"])
+
     def test_paused_after_action_preserves_outcome_and_stops(self):
         self.desktop["paused"] = True
         with patch.object(buddy, "command", side_effect=self.command):
@@ -87,6 +99,17 @@ class ActionInspectTests(unittest.TestCase):
             self.assertEqual(result["action"]["outcome"], "unconfirmed")
             self.assertEqual(result["action"]["id"], "retained-id")
             self.assertFalse(result["retry_action"])
+
+    def test_local_cua_validation_distinguishes_unsent_from_unknown_outcome(self):
+        with patch.object(buddy.urllib.request, "build_opener") as opener:
+            result = buddy.action_and_inspect("cua_action", {
+                "snapshot_id": "cua-observed", "window_id": 61920, "ui_action": "press_key", "key": "t"
+            }, {"app": "Calendar"})
+        opener.assert_not_called()
+        self.assertEqual(result["action"]["outcome"], "not_sent")
+        self.assertIn("element_token", result["action"]["error"])
+        self.assertIsNone(result["inspection"])
+        self.assertFalse(result["retry_action"])
 
     def test_invalid_observation_and_unsupported_actions_rejected_before_write(self):
         targets = [None, [], {}, {"app": ""}, {"app": "Calendar", "window_id": True},

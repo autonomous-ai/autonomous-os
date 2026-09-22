@@ -131,6 +131,8 @@ class RouterTest(unittest.TestCase):
             context = router.load_skill_context("openclaw-imports/computer-use")
         self.assertLess(len(context), 9500)
         self.assertIn("--inspect-after", context)
+        self.assertIn("using lookup_name exactly as skill_view name", context)
+        self.assertIn('"lookup_name": "openclaw-imports/computer-use"', context)
 
     def test_slow_preload_is_discarded_and_context_is_copied(self):
         plugin = self.make()

@@ -28,6 +28,46 @@ class BuddyError(Exception):
     """An invalid command, transport failure, or rejected Buddy action."""
 
 
+
+class BuddyValidationError(BuddyError):
+    """A local validation failure: no request or desktop action was sent."""
+
+
+def validate_cua_action(params):
+    required = ("snapshot_id", "element_token", "ui_action")
+    hint = ("Use Buddy snapshot_id and an observed element_token from the same observation; "
+            "window_id is not an action target. Do not invent tokens.")
+    missing = [key for key in required if not isinstance(params.get(key), str) or not params[key].strip()]
+    if missing:
+        raise BuddyValidationError("cua_action requires " + ", ".join(missing) + ". " + hint)
+    action = params["ui_action"]
+    extras = {"click": {"ax_action"}, "type_text": {"text"},
+              "press_key": {"key", "modifiers", "delivery_mode"}}
+    if action not in extras:
+        raise BuddyValidationError("ui_action must be click, type_text or press_key")
+    unknown = set(params) - set(required) - extras[action]
+    if unknown:
+        raise BuddyValidationError("cua_action unexpected params " + str(sorted(unknown)) + ". " + hint)
+    if action == "click" and "ax_action" in params:
+        if params["ax_action"] not in ("press", "show_menu", "pick", "confirm", "cancel", "open"):
+            raise BuddyValidationError("ax_action must name a supported observed AX action")
+    if action == "type_text":
+        text = params.get("text")
+        if not isinstance(text, str) or not 1 <= len(text) <= 20000:
+            raise BuddyValidationError("text must contain 1–20000 characters")
+    if action == "press_key":
+        key = params.get("key")
+        if not isinstance(key, str) or not 1 <= len(key) <= 32:
+            raise BuddyValidationError("press_key requires key containing 1–32 characters")
+        if "modifiers" in params:
+            modifiers = params["modifiers"]
+            if (not isinstance(modifiers, list) or len(modifiers) > 5
+                    or any(value not in ("cmd", "shift", "option", "alt", "ctrl", "fn") for value in modifiers)):
+                raise BuddyValidationError("modifiers must be an array of up to 5 of cmd, shift, option, alt, ctrl, fn")
+        if "delivery_mode" in params and params["delivery_mode"] not in ("background", "foreground"):
+            raise BuddyValidationError("delivery_mode must be background or foreground")
+
+
 def suggest(goal, params, endpoint=SUGGEST_ENDPOINT):
     """Request advice from a fresh native UI tree; never execute the suggestion."""
     if not isinstance(goal, str) or not goal.strip() or len(goal) > 2000:
@@ -143,6 +183,8 @@ def command(action, params, timeout_ms=15000, endpoint=ENDPOINT, command_id=None
         raise BuddyError("action must be a non-empty string of at most 64 UTF-8 bytes")
     if not isinstance(params, dict):
         raise BuddyError("params must be a JSON object")
+    if action == "cua_action":
+        validate_cua_action(params)
     if action in ("get_ui_tree", "cua_observe"):
         allowed = {"app", "max_nodes", "max_depth"}
         if action == "cua_observe":
@@ -297,11 +339,13 @@ def action_and_inspect(action, params, inspection_params, timeout_ms=15000, comm
     try:
         action_result = command(action, params, timeout_ms, command_id=request_id)
     except (BuddyError, ValueError, OSError) as exc:
-        # An error can follow partial input. Never guess whether replay is safe.
+        # Only our local validator can certify no request was sent.
+        local = isinstance(exc, BuddyValidationError)
         return {"ok": False, "action": {"id": request_id, "ok": False,
-                "outcome": "unconfirmed", "error": str(exc)},
+                "outcome": "not_sent" if local else "unconfirmed", "error": str(exc)},
                 "inspection": None, "retry_action": False,
-                "next_step": "stop on pause, permission, disconnect or timeout; otherwise inspect before choosing another action",
+                "next_step": ("Correct the parameters using the latest observation; local validation sent no action."
+                              if local else "Stop on pause, permission, disconnect or timeout. Otherwise inspect fresh; never reuse the failed snapshot."),
                 "timing": {"elapsed_ms": round((time.monotonic() - started) * 1000, 2)}}
     action_done = time.monotonic()
     try:
@@ -309,11 +353,15 @@ def action_and_inspect(action, params, inspection_params, timeout_ms=15000, comm
     except (BuddyError, ValueError, OSError) as exc:
         inspection = {"ok": False, "error": str(exc)}
     finished = time.monotonic()
-    return {"ok": inspection["ok"], "action": action_result,
-            "inspection": inspection, "retry_action": False,
-            "timing": {"elapsed_ms": round((finished - started) * 1000, 2),
-                       "action_ms": round((action_done - started) * 1000, 2),
-                       "inspection_ms": round((finished - action_done) * 1000, 2)}}
+    result = {"ok": inspection["ok"], "action": action_result,
+              "inspection": inspection, "retry_action": False,
+              "timing": {"elapsed_ms": round((finished - started) * 1000, 2),
+                         "action_ms": round((action_done - started) * 1000, 2),
+                         "inspection_ms": round((finished - action_done) * 1000, 2)}}
+    if inspection["ok"] and action_result.get("result", {}).get("effect") in ("suspected_noop", "unverifiable"):
+        result["next_step"] = ("Dispatch did not confirm an effect. Check the returned inspection for the intended change. "
+                               "If unchanged, choose a different observed control or route; do not repeat the same input.")
+    return result
 
 
 def main(argv=None):
@@ -376,7 +424,10 @@ def main(argv=None):
         print(json.dumps(data, ensure_ascii=False, allow_nan=False))
         return 0
     except (BuddyError, ValueError, OSError) as exc:
-        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        error = {"ok": False, "error": str(exc)}
+        if isinstance(exc, BuddyValidationError):
+            error.update(outcome="not_sent", request_sent=False)
+        print(json.dumps(error, ensure_ascii=False), file=sys.stderr)
         return 1
 
 

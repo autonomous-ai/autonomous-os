@@ -5,7 +5,7 @@ description: Operate apps/websites on the paired Mac via Buddy: Calendar, Notes,
 
 # Computer use on the paired Mac
 
-Complete the whole outcome; opening an app is preparation for read/edit tasks. **This page is sufficient for ordinary AX tasks: if preloaded/read, act now without skill_view/reference preflight.** Run from this skill's installed directory on the device. Its localhost OS forwards to the paired Mac; files/processes are separate. Never substitute a device-local browser.
+Complete the task, not just app launch. **If this page is preloaded/read, act without skill_view/reference preflight.** Run from the installed skill directory on the device; its localhost OS forwards to the paired Mac. Never substitute a device-local browser.
 
 ## Start with one observation
 
@@ -68,7 +68,7 @@ For macOS Calendar: use Cua `press_key`, `key:"t"`, `modifiers:["cmd","shift"]`,
 
 ## Keep the task moving
 
-Retain objective, apps, parameters, state, completed work, next step and pending question; minimize sensitive contents. Merge short follow-ups/corrections, refresh UI and resume without repeated writes. Preserve names/dictated text. Resolve dates with trusted date/timezone; ask only for material missing details.
+Retain objective, progress and next step. Merge follow-ups, refresh UI and resume without repeated writes. Preserve names/dictated text. Resolve dates using trusted date/timezone; ask only for material missing details.
 
 Wait for responses and verify state, without arbitrary sleeps or fixed action limits. After two identical failures, refresh evidence and change approach; if another approach fails, report the blocker and retain the checkpoint. Never repeat consequential actions with uncertain outcomes. Busy means wait for the active command.
 

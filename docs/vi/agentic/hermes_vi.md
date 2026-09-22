@@ -1,5 +1,7 @@
 # Hermes — backend agent
 
+Jev preload kèm `lookup_name` có category và hướng dẫn dùng nguyên tên đó khi đọc reference (ví dụ `openclaw-imports/computer-use`). Skill bundled trùng tên ngắn vẫn có thể tồn tại; preload không xóa nó hay tự xử lý lời gọi tên ngắn mơ hồ thay model.
+
 Hermes là một trong các **backend agent có thể hoán đổi** mà os-server chạy phía
 sau agent gateway. Bộ não là pluggable (CLAUDE.md): os-server nói chuyện với bất
 kỳ backend nào `config.agent_runtime` chọn, qua đúng một interface

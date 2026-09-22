@@ -4,6 +4,8 @@ For macOS Calendar date queries, the skill uses Go to Date (`Shift-Command-T`) a
 
 Cua inspection retains every element and adds `window_geometry` (`inside_window`, `partially_visible`, `outside_window`, `unknown`) from observed rectangles. Menu elements and descendants are exempt because they can legitimately lie outside the window. Missing or invalid geometry/ancestry stays unknown. This is not proof of visibility or clickability. An observed sheet/modal adds a hint to handle the dialog before the underlying view.
 
+The Python helper validates Cua action shape before transport: snapshot/token/action are required, action-specific keys and values must match the contract, and caller-supplied PID/window overrides are rejected. A local rejection reports `outcome:"not_sent"`; a transport or companion error remains `unconfirmed`, with no automatic observation or replay. This distinguishes malformed model calls from potentially delivered input. When dispatch returns `suspected_noop` or `unverifiable` and inspection succeeds, the result directs the agent to verify that observation and change route if unchanged; it does not claim success or replay input.
+
 ## Fewer model round trips
 
 The main computer-use skill contains the ordinary Cua/native observation and action

@@ -4,6 +4,8 @@ Với truy vấn ngày trong Calendar macOS, skill dùng Go to Date (`Shift-Comm
 
 Quan sát Cua giữ mọi element và thêm `window_geometry` (`inside_window`, `partially_visible`, `outside_window`, `unknown`) từ hình chữ nhật đã quan sát. Menu và descendants được miễn vì có thể nằm ngoài cửa sổ hợp lệ. Hình học/ancestry thiếu hoặc sai giữ unknown. Đây không phải bằng chứng hiển thị hay bấm được. Khi thấy sheet/modal, helper thêm gợi ý xử lý hộp thoại trước view bên dưới.
 
+Helper Python kiểm tra cấu trúc Cua action trước transport: bắt buộc snapshot/token/action, key và giá trị riêng của action phải đúng hợp đồng, từ chối PID/window do caller ghi đè. Lỗi local báo `outcome:"not_sent"`; lỗi transport hoặc companion vẫn là `unconfirmed`, không tự quan sát hay gửi lại. Nhờ đó phân biệt lệnh model sai cú pháp với input có thể đã được gửi. Khi dispatch trả `suspected_noop` hoặc `unverifiable` và quan sát thành công, kết quả hướng dẫn kiểm chứng quan sát đó và đổi cách nếu UI chưa thay đổi; không kết luận hoàn thành hay tự gửi lại input.
+
 ## Giảm số lượt gọi model
 
 Skill computer-use chính chứa đủ hợp đồng quan sát và thao tác Cua/native thông

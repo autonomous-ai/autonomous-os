@@ -35,7 +35,8 @@ def load_skill_context(name, task_id=None):
         "Jev selected the following skill for this request. Its native skill_view "
         "result is already loaded below. Use these instructions to perform the task; "
         "do not call skill_view again just to read this same SKILL.md. "
-        "Read linked references only when needed. Platform rules, mandatory connectors, "
+        "Read linked references only when needed, using lookup_name exactly as skill_view name "
+        "(including its category); bare names may collide. Platform rules, mandatory connectors, "
         "permissions and approval requirements remain authoritative. Loading a skill "
         "does not authorize actions. If the skill is unsuitable, use normal skill discovery.\n"
         + json.dumps({"lookup_name": name, "skill": result}, ensure_ascii=False)

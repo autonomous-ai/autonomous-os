@@ -1,5 +1,7 @@
 # Hermes agent backend
 
+The Jev preload carries the categorized `lookup_name` and instructs reference reads to reuse it exactly (for example `openclaw-imports/computer-use`). A bundled skill with the same bare name can coexist; preload does not delete it or resolve ambiguous bare-name calls on the model’s behalf.
+
 Hermes is one of the **swappable agentic backends** the os-server can run behind
 its agent gateway. The brain is pluggable (CLAUDE.md): os-server talks to
 whatever backend `config.agent_runtime` selects through the single
