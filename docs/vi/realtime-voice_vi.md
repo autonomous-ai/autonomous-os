@@ -2322,6 +2322,13 @@ liên tục đồng ý.
    lại sau khi user nói xong. LIVE ON và capture Harness thủ công giữ hành vi
    hiện tại. Thay đổi này không sửa mốc đo metric hay bỏ việc chờ transcript STT cuối.
 
+   Với TTS realtime không dùng native audio ở cả hai chế độ LIVE, nhận diện kết
+   câu dùng text sau bước loại marker giọng/HW hiện có. Câu như
+   `I'm right here! [cheerfully]` được gửi TTS khi provider còn stream/chờ tool
+   định tuyến, không phải đợi hết lượt. Marker bị chia giữa các mẩu text vẫn được
+   giữ trong buffer đến khi có thể loại bỏ đầy đủ. Grace định tuyến, ownership
+   output, bộ lọc từ chối và cancellation giữ nguyên.
+
    **Kết quả được cache.** Trước đây nhận dạng chạy mỗi lượt, lượt nào cũng chạy:
    một cuộc mười lượt trả tiền mười lần gọi ra ngoài để nghe đúng một cái tên.
    `SpeakerDecorator` giờ dùng lại kết quả gần nhất trong `SPEAKER_ID_CACHE_S`

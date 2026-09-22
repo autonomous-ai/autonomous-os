@@ -2377,6 +2377,13 @@ Read the counters in the session-END log line: `substituted` at ~100 % of
    retain their existing behavior. This does not change the metric clock or
    remove the wait for the final STT transcript.
 
+   For non-native realtime TTS in both LIVE modes, sentence-end detection uses
+   text after the existing voice/HW marker removal. A reply such as
+   `I'm right here! [cheerfully]` is sent to TTS while the provider is still
+   streaming/waiting for routing tools, rather than held until turn completion.
+   Split markers remain buffered until they can be removed in full. Routing
+   grace, output ownership, rejection filters and cancellation remain unchanged.
+
    **The verdict is cached.** Recognition used to run once per turn, every turn:
    a ten-turn conversation paid for ten external calls to be told the same name.
    `SpeakerDecorator` now reuses the last verdict for `SPEAKER_ID_CACHE_S`

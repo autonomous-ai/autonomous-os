@@ -7,6 +7,7 @@ import importlib.util
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from hal import config
 from hal.drivers.voice.voice_service import VoiceService
@@ -19,7 +20,7 @@ from hal.telemetry.live_voice import LiveVoiceMetrics
 from hal.test.test_voice_metrics import FakeTTS, kpi  # noqa: F401 -- fake clock/transport
 
 
-def _pump(monkeypatch, kpi, batches, *, native=False, stop_delay_ms=0, harness_voice=None, sender=None, cues=None, main_reply=False, addressed=True, focus=None, opener=None, tts=None):
+def _pump(monkeypatch, kpi, batches, *, native=False, stop_delay_ms=0, harness_voice=None, sender=None, cues=None, main_reply=False, addressed=True, focus=None, opener=None, tts=None, strip_markers=None):
     monkeypatch.setattr(config, "REALTIME_NATIVE_AUDIO", native)
     service = object.__new__(VoiceService)
     service._wakeword_focus = focus
@@ -29,7 +30,7 @@ def _pump(monkeypatch, kpi, batches, *, native=False, stop_delay_ms=0, harness_v
     service._live_emotion_addressed = lambda text, harness: addressed
     service._decorator = SimpleNamespace(classify_wake_word=lambda text: (text, "voice"))
     service._sensing_sender = sender if sender is not None else object()
-    service.strip_rt_markers = lambda text: text
+    service.strip_rt_markers = strip_markers or (lambda text: text)
     spoken = []
     batches = iter(batches)
 
@@ -96,6 +97,29 @@ def _pump(monkeypatch, kpi, batches, *, native=False, stop_delay_ms=0, harness_v
     service._tts = tts if tts is not None else Speaker()
     service._live_out_pump(1, harness_voice=harness_voice, cues=cues, **({"opener": opener} if opener is not None else {}))
     return spoken
+
+
+@pytest.mark.parametrize("chunks", [
+    ["I'm right here! [cheerfully]"],
+    ["I'm right here! [cheer", "fully]"],
+    ["I'm right here! [HW:/led/off:{}]"],
+])
+def test_live_tagged_sentence_speaks_before_terminal(monkeypatch, kpi, chunks):
+    from unittest.mock import Mock
+
+    tts = Mock(speaking=False)
+
+    def check_before_terminal():
+        tts.speak_queue.assert_called_once()
+        assert tts.speak_queue.call_args.args == ("I'm right here!",)
+        assert tts.speak_queue.call_args.kwargs["realtime_reply"] is True
+
+    outputs = [UserSpeechOutput(turn_id="u-tag")]
+    outputs.extend(TextOutput(text=text, user_turn_id="u-tag") for text in chunks)
+    outputs.append(check_before_terminal)
+    _pump(monkeypatch, kpi, [(outputs, "u-tag", True)], tts=tts,
+          strip_markers=VoiceService.strip_rt_markers)
+    tts.speak_queue.assert_called_once()
 
 
 def test_transcript_only_turn_counts_execution_without_fake_latency(monkeypatch, kpi):

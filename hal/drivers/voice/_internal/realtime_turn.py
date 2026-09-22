@@ -713,11 +713,11 @@ def run_realtime_turn(
                                 first_sentence_sent = True
                                 _thinking_cue_clear()
                                 sentence_buf = rest
-                        # Flush complete sentences to TTS as they arrive
-                        if tts is not None and sentence_buf.rstrip().endswith(SENTENCE_ENDS):
-                            sentence: str = leak_filter.filter_text(
-                                strip_markers(sentence_buf)
-                            )
+                        # Trailing voice/HW tags are not spoken punctuation.
+                        # Keep the raw buffer until ready so split tags reassemble.
+                        sentence = strip_markers(sentence_buf)
+                        if tts is not None and sentence.rstrip().endswith(SENTENCE_ENDS):
+                            sentence = leak_filter.filter_text(sentence)
                             if sentence:
                                 if not first_sentence_sent:
                                     logger.info(

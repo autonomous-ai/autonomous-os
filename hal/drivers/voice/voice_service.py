@@ -1580,8 +1580,10 @@ class VoiceService:
                                         opener["replied"] = True
                                 first_sent = True
                                 sentence_buf = rest
-                        if sentence_buf.rstrip().endswith((".", "!", "?", "…")):
-                            sentence = self.strip_rt_markers(sentence_buf)
+                        # Check the spoken text; a trailing tag must not hold a
+                        # complete sentence until the provider's routing grace ends.
+                        sentence = self.strip_rt_markers(sentence_buf)
+                        if sentence.rstrip().endswith((".", "!", "?", "…")):
                             if sentence:
                                 if cues is not None:
                                     cues.finish(out.user_turn_id)
