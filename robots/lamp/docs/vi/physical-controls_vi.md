@@ -273,8 +273,8 @@ trước khi dùng; HAL không tự sửa boot overlay:
       "address": 90,
       "electrodes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
       "swipe_axis": [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
-      "touch_threshold": 2,
-      "release_threshold": 1,
+      "touch_threshold": 6,
+      "release_threshold": 3,
       "autoconfig": true,
       "poll_ms": 10,
       "debounce_ms": 30
@@ -283,12 +283,23 @@ trước khi dùng; HAL không tự sửa boot overlay:
 }
 ```
 
-`bus` bắt buộc với entry bật. Các giá trị còn lại ở trên trừ `swipe_axis` là mặc định;
+`bus` bắt buộc với entry bật. Lamp đặt rõ ngưỡng chạm/nhả `6 / 3` trong
+`mpr121.json`; nếu bỏ qua ngưỡng thì vẫn dùng mặc định chung `2 / 1` của
+`MPR121Config`. Các giá trị còn lại ở trên trừ `swipe_axis` là mặc định;
 địa chỉ 90 nghĩa là `0x5A` (cho phép 90–93). Electrode được chọn phải là
 các số không trùng từ 0–11, có ít nhất một electrode. Ngưỡng phải thỏa
 `0 <= release_threshold < touch_threshold <= 255`. Polling cho phép 1–1000 ms;
 debounce cho phép 0–1000 ms. Cần chỉnh ngưỡng theo electrode đã lắp và nhiễu
 motor. Cấu hình được đọc lúc khởi động; sửa xong phải restart HAL.
+
+Driver đặt bộ lọc baseline chiều xuống (`0x2F`–`0x32`) thành
+`MHDF=1, NHDF=1, NCLF=255, FDLF=2`, theo
+[giá trị quick-start NXP AN3944](https://www.nxp.com/docs/en/application-note/AN3944.pdf).
+Thiết lập này làm chậm baseline khi giảm để tránh bám nhanh theo ngón tay
+đang tiếp cận. Bộ lọc baseline chiều lên và khi đang chạm giữ nguyên.
+HAL đặt các register này, không cấu hình qua `mpr121.json`; chỉ đổi ngưỡng
+chạm không làm thay đổi cách baseline bám tín hiệu. Khi chỉnh ngưỡng, kiểm
+tra độ ổn định lúc không chạm, tap, giữ và vuốt trên các pad đã lắp.
 
 Thiếu file, thiếu entry board, hoặc `"enabled": false` thì bỏ qua MPR121 và
 giữ các handler GPIO/TTP223 hiện có. Không có bus MPR121 cũ để fallback.

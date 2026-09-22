@@ -283,8 +283,8 @@ does not modify boot overlays automatically:
       "address": 90,
       "electrodes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
       "swipe_axis": [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
-      "touch_threshold": 2,
-      "release_threshold": 1,
+      "touch_threshold": 6,
+      "release_threshold": 3,
       "autoconfig": true,
       "poll_ms": 10,
       "debounce_ms": 30
@@ -293,12 +293,23 @@ does not modify boot overlays automatically:
 }
 ```
 
-`bus` is required for an enabled entry. The other values above except `swipe_axis` are defaults;
+`bus` is required for an enabled entry. Lamp explicitly sets touch/release
+thresholds to `6 / 3` in `mpr121.json`; omitted thresholds retain the generic
+`MPR121Config` defaults `2 / 1`. The other values above except `swipe_axis` are defaults;
 address 90 means `0x5A` (allowed addresses: 90–93). Selected electrodes must be
 unique numbers from 0–11, with at least one selected. Thresholds must satisfy
 `0 <= release_threshold < touch_threshold <= 255`. Polling accepts 1–1000 ms;
 debounce accepts 0–1000 ms. Tune thresholds against the installed electrodes
 and motor noise. Configuration is loaded at boot; restart HAL after changes.
+
+The driver sets the falling baseline filter (`0x2F`–`0x32`) to
+`MHDF=1, NHDF=1, NCLF=255, FDLF=2`, following the
+[NXP AN3944 quick-start values](https://www.nxp.com/docs/en/application-note/AN3944.pdf).
+This slows downward baseline tracking so it does not quickly follow an
+approaching finger. Rising and touched baseline filters are unchanged.
+These registers are set by HAL, not exposed in `mpr121.json`; changing touch
+thresholds alone does not change baseline tracking. Verify idle stability,
+tap, hold and swipe on the installed pads when tuning thresholds.
 
 A missing file or board entry, or `"enabled": false`, skips MPR121 and retains
 the existing GPIO/TTP223 handlers. There is no legacy MPR121 bus fallback.
