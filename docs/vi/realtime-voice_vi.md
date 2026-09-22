@@ -356,6 +356,12 @@ Mọi lượt wake-word đã được STT final xác nhận đều đi qua dispa
 cửa sổ focus follow-up 20 giây (reset sau mỗi lượt được phép), nên câu nói kế
 tiếp có thể bỏ wake phrase và được gửi với type `voice_followup`.
 
+Sau bước kiểm tra gaze ở cuối câu, HAL cập nhật cờ focus của lượt thu trước khi
+mở realtime, kể cả khi transcript có nội dung. Vì vậy gaze cấp focus ở cuối
+câu sẽ cho phép chính câu đó vào realtime, thay vì chỉ cho phép dispatch xuống
+main agent. Focus đã chốt vẫn được giữ nếu hết hạn giữa câu; noise guard vẫn
+được áp dụng.
+
 Cửa sổ đó được chốt một lần lúc mở phiên cho **dispatch**, để cửa sổ hết hạn
 giữa câu không cắt lời người đang nói. Còn những cue tự nhận mình là người được
 gọi — LED listening, backchannel — thì hỏi `is_addressed()`, và hàm này đọc lại

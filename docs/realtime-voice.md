@@ -366,6 +366,12 @@ Every STT-final-confirmed wake-word turn reaches dispatch. It opens a 20-second
 follow-up focus window (reset after every authorized turn), so the next spoken
 turn can omit the wake phrase and is sent as `voice_followup`.
 
+After the speech-end gaze check, HAL refreshes the capture's focus latch before
+opening realtime, including captures with a nonempty transcript. A gaze grant
+at the end of a sentence therefore authorizes that same sentence for realtime,
+instead of only authorizing downstream main-agent dispatch. Existing focus stays
+latched if it expires mid-sentence; the noise guard still applies.
+
 That window is latched once at session start for **dispatch**, so a window that
 expires mid-sentence cannot cut off someone already speaking. The cues that
 claim to be the addressee — the listening LED, the backchannel — ask

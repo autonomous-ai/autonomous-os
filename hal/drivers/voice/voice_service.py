@@ -2713,10 +2713,13 @@ class VoiceService:
                     gaze.release_reacquire_hold_if_pending()
                 except Exception as e:
                     logger.debug("gaze reacquire release skipped: %s", e)
-                wakeword_followup_active = (
-                    wakeword_followup_active
-                    or (hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active())
-                )
+            # Gaze can grant focus at speech end for this very utterance. Refresh
+            # before opening realtime even when STT produced words; otherwise
+            # only downstream dispatch sees the grant and bypasses realtime.
+            wakeword_followup_active = (
+                wakeword_followup_active
+                or (hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active())
+            )
 
             # Noise guard: a session can open on a noise blip that fools the entry
             # VAD, and STT then either finds no words or invents a short filler for
