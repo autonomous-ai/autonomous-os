@@ -848,57 +848,191 @@ def test_actual_answer_streaming_past_search_cap_can_finish(monkeypatch):
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize('replay,live', [(True, False), (False, False), (True, True)])
-@pytest.mark.parametrize('old_terminal', [False, True])
-def test_look_replay_interrupt_does_not_drop_visual_answer(monkeypatch, replay, live, old_terminal):
-    from hal.realtime import response_outcome
-    monkeypatch.setattr(gemini_live.app_config, 'LIVE_MODE', live)
+def _speech(text):
+    message = _terminal(generation=True)
+    message.server_content.generation_complete = False
+    message.server_content.output_transcription = SimpleNamespace(text=text)
+    return message
 
-    async def check(*args, **kwargs):
-        return True
+
+async def _commit_look_replay(agent):
+    async def send_realtime_input(**kwargs):
+        pass
+
+    agent._session.send_realtime_input = send_realtime_input
+    agent._vad_disabled = agent._activity_started = True
+    agent.flush_output()
+    agent.skip_next_turn_done()
+    agent._committed_at = time.monotonic()
+    await agent._async_commit()
+
+
+@pytest.mark.parametrize('boundary', ['none', 'interrupt', 'terminal', 'generation', 'both', 'separate'])
+@pytest.mark.parametrize('cancel', [False, True])
+def test_committed_look_replay_starts_new_response(monkeypatch, boundary, cancel):
+    from hal.realtime import response_outcome
+    monkeypatch.setattr(gemini_live.app_config, 'LIVE_MODE', False)
+    monkeypatch.setattr(gemini_live.app_config, 'REALTIME_PROGRESS_TIMEOUT_S', 0.15)
+    observed = []
+
+    async def check(request, answer, **kwargs):
+        observed.append((request, answer))
+        return answer != 'Let me take a look.'
 
     monkeypatch.setattr(response_outcome, 'spoken_response_complete', check)
-    interrupted = _terminal(generation=True)
-    interrupted.server_content.generation_complete = False
-    interrupted.server_content.interrupted = True
-    interrupted.server_content.turn_complete = old_terminal
-    answer = _terminal(generation=True)
-    answer.server_content.generation_complete = False
-    answer.server_content.output_transcription = SimpleNamespace(text='You are wearing an orange shirt.')
-    filler = _terminal(generation=True)
-    filler.server_content.generation_complete = False
-    filler.server_content.output_transcription = SimpleNamespace(text='Let me take a look.')
-    agent = _agent([filler, _terminal(generation=True), interrupted, answer,
-                    _tool('complete_response'), _terminal(generation=True)])
-    if replay:
-        agent.skip_next_turn_done()
-    events = _receive(agent)
-    texts = [e.output.text for e in events
-             if isinstance(e, OutputEvent) and isinstance(e.output, TextOutput)]
-    if replay and not live:
-        assert texts == ['You are wearing an orange shirt.']
-        assert events[-1].execution_completed
+
+    async def scenario():
+        agent = _agent([_speech('Let me take a look.'), _terminal(generation=True)])
+        agent._user_transcript = 'What am I holding?'
+        task = asyncio.create_task(agent._async_receive_turn())
+        while agent._session.reads < 3:
+            await asyncio.sleep(0)
+        await _commit_look_replay(agent)
+        if boundary != 'none':
+            message = _terminal()
+            message.server_content.interrupted = boundary in {'interrupt', 'both', 'separate'}
+            message.server_content.turn_complete = boundary in {'terminal', 'both'}
+            message.server_content.generation_complete = boundary == 'generation'
+            agent._session.messages.put_nowait(message)
+            if boundary == 'separate':
+                agent._session.messages.put_nowait(_terminal())
+        # Cross the original 20ms filler grace. Replay must own a fresh budget.
+        await asyncio.sleep(0.035)
+        assert not task.done()
+        assert not agent._skip_stale_turn_done
+        agent._session.messages.put_nowait(_speech('You are holding a phone.'))
+        if cancel:
+            message = _terminal(generation=True)
+            message.server_content.generation_complete = False
+            message.server_content.interrupted = True
+            agent._session.messages.put_nowait(message)
+        agent._session.messages.put_nowait(_terminal(generation=True))
+        await asyncio.wait_for(task, timeout=0.3)
+        events = list(agent._recv_queue.queue)
+        texts = [e.output.text for e in events
+                 if isinstance(e, OutputEvent) and isinstance(e.output, TextOutput)]
+        assert texts == ([] if cancel else ['You are holding a phone.'])
+        assert events[-1].execution_completed is (not cancel)
         assert not events[-1].fallback_to_main
-    else:
-        assert texts == []
-        assert not events[-1].execution_completed
+        if not cancel:
+            assert observed[-1] == ('What am I holding?', 'You are holding a phone.')
+        assert not [t for t in asyncio.all_tasks()
+                    if t is not asyncio.current_task() and not t.done()]
+
+    asyncio.run(scenario())
 
 
-def test_user_interrupt_after_look_replay_still_cancels(monkeypatch):
-    monkeypatch.setattr(gemini_live.app_config, 'LIVE_MODE', False)
-    interrupted = _terminal(generation=True)
-    interrupted.server_content.generation_complete = False
-    interrupted.server_content.interrupted = True
-    answer = _terminal(generation=True)
-    answer.server_content.generation_complete = False
-    answer.server_content.output_transcription = SimpleNamespace(text='You are wearing')
-    agent = _agent([_terminal(generation=True), interrupted, answer,
-                    interrupted, _terminal(generation=True)])
-    agent.skip_next_turn_done()
+@pytest.mark.parametrize('live', [False, True])
+def test_ordinary_interrupt_still_cancels(monkeypatch, live):
+    monkeypatch.setattr(gemini_live.app_config, 'LIVE_MODE', live)
+    message = _terminal(generation=True)
+    message.server_content.generation_complete = False
+    message.server_content.interrupted = True
+    agent = _agent([_terminal(generation=True), message,
+                    _speech('This should not be released.'), _terminal(generation=True)])
     events = _receive(agent)
-    # The second interruption is not another internal replay: discard queued
-    # speech and never declare the cancelled visual response completed.
     assert not any(isinstance(e, OutputEvent) and isinstance(e.output, TextOutput)
                    for e in events)
     assert not events[-1].execution_completed
-    assert not events[-1].fallback_to_main
+
+
+def test_silent_replay_fallback_is_not_marked_as_stale(monkeypatch):
+    monkeypatch.setattr(gemini_live.app_config, 'LIVE_MODE', False)
+    monkeypatch.setattr(gemini_live.app_config, 'REALTIME_PROGRESS_TIMEOUT_S', 0.05)
+
+    async def scenario():
+        agent = _agent([_terminal(generation=True)])
+        task = asyncio.create_task(agent._async_receive_turn())
+        while agent._session.reads < 2:
+            await asyncio.sleep(0)
+        await _commit_look_replay(agent)
+        await asyncio.wait_for(task, timeout=0.15)
+        events = list(agent._recv_queue.queue)
+        assert len(events) == 1
+        assert events[0].fallback_to_main
+        assert not agent._skip_stale_turn_done
+        assert not [t for t in asyncio.all_tasks()
+                    if t is not asyncio.current_task() and not t.done()]
+
+    asyncio.run(scenario())
+
+
+def test_replay_retires_pending_filler_classifier(monkeypatch):
+    from hal.realtime import response_outcome
+    monkeypatch.setattr(gemini_live.app_config, 'LIVE_MODE', False)
+    monkeypatch.setattr(gemini_live.app_config, 'REALTIME_PROGRESS_TIMEOUT_S', 0.15)
+    retired = []
+
+    async def check(request, answer, **kwargs):
+        if answer == 'Let me take a look.':
+            try:
+                await asyncio.Future()
+            finally:
+                retired.append(answer)
+        return True
+
+    monkeypatch.setattr(response_outcome, 'spoken_response_complete', check)
+
+    async def scenario():
+        agent = _agent([_speech('Let me take a look.'), _terminal(generation=True)])
+        task = asyncio.create_task(agent._async_receive_turn())
+        while agent._session.reads < 3:
+            await asyncio.sleep(0)
+        await _commit_look_replay(agent)
+        agent._session.messages.put_nowait(_speech('You are holding a phone.'))
+        agent._session.messages.put_nowait(_terminal(generation=True))
+        await asyncio.wait_for(task, timeout=0.3)
+        assert retired == ['Let me take a look.']
+        assert list(agent._recv_queue.queue)[-1].execution_completed
+
+    asyncio.run(scenario())
+
+
+def test_cancel_during_replay_reset_closes_pending_socket_read(monkeypatch):
+    from hal.realtime import response_outcome
+    monkeypatch.setattr(gemini_live.app_config, 'LIVE_MODE', False)
+
+    async def scenario():
+        checking = asyncio.Event()
+        cleaning = asyncio.Event()
+
+        async def check(*args, **kwargs):
+            checking.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                cleaning.set()
+                await asyncio.Future()
+
+        monkeypatch.setattr(response_outcome, 'spoken_response_complete', check)
+        agent = _agent([_speech('Let me take a look.'), _terminal(generation=True)])
+        task = asyncio.create_task(agent._async_receive_turn())
+        await checking.wait()
+        await _commit_look_replay(agent)
+        await cleaning.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not [t for t in asyncio.all_tasks()
+                    if t is not asyncio.current_task() and not t.done()]
+
+    asyncio.run(asyncio.wait_for(scenario(), timeout=0.5))
+
+
+@pytest.mark.parametrize('live,replay', [(True, True), (False, False)])
+def test_ordinary_or_live_commit_does_not_signal_replay(monkeypatch, live, replay):
+    monkeypatch.setattr(gemini_live.app_config, 'LIVE_MODE', live)
+
+    async def scenario():
+        agent = _agent([])
+        agent._replay_commit_signal = asyncio.Event()
+        async def send_realtime_input(**kwargs):
+            pass
+        agent._session.send_realtime_input = send_realtime_input
+        agent._vad_disabled = agent._activity_started = True
+        if replay:
+            agent.skip_next_turn_done()
+        await agent._async_commit()
+        assert not agent._replay_commit_signal.is_set()
+
+    asyncio.run(scenario())

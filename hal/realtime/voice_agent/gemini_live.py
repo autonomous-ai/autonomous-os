@@ -563,6 +563,10 @@ class GeminiLiveAgent(VoiceAgentBase):
             self._activity_end_sent_at = time.monotonic()
             self._activity_started = False
             self._turn_done.clear()
+            if not app_config.LIVE_MODE and getattr(self, "_skip_stale_turn_done", False):
+                replay_signal = getattr(self, "_replay_commit_signal", None)
+                if replay_signal is not None:
+                    replay_signal.set()
             if turn_end_queued_at is not None:
                 logger.info(
                     "[realtime] Turn timing: local_end->activityEnd_sent=%.0fms",
@@ -617,6 +621,10 @@ class GeminiLiveAgent(VoiceAgentBase):
 
         execution_interrupted = False
         replay_response = False
+        replay_boundary_pending = False
+        replay_signal = asyncio.Event()
+        self._replay_commit_signal = replay_signal
+        pending_message: asyncio.Task | None = None
         response_user_turn_id: str | None = None
         # NON_BLOCKING tools (extended-thinking) let the model speak a filler,
         # send turn_complete, THEN emit the tool call. Ending the turn at
@@ -789,7 +797,15 @@ class GeminiLiveAgent(VoiceAgentBase):
             return (_requires_outcome and not _routing_received and not confirmed
                     and not execution_interrupted and not delayed_playback_ack)
 
+        async def cancel_pending_read() -> None:
+            nonlocal pending_message
+            if pending_message is not None:
+                pending_message.cancel()
+                await asyncio.gather(pending_message, return_exceptions=True)
+                pending_message = None
+
         async def _finalize_turn_complete(delayed_playback_ack: bool) -> None:
+            await cancel_pending_read()
             transcript = getattr(self, "_user_transcript", "") or _turn_transcript
             fallback = await _fallback_needed(delayed_playback_ack)
             if fallback:
@@ -815,6 +831,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                 self._live_speech_emitted = False
 
         async def _finalize_generation_complete() -> None:
+            await cancel_pending_read()
             transcript = getattr(self, "_user_transcript", "") or _turn_transcript
             fallback = await _fallback_needed()
             if fallback:
@@ -838,7 +855,76 @@ class GeminiLiveAgent(VoiceAgentBase):
                 self._live_user_turn_id = ""
                 self._live_speech_emitted = False
 
+        async def read_message(timeout: float | None, check=None):
+            # Keep a single socket read alive across a replay commit or an
+            # outcome-check wakeup. Cancelling it would lose the SDK iterator.
+            nonlocal pending_message
+            if pending_message is None:
+                pending_message = asyncio.create_task(_receiver.__anext__())
+            replay_wait = asyncio.create_task(replay_signal.wait())
+            try:
+                waits = {pending_message, replay_wait}
+                if check is not None and not check.done():
+                    waits.add(check)
+                done, _ = await asyncio.wait(
+                    waits, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+                if replay_signal.is_set():
+                    return None
+                if pending_message in done:
+                    ready, pending_message = pending_message, None
+                    return ready.result()
+                if done:
+                    return None  # Re-evaluate the deadline after classification.
+                raise asyncio.TimeoutError
+            except BaseException:
+                if pending_message is not None:
+                    pending_message.cancel()
+                    await asyncio.gather(pending_message, return_exceptions=True)
+                    pending_message = None
+                raise
+            finally:
+                replay_wait.cancel()
+                try:
+                    await asyncio.gather(replay_wait, return_exceptions=True)
+                except BaseException:
+                    await cancel_pending_read()
+                    raise
+
         while True:
+            if replay_signal.is_set():
+                replay_signal.clear()
+                # A successful explicit look replay replaces the filler response
+                # even when the provider does not emit interrupted. Retire its
+                # classification and deadlines before accepting replay output.
+                try:
+                    for check in (_outcome_check, _continuation_check):
+                        if check is not None:
+                            check.cancel()
+                            await asyncio.gather(check, return_exceptions=True)
+                except BaseException:
+                    await cancel_pending_read()
+                    raise
+                _outcome_check = _continuation_check = None
+                _deferred_finalize = None
+                _grace_deadline = _outcome_deadline = 0.0
+                _initial_active_until = _continuation_active_until = 0.0
+                _last_continuation_output_until = _progress_until = 0.0
+                _outcome_received = _routing_received = False
+                _direct_answer_confirmed = _initial_speech = False
+                _spoken_response = _continuation_text = ""
+                _continuation.clear()
+                _continuation_bytes = 0
+                _continuation_overflow = _grounded = False
+                _search_context.clear()
+                execution_interrupted = False
+                replay_response = replay_boundary_pending = True
+                self._skip_stale_turn_done = False
+                self._turn_gen += 1
+                valid_transcription_chunk_cnt = 0
+                self._first_audio_received = False
+                self._awaiting_playback_turn_complete = False
+                _note_progress()
+                _log_timing("look_replay_response_started")
             try:
                 if _deferred_finalize is not None:
                     # Progress buys time only for an unfinished outcome. A real
@@ -864,36 +950,17 @@ class GeminiLiveAgent(VoiceAgentBase):
                         _log_timing("deferred_wait_expired")
                         await _deferred_finalize()
                         return
-                    next_message = asyncio.create_task(_receiver.__anext__())
-                    try:
-                        # Wake when classification completes, without cancelling
-                        # a socket read merely to re-evaluate the progress grace.
-                        if check is not None and not check.done():
-                            await asyncio.wait(
-                                {next_message, check}, timeout=_remaining,
-                                return_when=asyncio.FIRST_COMPLETED,
-                            )
-                            if check.done() and not check.cancelled():
-                                try:
-                                    if check.result() is True:
-                                        deadline = max(routing_deadline, _continuation_active_until)
-                                except Exception:
-                                    pass
-                        message = await asyncio.wait_for(
-                            next_message, timeout=max(0.0, deadline - time.monotonic())
-                        )
-                    finally:
-                        if not next_message.done():
-                            next_message.cancel()
-                            await asyncio.gather(next_message, return_exceptions=True)
+                    message = await read_message(_remaining, check)
                 elif _progress_until:
                     remaining = max(_progress_until, _initial_active_until) - time.monotonic()
                     if remaining <= 0:
                         await _finalize_generation_complete()
                         return
-                    message = await asyncio.wait_for(_receiver.__anext__(), timeout=remaining)
+                    message = await read_message(remaining)
                 else:
-                    message = await _receiver.__anext__()
+                    message = await read_message(None)
+                if message is None:
+                    continue
             except StopAsyncIteration:
                 if _deferred_finalize is not None or replay_response:
                     # The SDK receive() iterator ends at turn_complete, not at
@@ -1038,6 +1105,21 @@ class GeminiLiveAgent(VoiceAgentBase):
                             logger.warning(
                                 "[realtime][grounding][debug] dump failed: %s", e
                             )
+
+                if replay_boundary_pending:
+                    has_reply = bool(content.output_transcription and content.output_transcription.text) or any(
+                        not getattr(part, "thought", False) and part.inline_data and part.inline_data.data
+                        for part in (content.model_turn.parts if content.model_turn else []))
+                    if has_reply:
+                        replay_boundary_pending = False
+                    elif (content.interrupted or content.turn_complete
+                          or getattr(content, "generation_complete", False)):
+                        # The cancelled filler may end with interrupted, a late
+                        # terminal, both, or neither. Retire that boundary here;
+                        # never discard the replay's own TurnDoneEvent.
+                        if content.turn_complete:
+                            replay_boundary_pending = False
+                        continue
 
                 interrupted_user_turn_id = ""
                 if content.interrupted and app_config.LIVE_MODE:
@@ -1272,39 +1354,6 @@ class GeminiLiveAgent(VoiceAgentBase):
                         dropped,
                     )
                     self._first_audio_received = False
-                    if (not app_config.LIVE_MODE and not replay_response
-                            and getattr(self, "_skip_stale_turn_done", False)
-                            and _deferred_finalize is not None):
-                        # The existing look replay marker identifies an internal
-                        # replacement, not a user cancellation. Its interrupted
-                        # filler must not discard the new visual answer or finish
-                        # the replay's commit gate. Retire only the old response.
-                        for check in (_outcome_check, _continuation_check):
-                            if check is not None:
-                                check.cancel()
-                                await asyncio.gather(check, return_exceptions=True)
-                        _outcome_check = _continuation_check = None
-                        _deferred_finalize = None
-                        _grace_deadline = _outcome_deadline = 0.0
-                        _initial_active_until = _continuation_active_until = 0.0
-                        _last_continuation_output_until = _progress_until = 0.0
-                        _outcome_received = _routing_received = False
-                        _direct_answer_confirmed = _initial_speech = False
-                        _spoken_response = _continuation_text = ""
-                        _continuation.clear()
-                        _continuation_bytes = 0
-                        _continuation_overflow = _grounded = False
-                        _search_context.clear()
-                        execution_interrupted = False
-                        replay_response = True
-                        self._turn_gen += 1
-                        valid_transcription_chunk_cnt = 0
-                        self._awaiting_playback_turn_complete = False
-                        _note_progress()
-                        _log_timing("look_replay_response_started")
-                        # A terminal on this same frame belongs to the old
-                        # response. The SDK may end its iterator after yielding it.
-                        continue
                     self._turn_done.set()
 
                 if content.turn_complete:
