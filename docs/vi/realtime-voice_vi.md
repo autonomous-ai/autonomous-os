@@ -85,6 +85,27 @@ lời trong khả năng và nói rõ phần nào chưa kiểm chứng được; 
 thuộc lane chính. `hal/test/test_realtime_research_delegation.py` pin phần text
 này.
 
+### Channels và connectors thì delegate
+
+Gửi bất cứ thứ gì ra ngoài — tin nhắn, ảnh hay ảnh chụp camera, ảnh lấy trên
+mạng, file, link, hay bản recap / tóm tắt cuộc trò chuyện — qua Telegram, email,
+Slack hoặc bất kỳ channel/connector nào khác là việc của main agent: chỉ main
+agent nắm các channel, nên tầng realtime không gửi được và cũng không biết cái
+gì đang được liên kết. Câu hỏi về khả năng ("nói chuyện xong, bạn gửi recap cho
+tôi được không?") cũng vậy: đó là câu hỏi về channel của main agent, không phải
+về persona giọng nói. Quan sát trên thiết bị 2026-09-21 (lamp-0c89): Gemini Live
+tự trả lời "gửi ảnh này qua Telegram cho tôi" (mô tả ảnh, hoặc im lặng) và không
+làm gì với câu hỏi recap, nên yêu cầu không bao giờ tới main agent. Quy tắc nằm
+ở bullet **Channels & connectors** trong mọi prompt provider (tầng voice của
+GPT-Live còn liệt kê channel trong danh sách backend tools, tầng backend của nó
+đặt ranh giới ngay cạnh `web_search`), một câu trong mô tả `delegate_to_main`
+dùng chung, và — trong bullet Google Search của Gemini — ghi chú rằng một tra
+cứu kết thúc bằng việc gửi đi ("tìm ảnh X rồi gửi qua Telegram") không phải tra
+cứu. Prompt không bao giờ được khẳng định gửi được hay không, không nói "đã
+gửi", và không mô tả ảnh thay vì gửi. Mỗi prompt gọi đích delegate theo từ vựng
+riêng của nó (prompt dùng chung/OpenAI/Pipecat nói "the main system", Gemini nói
+"the main agent", GPT-Live nói "the backend").
+
 ### Xác định lời nói hướng đến thiết bị trước persona hoặc hành động
 
 Prompt của mọi provider realtime ưu tiên quy tắc lời nói hướng đến thiết bị

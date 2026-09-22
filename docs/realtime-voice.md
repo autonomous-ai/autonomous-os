@@ -82,6 +82,28 @@ business — it may have a research skill installed, or it may answer as best it
 can and say what it could not verify; either way the work belongs on the main
 lane. `hal/test/test_realtime_research_delegation.py` pins the text.
 
+### Channels and connectors delegate
+
+Sending anything out — a message, a photo or camera capture, a picture from the
+web, a file, a link, or a recap / summary of the conversation — through
+Telegram, email, Slack or any other channel or connector is main-agent work:
+only the main agent holds the channels, so the realtime layer can neither send
+nor know what is linked. The same goes for the capability question ("after we
+talk, can you send me a recap somewhere?"): it is a question about the main
+agent's channels, not about the voice persona. Device-observed 2026-09-21
+(lamp-0c89): Gemini Live answered "send this picture to my Telegram" by itself
+(describing the picture, or going silent) and produced nothing for the recap
+question, so the request never reached the main agent. The rule is a
+**Channels & connectors** bullet in every provider prompt (the GPT-Live voice
+stage also lists channels under its backend tools, and its backend stage carries
+the boundary next to `web_search`), a sentence in the shared `delegate_to_main`
+description, and — in Gemini's Google Search bullet — the note that a lookup
+ending in delivery ("find a photo of X and send it to my Telegram") is not a
+lookup. The prompt must never claim it can or cannot send, never say it was
+sent, and never describe the picture instead of sending it. Each prompt names
+the target in its own vocabulary (the shared/OpenAI/Pipecat prompts say "the
+main system", Gemini says "the main agent", GPT-Live says "the backend").
+
 ### Addressed speech before persona or actions
 
 All realtime provider prompts give the addressed-speech policy priority over
