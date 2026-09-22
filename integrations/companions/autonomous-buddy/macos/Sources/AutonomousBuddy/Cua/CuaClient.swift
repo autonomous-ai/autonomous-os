@@ -71,9 +71,11 @@ actor CuaClient {
                 "operation": "call", "name": tool, "arguments": arguments,
                 "deadline_unix_ms": Int64(Date().timeIntervalSince1970 * 1000 + timeoutSeconds * 1000)
             ] as [String: Any]
-            let envelope = try await rpc(Self.prefix + "exchange", parameters)
-            try Task.checkCancellation()
-            do { return try Self.decodeEnvelope(envelope, requestID: token.uuidString) }
+            do {
+                let envelope = try await rpc(Self.prefix + "exchange", parameters)
+                try Task.checkCancellation()
+                return try Self.decodeEnvelope(envelope, requestID: token.uuidString)
+            }
             catch { shutdown(error); throw error }
         } onCancel: {
             Task { await self.abort(token, error: CancellationError()) }

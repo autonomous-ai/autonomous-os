@@ -1,5 +1,7 @@
 # Computer use on the paired Mac
 
+For macOS Calendar date queries, the skill uses Go to Date (`Shift-Command-T`) and Day view (`Command-1`), with observations between dependent inputs. A `suspected_noop` response requires a different observed control or shortcut, not another identical click. Cua `AXOpen` metadata alone does not establish that `click` will open a grid. The helper removes the upstream `_note` recommending the unsupported `max_elements` parameter while retaining both structured elements and tree-only text. See [Apple Calendar shortcuts](https://support.apple.com/guide/calendar/keyboard-shortcuts-ical002/mac).
+
 ## Fewer model round trips
 
 The main computer-use skill contains the ordinary Cua/native observation and action
@@ -7,6 +9,27 @@ contract; reading the vision reference is no longer required before the first
 `inspect`. Advanced screenshot/coordinate and experimental suggestion instructions
 remain in references. A complete Hermes Jev preload satisfies the skill read.
 Do not issue a separate `desktop_info` before `inspect`.
+
+Inspection params accept `mode`: `auto` (default), `navigation`, or `detail`.
+Auto first reads the ordinary tree. Only an explicit Cua `elements_complete:false`
+or native `truncated:true` triggers one more successful-read path: a shallow
+navigation overview on the same backend (Cua 500 nodes/depth 2; native 500/depth 4).
+It returns only that fresh snapshot; previous references are never combined with
+it. No error causes this follow-up or a driver switch. Explicit navigation reads
+only the overview; detail disables the shallow follow-up. `--inspect-after`
+accepts the same mode. A navigation result says `navigation_only:true`,
+`observation_mode:"navigation"`, `content_complete:false`; use its controls to
+reach the target view, then request detail before deciding what content exists.
+Navigation can add one backend request to the counts below. It adds no model call.
+
+Native navigation compaction retains menu controls and prioritizes enabled nodes
+with actions before static text, preserving observed refs/parent refs. Secure or
+unknown-privacy ancestors still hide descendants; omitted content is flagged.
+Ordinary detail compaction still excludes menus. Raw `get_ui_tree`/`cua_observe`
+reject unknown keys and invalid `max_nodes` (1–500) / `max_depth` (1–30) locally;
+`max_elements` is not a helper parameter. This prevents a misspelled bound from
+silently producing a smaller default tree.
+
 
 Use `buddy.py <action> --params ... --inspect-after '{"app":"Calendar"}'` to
 execute one supported desktop action and obtain a fresh observation in the same
@@ -52,7 +75,7 @@ Buddy's unified macOS app includes the official Cua Driver **0.28.2** at `Conten
 
 On first use, Buddy directly starts `cua-driver mcp --direct --embedded` with `CUA_DRIVER_EMBEDDED=1` and keeps a private stdio MCP connection with the experimental typed envelope cancellation protocol. The child owns the direct SDK runtime; no daemon socket, shared standalone service or LaunchServices launch is involved. Buddy disables driver telemetry and update checks. The child runtime closes when the connection ends and stops with Buddy's helper. The bundled driver is required inside packaged apps; a separately installed `/Applications/CuaDriver.app` is a fallback only for Swift development builds running outside an app bundle.
 
-Grant **Autonomous Buddy** Accessibility and Screen Recording through Buddy's existing permission flow. Embedded Cua uses the host app's macOS permission identity; separate CuaDriver grants are not the setup path for the packaged app. Use Buddy's existing **Restart computer use** control after changing permissions so the child refreshes cached TCC state. `desktop_info.cua` reports installation, enabled state and version information; installation and advertised capabilities do not certify runtime readiness or permission grants. Unsupported versions or missing cancellation support fail explicitly. Cua is enabled by default; the Mac process's `UserDefaults.standard` key `disableCuaDriver` is the opt-out. The standalone app bundle ID is `network.autonomous.ai.buddy`; the packaged Electron app is `network.autonomous.ai.buddy.manager`, so do not assume one preferences domain covers both launch modes.
+Grant **Autonomous Buddy** Accessibility and Screen Recording through Buddy's existing permission flow. Embedded Cua uses the host app's macOS permission identity; separate CuaDriver grants are not the setup path for the packaged app. Use Buddy's existing **Restart computer use** control after changing permissions so the child refreshes cached TCC state. `desktop_info.cua` reports installation, enabled state and version information; installation and advertised capabilities do not certify runtime readiness or permission grants. Unsupported versions or missing cancellation support fail explicitly. A JSON-RPC exchange error (including `connection_not_found`) closes the unusable transport and clears its binding, just like an invalid response envelope. The failed action is never replayed; a later explicit request establishes a fresh driver session. Cua is enabled by default; the Mac process's `UserDefaults.standard` key `disableCuaDriver` is the opt-out. The standalone app bundle ID is `network.autonomous.ai.buddy`; the packaged Electron app is `network.autonomous.ai.buddy.manager`, so do not assume one preferences domain covers both launch modes.
 
 `buddy.py inspect --params '{"app":"Calendar"}'` checks availability once, then chooses Cua when installed and enabled. It falls back to native compact AX only when Cua is disabled or not installed, never after a Cua error. Neither route invokes Jev or a model, mutates UI, or opens an app. Jev OFF still permits normal Cua computer-use. No end-to-end speed improvement has been established.
 

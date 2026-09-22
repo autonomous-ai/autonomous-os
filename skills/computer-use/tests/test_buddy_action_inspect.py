@@ -91,7 +91,7 @@ class ActionInspectTests(unittest.TestCase):
     def test_invalid_observation_and_unsupported_actions_rejected_before_write(self):
         targets = [None, [], {}, {"app": ""}, {"app": "Calendar", "window_id": True},
                    {"app": "Calendar", "window_id": -1}, {"app": "Calendar", "scale": 1},
-                   {"app": "Notes"}]
+                   {"app": "Notes"}, {"app": "Calendar", "mode": "wrong"}]
         with patch.object(buddy, "command") as command:
             for target in targets:
                 with self.assertRaises((ValueError, buddy.BuddyError)):

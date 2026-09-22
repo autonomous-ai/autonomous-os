@@ -1,11 +1,32 @@
 # Computer use trên Mac đã ghép đôi
 
+Với truy vấn ngày trong Calendar macOS, skill dùng Go to Date (`Shift-Command-T`) và chế độ Day (`Command-1`), quan sát giữa các bước nhập phụ thuộc nhau. Khi nhận `suspected_noop`, phải chọn control đã quan sát hoặc phím tắt khác, không bấm lại cùng cách. Metadata `AXOpen` của Cua không chứng minh `click` sẽ mở ô lịch. Helper bỏ `_note` upstream khuyên dùng tham số `max_elements` không được hỗ trợ, giữ cả elements có cấu trúc và nội dung chỉ có trong cây. Xem [phím tắt Calendar của Apple](https://support.apple.com/guide/calendar/keyboard-shortcuts-ical002/mac).
+
 ## Giảm số lượt gọi model
 
 Skill computer-use chính chứa đủ hợp đồng quan sát và thao tác Cua/native thông
 thường; không còn bắt buộc đọc tài liệu vision trước `inspect` đầu tiên. Hướng dẫn
 screenshot/tọa độ nâng cao và gợi ý thử nghiệm vẫn nằm trong reference. Hermes Jev
 preload đầy đủ được tính là đã đọc skill. Không gọi `desktop_info` riêng trước `inspect`.
+
+Tham số inspect nhận `mode`: `auto` (mặc định), `navigation`, `detail`. Auto đọc
+cây thường trước. Chỉ khi Cua trả rõ `elements_complete:false` hoặc native trả
+`truncated:true` mới đọc thêm một overview điều hướng trên cùng backend (Cua
+500 node/depth 2; native 500/depth 4). Chỉ snapshot mới được trả về; không gộp
+reference cũ. Không lỗi nào kích hoạt bước này hay đổi driver. Navigation đọc
+thẳng overview; detail tắt bước đọc overview bổ sung. `--inspect-after` nhận cùng
+mode. Kết quả navigation có `navigation_only:true`, `observation_mode:"navigation"`,
+`content_complete:false`; dùng control để đến đúng view rồi đọc detail trước khi
+kết luận nội dung có/vắng. Navigation có thể thêm một request backend so với số
+lệnh bên dưới nhưng không thêm lượt model.
+
+Native navigation giữ control menu và ưu tiên node enabled có action trước text
+tĩnh, giữ nguyên ref/parent_ref đã quan sát. Vẫn ẩn descendants của ancestor
+secure/chưa rõ privacy; phần bỏ đi được đánh dấu. Detail vẫn bỏ menu như trước.
+`get_ui_tree`/`cua_observe` thô từ chối key lạ và bounds sai ngay local:
+`max_nodes` 1–500, `max_depth` 1–30; `max_elements` không phải tham số helper.
+Nhờ vậy lỗi tên bounds không âm thầm trả cây với giới hạn mặc định nhỏ hơn.
+
 
 Dùng `buddy.py <action> --params ... --inspect-after '{"app":"Calendar"}'` để
 thực hiện một thao tác desktop được hỗ trợ và nhận quan sát mới trong cùng một
@@ -47,7 +68,7 @@ App macOS hợp nhất của Buddy chứa Cua Driver chính thức **0.28.2** t�
 
 Ở lần dùng đầu tiên, Buddy trực tiếp chạy `cua-driver mcp --direct --embedded` với `CUA_DRIVER_EMBEDDED=1` và giữ kết nối MCP stdio riêng với giao thức typed envelope cancellation thử nghiệm. Process con sở hữu runtime SDK trực tiếp; không dùng socket daemon, dịch vụ độc lập dùng chung hay LaunchServices. Buddy tắt telemetry và kiểm tra cập nhật của driver. Runtime con đóng khi kết nối kết thúc và dừng cùng helper Buddy. App đóng gói bắt buộc dùng driver nhúng; `/Applications/CuaDriver.app` cài riêng chỉ là fallback cho build Swift phát triển chạy ngoài app bundle.
 
-Cấp Accessibility và Screen Recording cho **Autonomous Buddy** qua luồng quyền hiện có của Buddy. Cua nhúng dùng danh tính quyền macOS của app chủ; bản đóng gói không yêu cầu cấp quyền riêng cho CuaDriver. Dùng nút **Restart computer use** hiện có của Buddy sau khi đổi quyền để process con làm mới trạng thái TCC đã cache. `desktop_info.cua` báo thông tin cài đặt, trạng thái bật và phiên bản; cài đặt và capability không chứng minh runtime sẵn sàng hay đã có quyền. Phiên bản không hỗ trợ hoặc thiếu khả năng cancellation trả lỗi rõ ràng. Cua mặc định bật; key `disableCuaDriver` trong `UserDefaults.standard` của process Mac dùng để tắt. Bundle ID app độc lập là `network.autonomous.ai.buddy`, app Electron đóng gói là `network.autonomous.ai.buddy.manager`; không mặc định một preferences domain áp dụng cho cả hai cách chạy.
+Cấp Accessibility và Screen Recording cho **Autonomous Buddy** qua luồng quyền hiện có của Buddy. Cua nhúng dùng danh tính quyền macOS của app chủ; bản đóng gói không yêu cầu cấp quyền riêng cho CuaDriver. Dùng nút **Restart computer use** hiện có của Buddy sau khi đổi quyền để process con làm mới trạng thái TCC đã cache. `desktop_info.cua` báo thông tin cài đặt, trạng thái bật và phiên bản; cài đặt và capability không chứng minh runtime sẵn sàng hay đã có quyền. Phiên bản không hỗ trợ hoặc thiếu khả năng cancellation trả lỗi rõ ràng. Lỗi trao đổi JSON-RPC (kể cả `connection_not_found`) đóng transport không dùng được và xóa binding, giống lỗi envelope. Không phát lại thao tác lỗi; yêu cầu tường minh tiếp theo tạo phiên driver mới. Cua mặc định bật; key `disableCuaDriver` trong `UserDefaults.standard` của process Mac dùng để tắt. Bundle ID app độc lập là `network.autonomous.ai.buddy`, app Electron đóng gói là `network.autonomous.ai.buddy.manager`; không mặc định một preferences domain áp dụng cho cả hai cách chạy.
 
 `buddy.py inspect --params '{"app":"Calendar"}'` kiểm tra khả dụng một lần rồi chọn Cua khi đã cài và bật. Chỉ fallback AX native gọn khi Cua tắt hoặc chưa cài, không fallback sau lỗi Cua. Cả hai nhánh không gọi Jev/model, không sửa UI hay mở app. Jev OFF vẫn chạy computer-use bằng Cua bình thường. Chưa xác nhận tăng tốc toàn luồng.
 

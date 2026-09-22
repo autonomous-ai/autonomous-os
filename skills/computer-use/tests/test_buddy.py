@@ -57,6 +57,17 @@ class TransportTests(MockServerCase):
     def send(self, action="get_ui_tree", params=None, **kwargs):
         return buddy.command(action, {} if params is None else params, endpoint=self.endpoint, **kwargs)
 
+    def test_observation_bounds_and_unknown_keys_fail_before_network(self):
+        for action in ("get_ui_tree", "cua_observe"):
+            for params in ({"max_elements": 800}, {"max_nodes": 800}, {"max_nodes": True},
+                           {"max_nodes": 0}, {"max_depth": 31}, {"max_depth": 0}, {"max_depth": 1.5}):
+                with self.assertRaisesRegex(buddy.BuddyError, "inspect mode navigation"):
+                    self.send(action, params)
+        self.assertEqual(self.server.requests, [])
+        for action in ("get_ui_tree", "cua_observe"):
+            self.send(action, {"app": "Calendar", "max_nodes": 500, "max_depth": 30})
+        self.assertEqual(len(self.server.requests), 2)
+
     def test_command_preserves_unicode_nested_params_and_cancellation_id(self):
         params = {"from": {"x": -20, "y": 7}, "text": "Tiếng Việt `$(private)`\n"}
         response = self.send("drag", params, command_id="known-unique-id", timeout_ms=60000)

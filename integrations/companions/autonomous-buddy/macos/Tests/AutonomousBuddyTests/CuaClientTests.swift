@@ -22,6 +22,69 @@ final class CuaClientTests: XCTestCase {
         XCTAssertEqual(try CuaClient.decodeEnvelope(good, requestID: "current")["tree_markdown"] as? String, "Calculator")
     }
 
+    func testRPCFailureReconnectsOnNextCallWithoutReplayingAction() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executable = directory.appendingPathComponent("driver")
+        let log = directory.appendingPathComponent("requests")
+        // The first receiver loses its binding while its transport stays alive.
+        // Later calls must reconnect; successful calls should reuse the new receiver.
+        let script = """
+        #!/usr/bin/python3
+        import json,sys,pathlib
+        base=pathlib.Path(__file__).parent
+        first=not (base/'launched').exists()
+        (base/'launched').touch()
+        def record(value):
+            with (base/'requests').open('a') as f:
+                f.write(value+'\\n')
+        record('launch')
+        for line in sys.stdin:
+            r=json.loads(line);m=r['method'];p=r['params']
+            record(m)
+            if m=='initialize':
+                value={'serverInfo':{'version':'0.28.2'},'capabilities':{'experimental':{'ai.cua.driver.envelopes':{'version':1}}}}
+            elif m.endswith('/open'):
+                value={'connection_id':'00000000-0000-4000-8000-000000000001','generation':'00000000-0000-4000-8000-000000000002','capabilities':{'minimum_envelope_version':1,'maximum_envelope_version':1,'supports_cancellation':True}}
+            elif m.endswith('/exchange'):
+                if first:
+                    print(json.dumps({'jsonrpc':'2.0','id':r['id'],'error':{'code':-32000,'message':'connection_not_found'}}),flush=True)
+                    continue
+                value={'envelope_version':1,'request_id':p['envelope']['request_id'],'completion_known':True,'ok':True,'result':{'accepted':True}}
+            else:raise Exception('unexpected method')
+            print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':value}),flush=True)
+        """
+        try script.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let client = CuaClient(executable: executable, timeoutSeconds: 5)
+        do {
+            do {
+                _ = try await client.call(tool: "click", arguments: [:])
+                XCTFail("Lost receiver unexpectedly returned success")
+            } catch {
+                XCTAssertEqual(error.localizedDescription, "Cua Driver: connection_not_found")
+            }
+            let afterFailure = try String(contentsOf: log).split(separator: "\n")
+            XCTAssertEqual(afterFailure.filter { $0 == "launch" }.count, 1)
+            XCTAssertEqual(afterFailure.filter { $0.hasSuffix("/exchange") }.count, 1)
+
+            let recovered = try await client.call(tool: "get_screen_size", arguments: [:])
+            XCTAssertEqual(recovered["accepted"] as? Bool, true)
+            let reused = try await client.call(tool: "get_screen_size", arguments: [:])
+            XCTAssertEqual(reused["accepted"] as? Bool, true)
+            let requests = try String(contentsOf: log).split(separator: "\n")
+            XCTAssertEqual(requests.filter { $0 == "launch" }.count, 2)
+            XCTAssertEqual(requests.filter { $0 == "initialize" }.count, 2)
+            XCTAssertEqual(requests.filter { $0.hasSuffix("/open") }.count, 2)
+            XCTAssertEqual(requests.filter { $0.hasSuffix("/exchange") }.count, 3)
+        } catch {
+            await client.close()
+            throw error
+        }
+        await client.close()
+    }
+
     func testCancellationReachesAcknowledgedReceiver() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

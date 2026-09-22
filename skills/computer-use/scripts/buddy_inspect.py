@@ -6,7 +6,7 @@ MAX_ITEMS = 120
 TEXT_LIMIT = 240
 
 
-def compact_tree(tree):
+def compact_tree(tree, navigation=False):
     """Keep observed references and text, with explicit incompleteness markers."""
     nodes = tree.get("nodes")
     if not isinstance(nodes, list) or len(nodes) > 500:
@@ -19,7 +19,10 @@ def compact_tree(tree):
     items = []
     omitted = 0
     text_clipped = False
-    for node in nodes:
+    # Navigation prioritizes observed enabled controls while keeping their
+    # original refs/parents. Stable ordering preserves peer order within groups.
+    ordered = sorted(nodes, key=lambda node: not (node.get("enabled") is True and node.get("actions"))) if navigation else nodes
+    for node in ordered:
         current, seen = node, set()
         hidden = False
         while current:
@@ -28,7 +31,7 @@ def compact_tree(tree):
                 raise ValueError("cyclic Accessibility ancestry")
             seen.add(ref)
             # Missing privacy markers are unknown, never permission to expose text.
-            hidden |= current.get("secure") is not False or current.get("role") in ("AXMenuBar", "AXMenu", "AXMenuItem")
+            hidden |= current.get("secure") is not False or (not navigation and current.get("role") in ("AXMenuBar", "AXMenu", "AXMenuItem"))
             parent = current.get("parent_ref")
             if not parent:
                 break
@@ -67,10 +70,23 @@ def compact_tree(tree):
     return result
 
 
+def compact_cua(observation):
+    """Drop driver API advice, but preserve all observed text and action evidence."""
+    if "_note" not in observation:
+        return observation
+    # The upstream driver calls its bound max_elements, whereas the Buddy
+    # wrapper accepts max_nodes. Do not expose incompatible routing advice.
+    # tree_markdown is NOT generally redundant: static text can exist only
+    # there. Keep it alongside structured tokens, frames and completeness.
+    return {key: value for key, value in observation.items() if key != "_note"}
+
+
 def validate_inspect_params(params):
     """Validate observation input before any command, including a preceding action."""
-    if not isinstance(params, dict) or set(params) - {"app", "window_id"}:
-        raise ValueError("inspect params may contain only app and window_id")
+    if not isinstance(params, dict) or set(params) - {"app", "window_id", "mode"}:
+        raise ValueError("inspect params may contain only app, window_id and mode")
+    if params.get("mode", "auto") not in ("auto", "navigation", "detail"):
+        raise ValueError("inspect mode must be auto, navigation or detail")
     if "app" in params and (not isinstance(params["app"], str) or not params["app"].strip() or len(params["app"]) > 256):
         raise ValueError("app must contain 1–256 characters")
     if "window_id" in params and (type(params["window_id"]) is not int or params["window_id"] <= 0):
@@ -78,7 +94,7 @@ def validate_inspect_params(params):
 
 
 def inspect_ui(params, command, known_backend=None):
-    """Select one backend, then observe once. Never activate, retry or fail over."""
+    """Observe one backend; incomplete auto trees get one fresh navigation view."""
     validate_inspect_params(params)
     if known_backend not in (None, "cua", "native"):
         raise ValueError("invalid known observation backend")
@@ -99,16 +115,8 @@ def inspect_ui(params, command, known_backend=None):
     else:
         # A successful typed action proves its backend. The companion still
         # enforces pause and permissions on this new observation command.
-        action = "cua_observe" if known_backend == "cua" else "get_ui_tree"
-        target = params if known_backend == "cua" else dict(params, max_nodes=500, max_depth=12)
-        response = measured_command(action, target)
-        observation = response.get("result")
-        if not isinstance(observation, dict):
-            raise ValueError("invalid observation result")
-        if known_backend == "native":
-            observation = compact_tree(observation)
-        result = {"ok": True, "desktop": None, "backend": known_backend,
-                  "backend_source": "successful_action", "observation": observation}
+        result = _observe_backend(params, measured_command, known_backend, None)
+        result.update(backend=known_backend, backend_source="successful_action")
 
     result["timing"] = {"elapsed_ms": round((time.monotonic() - started) * 1000, 2),
                         "requests": requests}
@@ -126,22 +134,47 @@ def _inspect_ui(params, command):
     cua = desktop.get("cua")
     if isinstance(cua, dict) and cua.get("enabled") is True and cua.get("installed") is True:
         # Cua has its own TCC identity. Buddy's AX grant cannot predict its readiness.
-        response = command("cua_observe", params)
-        observation = response.get("result")
-        if not isinstance(observation, dict):
-            raise ValueError("invalid Cua observation")
-        # Preserve upstream text and tokens; static text may exist only in tree_markdown.
-        # The transport and adapter bound this result; do not duplicate or truncate it.
-        return {"ok": True, "desktop": state, "observation": observation}
+        return _observe_backend(params, command, "cua", state)
     if "window_id" in params:
         raise ValueError("window_id requires Cua")
     if desktop.get("accessibility") is not True:
         return {"ok": False, "reason": "accessibility_unavailable", "desktop": state}
-    response = command("get_ui_tree", dict(params, max_nodes=500, max_depth=12))
-    tree = response.get("result")
-    if not isinstance(tree, dict):
-        raise ValueError("invalid Accessibility result")
-    observation = compact_tree(tree)
-    if desktop.get("screen_recording") is not True:
+    return _observe_backend(params, command, "native", state)
+
+
+def _observe_backend(params, command, backend, desktop):
+    """Never mix snapshots: a navigation overview replaces the incomplete tree."""
+    mode = params.get("mode", "auto")
+    target = {key: value for key, value in params.items() if key != "mode"}
+    action = "cua_observe" if backend == "cua" else "get_ui_tree"
+
+    def capture(navigation):
+        arguments = dict(target)
+        if navigation:
+            arguments.update(max_nodes=500, max_depth=2 if backend == "cua" else 4)
+        elif backend == "native":
+            arguments.update(max_nodes=500, max_depth=12)
+        raw = command(action, arguments).get("result")
+        if not isinstance(raw, dict):
+            raise ValueError("invalid Cua observation" if backend == "cua" else "invalid Accessibility result")
+        # Validate native trees before deciding whether to request another view.
+        observation = compact_cua(raw) if backend == "cua" else compact_tree(raw, navigation=navigation)
+        incomplete = raw.get("elements_complete") is False if backend == "cua" else raw.get("truncated") is True
+        return observation, incomplete
+
+    navigation = mode == "navigation"
+    observation, incomplete = capture(navigation)
+    if mode == "auto" and incomplete:
+        # This is one bounded read of a different tree depth, never a retry of
+        # an errored command or an action. Only these fresh references survive.
+        observation, _ = capture(True)
+        navigation = True
+    if backend == "native" and desktop is not None and desktop.get("screen_recording") is not True:
         observation["issues"].append("screen_recording_unavailable")
-    return {"ok": True, "desktop": state, "observation": observation}
+    result = {"ok": True, "desktop": desktop, "observation": observation,
+              "observation_mode": "navigation" if navigation else "detail",
+              "navigation_only": navigation}
+    if navigation:
+        result["content_complete"] = False
+        result["notice"] = "Navigation overview only; inspect with mode detail to read content. Missing items do not establish absence."
+    return result

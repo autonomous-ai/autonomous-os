@@ -143,6 +143,17 @@ def command(action, params, timeout_ms=15000, endpoint=ENDPOINT, command_id=None
         raise BuddyError("action must be a non-empty string of at most 64 UTF-8 bytes")
     if not isinstance(params, dict):
         raise BuddyError("params must be a JSON object")
+    if action in ("get_ui_tree", "cua_observe"):
+        allowed = {"app", "max_nodes", "max_depth"}
+        if action == "cua_observe":
+            allowed.add("window_id")
+        hint = "use max_nodes 1..500 and max_depth 1..30; use inspect mode navigation for a shallow overview"
+        unknown = set(params) - allowed
+        if unknown:
+            raise BuddyError(f"{action} unknown params {sorted(unknown)}; {hint}")
+        for key, limit in (("max_nodes", 500), ("max_depth", 30)):
+            if key in params and (type(params[key]) is not int or not 1 <= params[key] <= limit):
+                raise BuddyError(f"{key} must be an integer in 1..{limit}; {hint}")
     if type(timeout_ms) is not int or not 500 <= timeout_ms <= 60000:
         raise BuddyError("timeout_ms must be an integer between 500 and 60000")
     if command_id is not None and (not isinstance(command_id, str) or not command_id.strip() or len(command_id.encode("utf-8")) > 128):
@@ -268,7 +279,7 @@ INSPECT_AFTER_ACTIONS = frozenset({
 
 
 def action_and_inspect(action, params, inspection_params, timeout_ms=15000, command_id=None):
-    """Issue one action and observe once; a failed observation never replays input."""
+    """Issue one action and inspect; a failed observation never replays input."""
     from buddy_inspect import inspect_ui, validate_inspect_params
     validate_inspect_params(inspection_params)
     if "app" not in inspection_params:
@@ -316,7 +327,7 @@ def main(argv=None):
     parser.add_argument("--question", help="Required for observe: ask about a fresh Mac screenshot")
     parser.add_argument("--goal", help="Required for suggest: describe the next UI step")
     parser.add_argument("--output-dir", type=Path, help="Device-local screenshot directory")
-    parser.add_argument("--inspect-after", help="JSON app/window_id target: observe once after a successful desktop action")
+    parser.add_argument("--inspect-after", help="JSON app/window_id/mode target: inspect after a successful desktop action")
     args = parser.parse_args(argv)
     try:
         raw = args.params_file.read_text(encoding="utf-8") if args.params_file else (args.params or "{}")
