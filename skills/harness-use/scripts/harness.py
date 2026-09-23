@@ -374,6 +374,39 @@ def store_workflow(action, params, context, persist):
     raise ValueError('Unknown workflow action')
 
 
+def retained_context(state, params):
+    """Expose task evidence across namespaces without choosing or changing a target."""
+    offset, limit = params.get('offset', 0), params.get('limit', 20)
+    if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 20:
+        raise ValueError('context offset must be nonnegative and limit must be 1 to 20')
+    contexts, tasks = [], []
+    for conversation, context in sorted(state.items()):
+        if 'conversation_id' in params and params['conversation_id'] != conversation:
+            continue
+        contexts.append({'conversation_id': conversation,
+                         **{k: context[k] for k in ('agentId', 'machineId') if k in context}})
+        last = context.get('lastTask')
+        if last and not params.get('intent_id'):
+            tasks.append({'conversation_id': conversation, 'kind': 'last_request', **last})
+        for intent_id, record in sorted(context.get('workflows', {}).items()):
+            if params.get('intent_id') and params['intent_id'] != intent_id:
+                continue
+            task = record.get('task', {})
+            operation = record.get('lastResult', {}).get('operation', {})
+            tasks.append({'conversation_id': conversation, 'kind': 'workflow',
+                          **{k: record[k] for k in ('intent_id', 'text', 'agentId', 'machineId',
+                                                   'workspace', 'packageId') if k in record},
+                          'operationState': operation.get('state'),
+                          'deliveryState': task.get('state'),
+                          'receiptState': task.get('receipt', {}).get('state')})
+    page = tasks[offset:offset + limit]
+    next_offset = offset + len(page)
+    return {'contexts': contexts, 'tasks': page, 'totalTasks': len(tasks),
+            'truncated': offset > 0 or next_offset < len(tasks),
+            'nextOffset': next_offset if next_offset < len(tasks) else None,
+            'guidance': 'Historical task evidence only, not automatic target selection. Match the user task and verify the current agent/workspace with list and recap. Mutation requires an explicit target.'}
+
+
 def run(action, params, path=None):
     if not isinstance(params, dict):
         raise ValueError('Parameters must be an object')
@@ -386,6 +419,12 @@ def run(action, params, path=None):
         os.chmod(lock.name, 0o600)
         fcntl.flock(lock, fcntl.LOCK_EX)
         state = json.loads(path.read_text()) if path.exists() else {}
+        if action == 'context':
+            return retained_context(state, params)
+        response = params.get('response')
+        if (conversation not in state and isinstance(response, dict)
+                and conversation == response.get('run_id')):
+            raise ValueError('UNSTABLE_CONVERSATION_ID: response.run_id identifies one turn, not a conversation. Omit conversation_id for voice or use a stable conversation scope. Existing legacy workflows must be resumed in their retained namespace.')
         if conversation not in state and len(state) >= 64:
             raise ValueError('Conversation state limit reached; reuse the stable channel conversation ID')
         context = state.setdefault(conversation, {})
@@ -402,7 +441,9 @@ def run(action, params, path=None):
         if action == 'resolve':
             if params.get('resolution') != 'do_not_retry':
                 raise ValueError('Explicit do_not_retry resolution required')
-            context.pop('pending', None)
+            pending = context.pop('pending', None)
+            if pending and pending.get('operation') == 'turn.send' and context.get('lastTask'):
+                context['lastTask']['deliveryState'] = 'do_not_retry'
             save(path, state)
             return {'resolved': True, 'resent': False}
         if action == 'receipt':
@@ -417,9 +458,14 @@ def run(action, params, path=None):
             if receipt and receipt.get('state') in KNOWN_RECEIPT_STATES:
                 if pending.get('responseRunID'):
                     context['completedResponseRunID'] = pending['responseRunID']
+                if pending.get('operation') == 'turn.send' and context.get('lastTask'):
+                    context['lastTask'].update(deliveryState='resolved', receiptState=receipt['state'])
                 context.pop('pending', None)
                 save(path, state)
             return result
+        explicit = params.get('agentId') or params.get('agent')
+        if action in ('send', 'answer', 'stop') and not explicit:
+            raise ValueError('EXPLICIT_TARGET_REQUIRED: Inspect context/list and the matching task workspace, then supply agentId or a unique agent name. Never use the retained default or resend a previous request as a fallback.')
         require_connection()
         listing = request('agents.list')
         if listing.get('error'):
@@ -428,7 +474,6 @@ def run(action, params, path=None):
             return bounded_agents(listing)
         agents = listing.get('agents', [])
         machine = listing.get('machineId')
-        explicit = params.get('agentId') or params.get('agent')
         selected = explicit or context.get('agentId')
         if not explicit and context.get('machineId') != machine:
             raise ValueError('Select an agent on the paired computer first')
@@ -480,6 +525,8 @@ def run(action, params, path=None):
             'operation': kind,
             **({'responseRunID': response['run_id']} if response is not None else {}),
         }
+        if action == 'send':
+            context['lastTask'] = {**target, 'text': text, 'recordedAt': time.time(), 'deliveryState': 'reserved'}
         save(path, state)
         result = request(kind, **target, idempotencyKey=key, **payload)
         receipt = result.get('receipt')
@@ -493,13 +540,16 @@ def run(action, params, path=None):
         }:
             # Only explicit pre-dispatch refusals resolve uncertainty. INTERNAL/REVOKED may be late.
             context.pop('pending', None)
+        if action == 'send':
+            context['lastTask']['deliveryState'] = 'reserved' if context.get('pending') else 'resolved'
+            context['lastTask']['receiptState'] = (receipt or {}).get('state')
         save(path, state)
         return result
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['list', 'select', 'send', 'stop', 'status', 'recap', 'answer', 'receipt', 'resolve', *STORE_ACTIONS])
+    parser.add_argument('action', choices=['context', 'list', 'select', 'send', 'stop', 'status', 'recap', 'answer', 'receipt', 'resolve', *STORE_ACTIONS])
     parser.add_argument('params', nargs='?', default='{}')
     args = parser.parse_args()
     try:

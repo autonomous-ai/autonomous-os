@@ -217,3 +217,9 @@ Until then, main/`workflow-status` owns recovery of the saved intent. OS mock te
 prove forwarding without hardware or direct Harness dispatch; they do not prove
 that a live model resumes the correct preparation. The Harness session must test
 that integration with its existing journal/idempotency tests.
+
+## Task ownership across follow-ups
+
+The helper requires an explicit agent ID or unique exact name for `send`, `answer`, and `stop`; it never silently mutates the retained default target. Local `context` exposes saved task text, targets and workflow evidence across namespaces, with task pagination (20 maximum) and optional conversation/intent filters. Historical evidence must be checked against the requested project and live agent metadata. A response run ID is not a stable conversation ID: creating a namespace equal to that run ID is rejected, while existing legacy workflows remain resumable.
+
+Follow-up result context carries transport-owned `agentId` and `responseRunId` alongside untrusted result text. On a destination correction, the main agent preserves the original unfinished task and resolves its intended workspace; a missing scene does not authorize creating a replacement in another project. This blocks implicit-target sends deterministically; semantic choice among explicit targets still depends on model interpretation and requires live validation.
