@@ -30,7 +30,7 @@ class StoreWorkflowTests(unittest.TestCase):
         self.receipt = {'state': 'queued'}
         self.candidate = {'agentId': 'existing', 'machineId': 'mac-example', 'packageId': 'autonomous/blender',
                           'runtime': 'ready', 'workspace': '/tmp/project', 'engine': 'claude', 'state': 'idle'}
-        for name, value in [('api', lambda *args: copy.deepcopy(self.status)), ('request', self.rpc)]:
+        for name, value in [('api', lambda *args, **kwargs: copy.deepcopy(self.status)), ('request', self.rpc)]:
             mock = patch.object(harness, name, side_effect=value)
             mock.start()
             self.addCleanup(mock.stop)
@@ -59,6 +59,16 @@ class StoreWorkflowTests(unittest.TestCase):
 
     def record(self):
         return json.loads(self.path.read_text())['voice']['workflows']['user-turn-1']
+
+    def test_store_dispatch_keeps_prepared_target_without_selector(self):
+        with patch.object(harness, 'api', side_effect=lambda *args, **kwargs: copy.deepcopy(self.status)) as api:
+            self.run_action('prepare', self.params)
+            self.run_action('operation')
+            self.run_action('dispatch')
+            self.assertFalse(any(c.args[0] == '/select-agent' for c in api.call_args_list))
+        sent = [fields for kind, fields in self.calls if kind == 'turn.send']
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]['agentId'], self.record()['agentId'])
 
     def test_house_workflow_namespace_cannot_fall_back_to_airplane_for_followup(self):
         # Simulate a legacy per-run namespace created before the stable-scope guard.

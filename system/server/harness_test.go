@@ -70,11 +70,25 @@ func TestHarnessRoutesProtectCodeAndLocalCommands(t *testing.T) {
 	if _, leaked := status.Data["code"]; leaked {
 		t.Fatal("public connection status leaked pairing code")
 	}
-	for _, address := range []string{"192.168.1.20:1234", "127.0.0.1:1234"} {
-		out = call(http.MethodPost, "/api/harness/request", address, "test-owner-token", "192.168.1.20")
-		if out.Code != http.StatusForbidden {
-			t.Fatalf("LAN/proxied agent request admitted: %d", out.Code)
+	for _, path := range []string{"/api/harness/request", "/api/harness/select-agent"} {
+		for _, address := range []string{"192.168.1.20:1234", "127.0.0.1:1234"} {
+			out = call(http.MethodPost, path, address, "test-owner-token", "192.168.1.20")
+			if out.Code != http.StatusForbidden {
+				t.Fatalf("LAN/proxied request admitted at %s: %d", path, out.Code)
+			}
 		}
+	}
+	disabled := false
+	s.config.JevHarness = &config.JevIntentConfig{Enabled: &disabled}
+	req := httptest.NewRequest(http.MethodPost, "/api/harness/select-agent", strings.NewReader(`{"machineId":"mac","agentId":"house","text":"Add trees"}`))
+	req.RemoteAddr = "127.0.0.1:1234"
+	selected := httptest.NewRecorder()
+	router.ServeHTTP(selected, req)
+	var selection struct {
+		Data harnessSelection `json:"data"`
+	}
+	if err := json.Unmarshal(selected.Body.Bytes(), &selection); err != nil || selected.Code != http.StatusOK || selection.Data.Mode != "disabled" || selection.Data.AgentID != "house" {
+		t.Fatalf("disabled selector did not retain original target: %d %s", selected.Code, selected.Body)
 	}
 	out = call(http.MethodPost, "/api/harness/pair/cancel", "192.168.1.20:1234", "test-owner-token", "")
 	if out.Code != http.StatusOK || service.PairStatus().Code != "" {
