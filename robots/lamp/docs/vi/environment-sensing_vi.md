@@ -461,13 +461,16 @@ Skill tham khảo mục environmental-care của `skills/wellbeing/SKILL.md`
 khó chịu không cần camera, danh tính, log hoạt động hay bộ đếm uống nước.
 
 Khi người dùng nói mệt, nhức đầu, chóng mặt, bí bách hoặc khó tập trung,
-wellbeing phản hồi người dùng trước. Môi trường là phần tùy chọn: capability
+wellbeing bắt buộc đọc reference discomfort, kể cả câu không chuẩn ngữ pháp
+như “I'm headache, tired, what happen?”. Không tự suy ra việc dùng màn hình,
+thời lượng hay nguyên nhân triệu chứng từ lời than. Capability
 thiếu/chưa biết thì không gọi công cụ môi trường; đọc lỗi, toàn null hoặc stale
 thì bỏ qua gợi ý môi trường. Không nhắc lỗi sensor hay yêu cầu setup hardware
 khi người dùng đang chia sẻ khó chịu. Chỉ giải thích thiếu dữ liệu nếu họ hỏi
-rõ về số đo phòng. Khi có capability, đọc status tối đa một lần có timeout
-(hoặc dùng snapshot hiện tại đã cung cấp) để thêm nhận xét phù hợp và một gợi ý
-thoải mái/thông gió có điều kiện. Số đo không xác định nguyên nhân triệu chứng
+rõ về số đo phòng. Khi có capability và không có dấu hiệu khẩn cấp, bắt buộc
+tham khảo environment và đọc status một lần có timeout (hoặc dùng snapshot
+hiện tại đã cung cấp) trước khi hoàn tất phản hồi. Việc thêm nhận xét phù hợp
+và một gợi ý thoải mái/thông gió có điều kiện vẫn là tùy chọn. Số đo không xác định nguyên nhân triệu chứng
 và không phủ nhận việc người dùng đang khó chịu.
 
 Reference discomfort có hướng dẫn ưu tiên triệu chứng/phơi nhiễm do người dùng

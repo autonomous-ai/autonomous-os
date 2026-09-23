@@ -480,13 +480,17 @@ and discomfort support do not require camera observations, identity, activity
 logs or hydration counters.
 
 For fatigue, headache, dizziness, stuffiness or difficulty concentrating,
-wellbeing responds to the user first. Environment is optional: absent/unknown
+wellbeing must load its discomfort reference, including for informal phrasing
+such as “I'm headache, tired, what happen?”. It must not infer screen use,
+duration or a symptom cause from the complaint. Absent/unknown
 capability means no environment tool call; failed, all-null or stale readings
 mean silently omit environmental advice. Do not mention sensor errors or ask
 for hardware setup in response to a wellbeing concern. Only explicit questions
 about room readings need an unavailable-data explanation. With declared
-capability, one bounded status read (or a supplied current snapshot) can add a
-relevant observation and one conditional comfort/ventilation suggestion. No
+capability and non-urgent discomfort, consulting environment and using one
+bounded status read (or a supplied current snapshot) is required before
+completing the reply. Including a relevant observation and one conditional
+comfort/ventilation suggestion remains optional. No
 reading establishes the cause of a symptom or dismisses a user's concern.
 
 The discomfort reference covers when a reported symptom/exposure should take

@@ -1,6 +1,6 @@
 ---
 name: wellbeing
-description: "Proactive coaching across hydration, breaks, meals, posture and environmental comfort (with the environment skill). Use when an [activity] event fires (message starts with `[activity] Activity detected: activity labels.` — labels include drink, break, celebrate, the fatigue label \"yawning\", or sedentary raw labels like \"using computer\"; sedentary events may also carry a [posture_summary: {...}] block when the user has been at the computer long enough for posture to drift), or when the user reports feeling tired, headachy, dizzy, stuffy or unable to focus, or asks if they should drink water / take a break / fix their posture. Activity-reminder thresholds are computed from per-user logs, never guessed."
+description: "Proactive coaching across hydration, breaks, meals, posture and environmental comfort (with the environment skill). Use when an [activity] event fires (message starts with `[activity] Activity detected: activity labels.` — labels include drink, break, celebrate, the fatigue label \"yawning\", or sedentary raw labels like \"using computer\"; sedentary events may also carry a [posture_summary: {...}] block when the user has been at the computer long enough for posture to drift), or when the user reports feeling tired, having a headache, dizzy, stuffy or unable to focus (including informal wording such as \"I’m headache, tired, what happen?\"), or asks if they should drink water / take a break / fix their posture. Activity-reminder thresholds are computed from per-user logs, never guessed."
 ---
 
 # Wellbeing
@@ -23,13 +23,22 @@ That line is the entire reply, not a sentence to append after analysis. Do not p
 
 ## User-reported discomfort
 
-For “I feel tired and have a headache”, dizziness, a stuffy room or difficulty
-concentrating, read [reference/discomfort.md](reference/discomfort.md). Respond
-to what the user says; do not invent an activity event or run the activity/log
-router below. Environmental evidence is optional: if the capability is absent
-or unknown, or readings are unavailable, silently omit that part and continue
-ordinary support. Do not load a missing environment skill, poll hardware, or
-announce sensor setup problems in response to a wellbeing concern.
+A direct report of fatigue, headache, dizziness, stuffiness or difficulty
+concentrating MUST use [reference/discomfort.md](reference/discomfort.md)
+before answering, including informal or ungrammatical reports such as
+“I'm headache, tired, what happen?” or “mệt, đau đầu quá”. Do not wait for
+an activity tag or an explicit request to check the room.
+
+For non-urgent discomfort with a declared `environment` capability, consult
+`skills/environment/SKILL.md` and use a current snapshot or one bounded
+status read before completing the reply. The check is required in that case;
+mentioning a measurement is optional and depends on fresh, relevant evidence.
+Urgent reported symptoms take priority over sensor checks. If capability is
+absent/unknown, the skill is unavailable, or the read fails, continue ordinary
+support without sensor-error commentary or retries.
+
+Do not invent an activity event, run the activity/log router below, or infer
+screen use, duration, dehydration or a symptom cause from the complaint.
 
 ## Environmental care
 

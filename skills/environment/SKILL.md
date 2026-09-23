@@ -1,6 +1,6 @@
 ---
 name: environment
-description: Interpret environmental sensor readings and sustained changes for room comfort and air quality. Use for [environment:initial] greeting context, [environment:update] events, questions about room temperature, humidity, measured CO2 or air quality, checking changes after ventilation or air cleaning, and optional room context when a user reports discomfort. Requires the environment capability. Link to wellbeing for considerate proactive advice; do not diagnose health conditions or infer CO2 or oxygen from other measurements.
+description: Interpret environmental sensor readings and sustained changes for room comfort and air quality. Use for [environment:initial] greeting context, [environment:update] events, questions about room temperature, humidity, measured CO2 or air quality, checking changes after ventilation or air cleaning, and checking room context when a user reports discomfort with the capability declared. Requires the environment capability. Link to wellbeing for considerate proactive advice; do not diagnose health conditions or infer CO2 or oxygen from other measurements.
 ---
 
 # Environment
@@ -9,7 +9,7 @@ description: Interpret environmental sensor readings and sustained changes for r
 
 Work from the device's declared `environment` capability and the measurements actually present. Do not require a camera, microphone, emotion marker, or a particular sensor model. If the capability is absent, skip environmental checks; explain unavailability only for an explicit room-data question. Do not enable hardware or edit its declaration.
 
-For a direct room question, a requested current comparison, or optional room context for a wellbeing concern when the capability is declared, read the OS environment status API once (reuse a supplied current status snapshot when available):
+For a direct room question, a requested current comparison, or a non-urgent wellbeing concern when the capability is declared, read the OS environment status API once (reuse a supplied current status snapshot when available):
 
 ```bash
 curl --fail --silent --show-error --max-time 5 http://127.0.0.1:5000/api/environment/status
@@ -60,8 +60,9 @@ When the user says they feel tired, headachy, dizzy, stuffy or unable to focus,
 consult `skills/wellbeing/reference/discomfort.md` for the response. Apply it
 here without handing the turn back through the wellbeing activity router.
 Do not inspect sensors before responding to an already apparent urgent symptom
-or reported exposure. Otherwise use at most one status read, only when the
-capability is declared. A failed read, all-null sample, stale data or absent
+or reported exposure. Otherwise, when the capability is declared, you MUST use a supplied current
+status snapshot or one bounded status read before completing the reply.
+The check is required; including a measurement in the reply is optional. A failed read, all-null sample, stale data or absent
 metric means omit that environmental explanation, not invent a substitute.
 
 Separate three facts: how the user says they feel, what the sensor measured,
@@ -121,7 +122,7 @@ When speaking proactively, offer one useful observation and at most one action i
 | Warm HAL; greeting includes initial temperature and CO₂ | Add at most one factual sentence using supplied fresh readings; no second notification. |
 | First update has `reason: "initial"`, `changes: {}`, temperature only | Briefly report temperature when appropriate; do not require a delta or wait for VOC/NOx. |
 | Delayed initial update; readings are stale or unavailable | Omit the environmental report (`NO_REPLY` for a separate update); do not fetch or promise a retry. |
-| “I feel tired and have a headache.” | Use wellbeing’s discomfort reference. When the environment capability and fresh readings are available, optionally add one relevant observation; otherwise omit environment entirely. Never assign a cause from sensor data. |
+| “I feel tired and have a headache.” | Use wellbeing’s discomfort reference. With declared environment capability, use a current snapshot or read status once; optionally add one relevant fresh observation. Without capability or usable data, continue ordinary support. Never assign a cause from sensor data. |
 | CO₂ component stale; PM fresh | Report PM if useful; CO₂ is unavailable. Do not reuse the aggregate timestamp to call CO₂ current. |
 | CO₂ rises after a particle purifier starts | Explain that particle filtration does not address CO₂; consider ventilation conditionally, without assuming occupancy or health effects. |
 | VOC Index returns to 100 | Describe the relative change if relevant; never say pollution has cleared or air is safe. |
