@@ -42,6 +42,7 @@ from hal.realtime.context_manager import (
     OpenClawContextManager,
 )
 from hal.realtime.enums import AgentGateway
+from hal.realtime.find_intent import is_find_request
 from hal.realtime.models import (
     FunctionCallOutput,
     FunctionCallResultInput,
@@ -1285,6 +1286,13 @@ class RealtimeOrchestrator:
                 isinstance(output, FunctionCallOutput)
                 and output.name == LOOK_TOOL_NAME
             ):
+                # A find is a servo search, never a look — delegate it before
+                # any aim or capture (see _redirect_find_look).
+                redirect = self._redirect_find_look(output)
+                if redirect is not None:
+                    produced = True
+                    yield redirect
+                    break
                 # Fresh frame sent → the turn must be REPLAYED so the frame
                 # (queued by the Live API for the next turn) joins the answer —
                 # see _handle_look_call. Mirror the delegate flow: end_turn so
@@ -1702,6 +1710,47 @@ class RealtimeOrchestrator:
             logger.warning(
                 "[realtime] emotion expression failed (emotion=%s): %s", emotion, e
             )
+
+    def _redirect_find_look(self, output: FunctionCallOutput) -> DelegateSignal | None:
+        """Hand a find/search request that reached `look` to the main agent.
+
+        The prompt already says a find is a servo search, not a look, but the
+        model can ignore it: "Find my mouse" went through `look` on 3.8
+        extended-thinking, the frame was persisted, and the main agent then got
+        the request with an unrelated pre-search [vision-image] (#481). Decided
+        here, before aim and capture, so no frame is taken or attached. Mirrors
+        the delegate_to_main branch: ack the call, end the turn, delegate.
+        Returns None (normal look) when the transcript is empty or not a find.
+        """
+        transcript: str = (output.user_transcript or "").strip()
+        if not transcript:
+            logger.info("[realtime] look: no transcript at call time — find guard skipped")
+            return None
+        if not is_find_request(transcript):
+            return None
+        logger.info(
+            "[realtime] look: find request %r — delegating without capture",
+            transcript[:100],
+        )
+        import hal.app_state as state
+
+        # No frame belongs to this request; drop any earlier one so the handoff
+        # cannot carry a stale [vision-image].
+        state.realtime_look_frame_path = None
+        state.realtime_look_frame_ts = 0.0
+        self._agent.send(
+            [
+                FunctionCallResultInput(
+                    call_id=output.call_id,
+                    output='{"result": "delegated"}',
+                )
+            ]
+        )
+        self._agent.end_turn()
+        return DelegateSignal(
+            message=transcript, transcript=transcript,
+            user_turn_id=output.user_turn_id,
+        )
 
     def _handle_look_call(self, output: FunctionCallOutput) -> bool:
         """Handle the model's `look` call. Returns True when a FRESH frame was
