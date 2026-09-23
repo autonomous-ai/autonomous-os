@@ -1024,8 +1024,17 @@ thứ nhìn thấy: nếu cùng turn còn kèm hành động ("quay sang phải,
 nói xem thấy gì"), prompt bắt buộc gọi một `delegate_to_main` gộp cả hai vế — không
 `look` — để lệnh chuyển động không bị âm thầm bỏ rơi. Mô tả tool và prompt Gemini
 đều loại trừ việc tìm một vật cụ thể ("cây bút của tôi đâu", "bạn có thấy chìa khóa
-không") — đó là một lượt tìm kiếm được delegate, không phải look. Orchestrator đăng ký tool `look` (`orchestrator.py`,
-`LOOK_TOOL`) và xử lý trong `_handle_look_call`:
+không") — đó là một lượt tìm kiếm được delegate, không phải look. Model vẫn có thể
+bỏ qua lời dặn đó ("Find my mouse" đã đi vào `look` trên 3.8 extended-thinking,
+#481), nên orchestrator ép buộc bằng code: khi `look` được gọi và transcript của
+provider cho turn đó khớp `hal/realtime/find_intent.py` (tiếng Anh: find / locate /
+search / look for / look around / where is / do hoặc can you see my; tiếng Việt:
+tìm / ở đâu / đâu rồi), `_redirect_find_look` **không** ngắm và không chụp. Nó ack
+call bằng `{"result": "delegated"}`, xóa `realtime_look_frame_path`, kết thúc turn
+và delegate transcript, nên main agent chạy `/servo/search` mà không có
+`[vision-image]`. Transcript rỗng tại thời điểm gọi thì bỏ qua guard (log
+`look: no transcript at call time — find guard skipped`). Orchestrator đăng ký
+tool `look` (`orchestrator.py`, `LOOK_TOOL`) và xử lý trong `_handle_look_call`:
 
 1. **Ngắm đầu vào đối tượng trước**, trên thiết bị có thể chuyển động — nếu
    không thì model sẽ trả lời đầy tự tin về bất cứ thứ gì cái đầu tình cờ đang
@@ -1043,14 +1052,29 @@ không") — đó là một lượt tìm kiếm được delegate, không phải
    300ms cố định; không thêm độ trễ khi servo vốn đang đứng yên hoặc thiết bị
    không có servo), downscale về `HAL_GEMINI_VISION_MAX_WIDTH`
    (mặc định 768px) để giới hạn token ảnh.
-3. Đẩy vào làm **video input** realtime (`ImageInput` → `send_realtime_input(video=…)`),
+3. **Session extended-thinking** (session đã báo `interaction_status`, nên
+   `supports_look_continuation` là true — 3.8 extended-thinking): JPEG nằm
+   **bên trong tool response của `look`** (`FunctionCallResultInput.image` →
+   `FunctionResponse.parts`, log `look: image attached to tool response
+   call_id=… bytes=… gen=…`), và không replay. Ack kích hoạt lượt generate kế
+   tiếp, nên một frame gửi riêng sau ack có thể vẫn đang được xử lý khi lượt
+   generate đó bắt đầu, và model trả lời "không nhìn thấy" (#481).
+   `send_realtime_input` không bảo đảm thứ tự. Gộp thành một message thì hết
+   race mà không phải chờ. Live SDK `json.dumps` tool response mà không
+   base64-encode bytes, nên `gemini_live.py` đưa JPEG vào dưới dạng chuỗi base64
+   qua `model_construct`. Kiểm chứng trên thiết bị 2026-09-23: 3.8
+   extended-thinking trả lời đúng từ ảnh trong response 2/2 lần; 3.8-live thường
+   thì không ổn định, nên vẫn đi đường bên dưới.
+
+   **Các session khác** (3.1, 3.8-live thường) đi đường cũ: đẩy frame vào làm
+   **video input** realtime (`ImageInput` → `send_realtime_input(video=…)`),
    rồi **replay turn**: Live API xếp frame gửi giữa-turn vào turn KẾ TIẾP
    (device-proven: flow ack-tool → tiếp-turn cũ khiến mọi câu look trả lời bằng
    ảnh của lần look *trước* — lệch 1 ảnh, delay ack bao nhiêu cũng không cứu),
    nên thay vì ack tool call, orchestrator yield `LookReplaySignal` và
    `run_realtime_turn` gửi lại audio của turn + commit lần nữa trên CÙNG
    session. Frame đang xếp hàng vào đúng turn replay.
-4. Turn replay kích hoạt `look` lần nữa, rơi vào reuse guard
+4. (Chỉ đường replay.) Turn replay kích hoạt `look` lần nữa, rơi vào reuse guard
    (`VISION_MIN_INTERVAL_S`) và được ack `trigger_response=True` — model trả
    lời bằng frame lúc này đã thật sự nằm trong context.
 

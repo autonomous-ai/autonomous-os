@@ -1059,8 +1059,18 @@ action ("turn to the right, hold it there, and tell me what you see"), the promp
 requires a single `delegate_to_main` covering both halves — no `look` — so the
 movement is never silently dropped. The tool description and the Gemini prompt
 both exclude finding a specific object ("where is my pen", "do you see my keys") —
-that is a delegated search, not a look. The orchestrator registers a `look` tool
-(`orchestrator.py`, `LOOK_TOOL`) and handles the call in `_handle_look_call`:
+that is a delegated search, not a look. The model can still ignore that advice
+("Find my mouse" reached `look` on 3.8 extended-thinking, #481), so the
+orchestrator enforces it: when `look` is called and the turn's provider transcript
+matches `hal/realtime/find_intent.py` (English: find / locate / search / look for /
+look around / where is / do or can you see my; Vietnamese: tìm / ở đâu / đâu rồi),
+`_redirect_find_look` does **no** aim or capture. It acks the call with
+`{"result": "delegated"}`, clears `realtime_look_frame_path`, ends the turn and
+delegates the transcript, so the main agent runs `/servo/search` with no
+`[vision-image]`. An empty transcript at call time skips the guard (log line
+`look: no transcript at call time — find guard skipped`). The orchestrator
+registers a `look` tool (`orchestrator.py`, `LOOK_TOOL`) and handles the call in
+`_handle_look_call`:
 
 1. **Aim the head at the subject first**, on devices that can move — otherwise a
    confident answer gets given about whatever the head happened to face. See
@@ -1077,14 +1087,29 @@ that is a delegated search, not a look. The orchestrator registers a `look` tool
    300ms; zero added latency when the servos are already still or the device has
    none), downscaled to `HAL_GEMINI_VISION_MAX_WIDTH`
    (default 768px) to bound image tokens.
-3. Enqueue it as realtime **video input** (`ImageInput` → `send_realtime_input(video=…)`),
+3. **Extended-thinking sessions** (the session has reported `interaction_status`,
+   so `supports_look_continuation` is true — 3.8 extended-thinking): the JPEG goes
+   **inside the `look` tool response** (`FunctionCallResultInput.image` →
+   `FunctionResponse.parts`, log line `look: image attached to tool response
+   call_id=… bytes=… gen=…`), and there is no replay. The ack triggers the next
+   generation, so a frame sent separately after it could still be processing
+   when that generation began, and the model answered "I can't see" (#481).
+   `send_realtime_input` gives no ordering guarantee. One message removes the
+   race without any wait. The Live SDK `json.dumps` the tool response without
+   base64-encoding bytes, so `gemini_live.py` puts the JPEG in as base64 text via
+   `model_construct`. Device-verified 2026-09-23: 3.8 extended-thinking answered
+   from the in-response image twice out of two; plain 3.8-live did not reliably,
+   so it stays on the path below.
+
+   **Other sessions** (3.1, plain 3.8-live) take the original path: enqueue the
+   frame as realtime **video input** (`ImageInput` → `send_realtime_input(video=…)`),
    then **replay the turn**: the Live API queues a frame sent mid-turn for the
    NEXT turn (device-proven: the tool-ack → continue-turn flow answered every
    look from the *previous* look's image — a one-image lag no ack delay fixes),
    so instead of acking the tool call, the orchestrator yields `LookReplaySignal`
    and `run_realtime_turn` re-appends the turn's audio and commits again on the
    SAME session. The queued frame joins the replayed turn.
-4. The replayed turn re-triggers `look`, which hits the reuse guard
+4. (Replay path only.) The replayed turn re-triggers `look`, which hits the reuse guard
    (`VISION_MIN_INTERVAL_S`) and is acked with `trigger_response=True` — the
    model answers from the frame that is now genuinely in context.
 
