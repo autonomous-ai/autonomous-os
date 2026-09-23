@@ -568,7 +568,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 		// Runs sync on the WS worker — the chat-stream error for the same
 		// run arrives after this returns, so wasErrorRecovered is reliable.
 		errorRecovered := false
-		if payload.Data.Phase == "error" {
+		if payload.Data.Phase == "error" && !strings.HasPrefix(payload.Data.Error, domain.RunExpiryErrorPrefix) {
 			errorRecovered = h.tryRecoverIncompleteTurn(payload.RunID, flowRunID, payload.SessionKey)
 			if errorRecovered {
 				h.markErrorRecovered(flowRunID)

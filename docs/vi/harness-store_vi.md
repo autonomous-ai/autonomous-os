@@ -47,6 +47,11 @@ Metadata local `response:{run_id,channel}` gắn quan sát preparation với lư
 
 `accepted` nghĩa là đã lưu intent, `running` là đang chuẩn bị, `ready` là chuẩn bị xong, `failed` cần xem lỗi, `needs_user_action` cần hiển thị lỗi/guidance và giữ operation. Agent ID có thể đã tồn tại khi cần người dùng thao tác: hướng chủ sở hữu tới agent đó thay vì tạo thêm. Giữ lỗi chưa biết để hiển thị, không coi là thành công. Duyệt tool vẫn thuộc Desktop; `question.answer` không phê duyệt quyền tool.
 
+Thời gian chờ preparation có giới hạn riêng, ngoài timeout từng RPC. Helper lưu bền **budget 90 giây cho mỗi response run**; gọi lại hoặc reconnect không gia hạn. `PREPARATION_WAIT_EXPIRED` dừng poll, yêu cầu main giải thích task chưa được gửi; preparation từ xa và journal vẫn giữ nguyên. Lượt người dùng mới có thể tiếp tục cùng intent/operation/key với response route mới. Timeout không cho phép tạo agent khác hay gửi task muộn.
+
+OS có thêm **deadline 120 giây** từ prepare/poll đầu tiên có response route. Hết hạn và nhận dispatch được đồng bộ: route hết hạn không được gửi task; task đã được nhận để gửi không bị watchdog preparation hủy vì delivery có thể chưa rõ. Native Hermes triển khai `RunExpirer` tùy chọn: chỉ dừng đúng owner hiện tại và kết thúc bằng `lifecycle.error` sau cleanup từ xa có giới hạn (tối đa thêm 30 giây), không báo task thành công. Deadline cũ không được hủy request mới được steer vào. Runtime khác hiện có budget helper và chặn dispatch, nhưng chưa bảo đảm hủy runtime; trường hợp không hỗ trợ được ghi log. Deadline OS ở RAM, budget helper lưu bền. Không tự retry dispatch hoặc đổi contract Store.
+
+
 ## Phạm vi kiểm chứng
 
 Unit/contract tests OS dùng schemas đã ghim, fixture Blender giả lập, kết quả request giả và journal trong thư mục tạm. Kiểm tra recovery bền vững và hành vi transport/progress mà không cài package, chạy Blender, tạo session agent có phí hay kết nối robot. Các test không xác nhận CLI thực, đăng nhập engine hay artifact được tạo.

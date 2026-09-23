@@ -47,6 +47,11 @@ Local `response:{run_id,channel}` metadata associates preparation observations w
 
 `accepted` means intent reserved, `running` means preparation in progress, `ready` means preparation completed, `failed` means inspect the error, and `needs_user_action` means show error/guidance and preserve the operation. An agent ID can already exist in an action-needed operation: direct the owner to that agent instead of creating another. Unknown errors remain visible and are not success. Tool approvals still belong in Desktop; `question.answer` cannot approve them.
 
+
+Preparation waiting is bounded independently of individual RPC timeouts. The helper persists a **90-second budget per response run**; repeated invocations and reconnects do not renew it. `PREPARATION_WAIT_EXPIRED` ends polling and asks the main agent to explain that the task has not been sent; the remote preparation and journal remain intact. A new user turn can resume the same intent/operation/keys with its new response route. No timeout is permission to create another agent or dispatch a late task.
+
+The OS additionally starts a **120-second deadline** on the first routed prepare/poll. Expiry and task admission are serialized: expired routes cannot dispatch; already admitted tasks are never cancelled by this preparation watchdog because their delivery may be uncertain. Native Hermes implements optional `RunExpirer`: expiry stops only the exact current owner and ends with `lifecycle.error`, normally after bounded remote cleanup (up to 30 additional seconds), not task success. A newer steered request cannot be cancelled by an older deadline. Other runtimes currently have the helper budget and dispatch gate but no guaranteed runtime cancellation; unsupported cancellation is logged. OS deadline bookkeeping is in memory; the helper budget is durable. The guard does not retry dispatch or alter the Store wire contract.
+
 ## Validation boundary
 
 OS unit/contract tests use pinned schemas, the synthetic Blender fixture, fake request results and local temporary journals. They cover durable recovery and transport/progress behavior without installing Store packages, running Blender, creating paid agent sessions or connecting to a robot. These tests do not certify a live CLI, engine login or generated artifacts.

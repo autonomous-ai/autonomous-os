@@ -85,6 +85,7 @@ def bounded_agents(listing):
 
 
 STORE_CAPABILITIES = ('store.list', 'store.inspect', 'agent.prepare', 'operation.get')
+PREPARATION_WAIT_SECONDS = 90
 STORE_ACTIONS = ('store-list', 'store-inspect', 'prepare', 'operation', 'dispatch', 'workflow-receipt', 'workflow-status', 'workflow-resolve')
 
 
@@ -180,6 +181,32 @@ def store_workflow(action, params, context, persist):
         persist()
     route = {'response': record['response']} if record.get('response') else {}
 
+    # A poll invocation is bounded already; also bound repeated invocations in
+    # the same user turn. Persist the deadline so subprocess/reconnect cannot
+    # renew it. Only a new response run may resume the same saved intent.
+    def wait_expired():
+        if record.get('task') or record.get('selectedAgentId'):
+            return None
+        budget = record.get('preparationWait')
+        run_id = (record.get('response') or {}).get('run_id') or (budget or {}).get('run_id', intent_id)
+        if not budget or budget.get('run_id') != run_id:
+            budget = {'run_id': run_id, 'deadline': time.time() + PREPARATION_WAIT_SECONDS}
+            record['preparationWait'] = budget
+            persist()
+        if not budget.get('expired') and time.time() < budget['deadline']:
+            return None
+        budget['expired'] = True
+        persist()
+        return {'wait_status': 'expired', 'code': 'PREPARATION_WAIT_EXPIRED',
+                'intent_id': intent_id, 'operationId': record.get('operationId'),
+                'taskDispatched': False, 'resume_required': True,
+                'guidance': 'Stop polling and end this turn with an honest explanation: Harness preparation has not become ready within the wait budget; the task has not been sent. The preparation may continue remotely. Keep this intent and keys. Resume only on a new user turn with its response run_id; do not create another agent or send the task now.'}
+
+    if action in ('prepare', 'operation', 'dispatch'):
+        expired = wait_expired()
+        if expired:
+            return expired
+
     def remember(result):
         operation = result.get('operation')
         if operation:
@@ -244,12 +271,21 @@ def store_workflow(action, params, context, persist):
             raise ValueError('Preparation acknowledgement missing; resume prepare with the same intent_id')
         deadline = time.time() + wait_seconds
         while True:
+            expired = wait_expired()
+            if expired:
+                return expired
             delay = max(0, record.get('nextPollAt', 0) - time.time())
             if delay > 0:
                 if time.time() + delay > deadline:
                     return {'workflow': record, 'retry_after_seconds': round(delay, 2)}
                 time.sleep(delay)
+            expired = wait_expired()
+            if expired:
+                return expired
             result = remember(request('operation.get', operationId=record['operationId'], **route))
+            expired = wait_expired()
+            if expired:
+                return expired
             limited = result.get('error', {}).get('code') in ('RATE_LIMITED', 'BACKPRESSURE')
             record['pollBackoff'] = min(20, max(4, record.get('pollBackoff', 2) * 2)) if limited else 2
             record['nextPollAt'] = time.time() + record['pollBackoff']
@@ -307,12 +343,18 @@ def store_workflow(action, params, context, persist):
             operation = result['operation']
             if not isinstance(operation.get('agentId'), str) or not operation['agentId'] or operation.get('taskDispatched') is not False:
                 raise ValueError('Ready operation must name an agent and confirm taskDispatched false')
+        expired = wait_expired()
+        if expired:
+            return expired
         # Refresh identity immediately before reserving; preparation may span reconnects.
         current = require_connection()
         if (current.get('machine_id') != machine or not current.get('server_instance_id')
                 or not all(cap in current.get('capabilities', []) for cap in STORE_CAPABILITIES)
                 or record.get('peerFingerprint') and current.get('fingerprint') != record['peerFingerprint']):
             raise ValueError('Connected machine/server identity unavailable; do not dispatch')
+        expired = wait_expired()
+        if expired:
+            return expired
         target = {'machineId': machine, 'agentId': record['agentId']}
         record['task'] = {'state': 'reserved', 'serverInstanceId': current['server_instance_id'], **target}
         context.update(target)

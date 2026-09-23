@@ -550,3 +550,7 @@ Realtime handled voice and main-agent history sync use separate IDs: `device-rea
 ## Harness Store progress
 
 Observed `agent.prepare` / `operation.get` snapshots record `harness_store_progress` with the local run ID, operation ID, state, phase and bounded display text. While the main-agent run is active, the existing `assistant_delta` stream displays these observations; preparation neither suppresses the main reply nor starts TTS. Once task delivery owns the response, late preparation progress cannot replace it. This is polled evidence, not a new Harness protocol event. `ready` means agent preparation only and does not complete the user's task. Action-needed/error guidance remains available to main. No new frontend card or automatic background polling is introduced; see [Harness Store](harness-store.md).
+
+### Harness preparation wait expiry
+
+`harness_preparation_wait_expired` records a local response deadline, with `task_dispatched:false`; it is not a remote operation failure or task result. Native Hermes ends the scoped owner through the normal `lifecycle_error` path after bounded cancellation. Errors prefixed `OS_RUN_EXPIRED:` bypass partial-answer recovery so a timed-out wait cannot be displayed as a recovered success. Preparation progress suppresses repeated identical snapshots per active run/operation and separates changed messages with paragraph breaks.

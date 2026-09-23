@@ -60,6 +60,46 @@ class StoreWorkflowTests(unittest.TestCase):
     def record(self):
         return json.loads(self.path.read_text())['voice']['workflows']['user-turn-1']
 
+    def test_wait_budget_survives_retries_and_preserves_intent(self):
+        with patch.object(harness.time, 'time', return_value=1000):
+            self.run_action('prepare', self.params)
+        saved = self.record()
+        self.operation = self.accepted
+        with patch.object(harness.time, 'time', return_value=1091):
+            for action in ('operation', 'prepare', 'dispatch'):
+                result = self.run_action(action)
+                self.assertEqual(result['code'], 'PREPARATION_WAIT_EXPIRED')
+                self.assertFalse(result['taskDispatched'])
+        self.assertEqual([kind for kind, _ in self.calls], ['agent.prepare'])
+        self.assertEqual(self.record()['preparationKey'], saved['preparationKey'])
+        self.assertEqual(self.record()['taskKey'], saved['taskKey'])
+        self.assertNotIn('task', self.record())
+        self.operation = self.ready
+        with patch.object(harness.time, 'time', return_value=1100):
+            result = self.run_action('operation', {'intent_id': 'user-turn-1',
+                'response': {'run_id': 'new-user-turn', 'channel': 'web'}})
+            self.assertEqual(result['operation']['state'], 'ready')
+            self.run_action('dispatch')
+        self.assertEqual([kind for kind, _ in self.calls].count('agent.prepare'), 1)
+        self.assertEqual([kind for kind, _ in self.calls].count('turn.send'), 1)
+        self.assertEqual(self.record()['taskKey'], saved['taskKey'])
+
+    def test_slow_readiness_reply_cannot_dispatch_after_wait_deadline(self):
+        with patch.object(harness.time, 'time', return_value=1000):
+            self.run_action('prepare', self.params)
+        clock = [1089]
+        original = self.rpc
+        def slow_rpc(kind, **fields):
+            result = original(kind, **fields)
+            if kind == 'operation.get':
+                clock[0] = 1091
+            return result
+        with patch.object(harness, 'request', side_effect=slow_rpc), patch.object(harness.time, 'time', side_effect=lambda: clock[0]):
+            result = self.run_action('dispatch')
+        self.assertEqual(result['code'], 'PREPARATION_WAIT_EXPIRED')
+        self.assertNotIn('task', self.record())
+        self.assertFalse(any(kind == 'turn.send' for kind, _ in self.calls))
+
     def test_fixture_preparation_then_exact_once_dispatch(self):
         self.run_action('prepare', self.params)
         self.run_action('operation')

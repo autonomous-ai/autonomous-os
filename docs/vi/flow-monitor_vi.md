@@ -335,3 +335,7 @@ Lượt voice do realtime xử lý và lượt history sync dùng ID riêng: `de
 ## Tiến độ Harness Store
 
 Snapshot quan sát được từ `agent.prepare` / `operation.get` ghi `harness_store_progress` với run ID local, operation ID, state, phase và nội dung hiển thị có giới hạn. Khi lượt main-agent còn active, luồng `assistant_delta` hiện có hiển thị các quan sát; preparation không chặn phản hồi main hay bật TTS. Khi delivery task đã sở hữu phản hồi, progress preparation đến muộn không được thay thế. Đây là dữ kiện từ polling, không phải protocol event Harness mới. `ready` chỉ nghĩa chuẩn bị agent, không hoàn thành task người dùng. Main vẫn nhận guidance/lỗi cần thao tác. Không thêm card frontend hoặc polling nền tự động; xem [Harness Store](harness-store_vi.md).
+
+### Hết hạn chờ preparation Harness
+
+`harness_preparation_wait_expired` ghi deadline lượt phản hồi local, với `task_dispatched:false`; không phải lỗi operation từ xa hay kết quả task. Native Hermes kết thúc đúng owner qua `lifecycle_error` sau hủy có giới hạn. Lỗi có prefix `OS_RUN_EXPIRED:` bỏ qua recovery câu trả lời dở để không biến lượt chờ hết hạn thành thành công được khôi phục. Progress preparation bỏ snapshot liên tiếp trùng theo run/operation active và ngăn các thông báo thay đổi bằng đoạn mới.
