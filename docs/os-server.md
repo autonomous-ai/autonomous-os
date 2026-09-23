@@ -110,11 +110,14 @@ startup paths while retaining change detection. HAL's optional per-component
 warm-up after an OS-only restart; invalid/stale components remain excluded.
 The `environment` skill interprets measurements and consults `wellbeing` for
 proportionate advice. Hardware acquisition and OS change policy are separate;
-the policy does not enable hardware. Lamp declares optional `environment`
-(`required: false`) and enables SEN63C only on `orangepi_sun60`, bus `0`;
-SEN55/SCD41 and boards without matching entries remain disabled. Missing SEN63C
-reports an error and retries without blocking startup. Disable SEN63C before
-enabling the alternative SEN55 + SCD41 components.
+the policy does not enable hardware. Only Lamp hardware profiles `pro`, `pro-respeaker-lite` and
+`pro-xvf3800` declare optional `environment` (`required: false`) and enable
+SEN63C on `orangepi_sun60`, bus `0`. Standard keeps the capability commented
+and SEN63C disabled: no acquisition, SEN63C clock writes, environment events
+or capability-based eligibility for the environment skill. SEN55/SCD41 and
+boards without matching entries remain disabled, including Raspberry Pi on Pro.
+Missing SEN63C on Pro reports an error and retries without blocking startup.
+Disable SEN63C before enabling the alternative SEN55 + SCD41 components.
 See [Lamp environment sensing](../robots/lamp/docs/environment-sensing.md#os-change-policy-and-agent-access)
 for defaults, validation, payloads and use cases.
 
