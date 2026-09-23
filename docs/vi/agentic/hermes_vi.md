@@ -1190,3 +1190,21 @@ Các sửa lỗi sau review giữ context phiên Hermes trong worker (cần cho 
 skill bị tắt theo kênh) và bỏ qua lệnh slash giống hook tham chiếu. Các sửa lỗi
 lúc review không thay ngưỡng, mặc định OFF tại thời điểm đó hay trạng thái
 device. Build hiện tại bật plugin riêng như mô tả bên trên.
+
+### Deadline chuẩn bị do OS quản lý
+
+Hermes triển khai interface tùy chọn `domain.RunExpirer` cho native managed run.
+`ExpireRun(ctx, runID, reason)` chỉ nhận hủy khi `runID` vừa sở hữu phản hồi đang
+chạy vừa là request được nhận gần nhất. Deadline cũ không được dừng request
+steering mới hơn, kể cả web request dùng chung native run. Run không hỗ trợ hoặc
+không dùng native transport trả về lỗi.
+
+Expiry chỉ hủy context đọc stream của run đó; reader hiện có gửi remote stop và
+kiểm tra trạng thái kết thúc trong ngân sách cleanup tối đa 30 giây. Lifecycle
+bình thường báo lỗi với lý do deadline từ OS, không báo task thành công. Suffix
+`pending_steer` từ remote không được gửi lại sau expiry. Nhận yêu
+cầu hủy không chứng minh thực thi từ xa đã dừng. Nếu cleanup không xác nhận được
+trạng thái kết thúc, cơ chế xử lý ownership không xác định hiện có cô lập hội
+thoại thay vì gửi lại công việc. Request khác trong hàng đợi vẫn theo các kiểm
+tra admission và ownership hiện có. Đây không phải `/stop` từ người dùng, không
+tạo lượt model mới, không xóa journal intent Harness và không gửi task Harness.

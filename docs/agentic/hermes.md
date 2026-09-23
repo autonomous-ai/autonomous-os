@@ -1199,3 +1199,22 @@ platform-specific disabled-skill filtering) and skip slash commands, as the
 reference hook does. Those review fixes did not change thresholds, the default
 OFF setting at review time, or device state. The current build enables the
 plugin separately as described above.
+
+### OS-owned preparation deadlines
+
+Hermes implements the optional `domain.RunExpirer` interface for native managed
+runs. `ExpireRun(ctx, runID, reason)` accepts cancellation only when `runID` is
+both the active reply owner and the latest admitted request. An old deadline
+cannot stop a newer steered request, including a web request sharing the same
+native run. Unsupported/non-native runs return an error.
+
+The expiry cancels only that run's stream context; the existing reader sends a
+remote stop and checks terminal status, bounded by its 30-second cleanup budget.
+The normal lifecycle reports an error with the OS deadline reason, never a
+successful task completion. A remote `pending_steer` suffix is never replayed
+after expiry. Acceptance is not proof that remote execution has
+stopped. If cleanup cannot confirm a terminal state, existing unknown-ownership
+handling isolates the conversation instead of replaying work. Unrelated queued
+requests retain their existing admission and ownership checks. This is not a
+user `/stop`, does not create a model turn, and does not erase the Harness intent
+journal or dispatch a Harness task.

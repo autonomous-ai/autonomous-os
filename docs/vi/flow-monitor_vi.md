@@ -331,3 +331,11 @@ Lượt voice do realtime xử lý và lượt history sync dùng ID riêng: `de
 ### Nhãn voice command và follow-up
 
 `sensing_input` và `realtime_response` có thể mang `data.voice_turn_type` (`voice`, `voice_command`, hoặc `voice_followup`). Flow Monitor ghép trường này với loại event handled: wake command do realtime xử lý hiện `VOICE_COMMAND_HANDLED`, follow-up hiện `VOICE_FOLLOWUP_HANDLED`, lượt handled thường hoặc cũ giữ `VOICE_AGENT_HANDLED`. Badge, bộ lọc subtype và search dùng cùng nhãn; search cũng nhận loại event gốc. Bộ lọc loại trừ đã lưu được mở rộng sang các subtype mới. Đây chỉ là thay đổi hiển thị; loại event, gom run, đường realtime/main, queue và cancel giữ nguyên. LIVE ON/OFF dùng cùng bộ phân loại wake phrase của HAL. Follow-up LIVE đã được cho phép giữ phân loại wake focus dù window hết trước khi provider trả lời. Reply realtime vẫn giữ `voice_agent_handled` để đồng bộ history im lặng. Row cũ thiếu metadata giữ nhãn cũ; history sync không lấy phân loại từ lượt voice bên cạnh.
+
+## Tiến độ Harness Store
+
+Snapshot quan sát được từ `agent.prepare` / `operation.get` ghi `harness_store_progress` với run ID local, operation ID, state, phase và nội dung hiển thị có giới hạn. Khi lượt main-agent còn active, luồng `assistant_delta` hiện có hiển thị các quan sát; preparation không chặn phản hồi main hay bật TTS. Khi delivery task đã sở hữu phản hồi, progress preparation đến muộn không được thay thế. Đây là dữ kiện từ polling, không phải protocol event Harness mới. `ready` chỉ nghĩa chuẩn bị agent, không hoàn thành task người dùng. Main vẫn nhận guidance/lỗi cần thao tác. Không thêm card frontend hoặc polling nền tự động; xem [Harness Store](harness-store_vi.md).
+
+### Hết hạn chờ preparation Harness
+
+`harness_preparation_wait_expired` ghi deadline lượt phản hồi local, với `task_dispatched:false`; không phải lỗi operation từ xa hay kết quả task. Native Hermes kết thúc đúng owner qua `lifecycle_error` sau hủy có giới hạn. Lỗi có prefix `OS_RUN_EXPIRED:` bỏ qua recovery câu trả lời dở để không biến lượt chờ hết hạn thành thành công được khôi phục. Progress preparation bỏ snapshot liên tiếp trùng theo run/operation active và ngăn các thông báo thay đổi bằng đoạn mới.
