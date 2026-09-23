@@ -205,9 +205,12 @@ EMOTION_TOOL_EMOTIONS: list[str] = [
 ]
 EMOTION_TOOL_DESCRIPTION: str = (
     "Set the device's physical face (LED + servo) to match the emotional tone "
-    "of the reply you are ABOUT TO SPEAK. This is FIRE-AND-FORGET and is the ONE "
-    "exception to the binary tool rule: it does NOT delegate and does NOT replace "
+    "of the reply you are ABOUT TO SPEAK. This is FIRE-AND-FORGET: "
+    "it does NOT delegate and does NOT replace "
     "speech — call it IN PARALLEL with speaking, then immediately speak your reply. "
+    "For a request requiring the main agent, a brief spoken acknowledgment and "
+    "this emotion call never replace delegate_to_main: call delegate_to_main "
+    "immediately in the same turn, whether or not you speak an acknowledgment. "
     "Never wait for it, never mention it, never speak the emotion name or any "
     "marker syntax aloud. Calling it is optional; only call it when an emotion "
     "clearly fits your reply. Available emotions: " + ", ".join(EMOTION_TOOL_EMOTIONS) + "."

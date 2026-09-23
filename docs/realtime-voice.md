@@ -952,9 +952,11 @@ On GPT-Live the tool is registered but can never fire: the Live layer has no
 tools (`GPTLiveAgent` logs it as unavailable once at construction), so on that
 provider the face changes only through the main agent after a delegation.
 
-Unlike `delegate_to_main`, `express_emotion` is **fire-and-forget** and is the
-one exception to the model's binary "tool OR speech" rule — the model calls it
-*in parallel* with speaking. When `stream_output()` sees the call
+`express_emotion` is **fire-and-forget** — the model calls it *in parallel*
+with speaking. It does not replace delegation: for a request requiring the main
+agent, an optional spoken acknowledgment or emotion call must still accompany
+`delegate_to_main` in the same turn. There is no binary "tool OR speech" rule
+in this tool description. When `stream_output()` sees the call
 (`_handle_emotion_call`), it:
 
 1. calls the HAL emotion handler **in-process** (`_fire_emotion` →

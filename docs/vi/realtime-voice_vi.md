@@ -916,9 +916,11 @@ set cảm xúc — gating chạy xuyên suốt: `server.py`
 `VoiceService(enable_expression=…)` →
 `RealtimeOrchestrator(enable_expression=…)`.
 
-Khác với `delegate_to_main`, `express_emotion` là **fire-and-forget** và là
-ngoại lệ duy nhất của quy tắc "tool HOẶC nói" — model gọi nó *song song* với
-việc nói. Khi `stream_output()` thấy lời gọi (`_handle_emotion_call`), nó:
+`express_emotion` là **fire-and-forget** — model gọi nó *song song* với việc nói.
+Nó không thay thế delegation: với yêu cầu cần main agent, dù có nói câu xác nhận
+ngắn hoặc gọi emotion, model vẫn phải gọi `delegate_to_main` trong cùng lượt.
+Mô tả tool này không còn áp dụng quy tắc "tool HOẶC nói".
+Khi `stream_output()` thấy lời gọi (`_handle_emotion_call`), nó:
 
 1. gọi handler emotion của HAL **in-process** (`_fire_emotion` →
    `routes/emotion.py` `express_emotion`) trong một daemon thread — realtime agent
