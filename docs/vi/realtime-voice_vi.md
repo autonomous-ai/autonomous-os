@@ -2799,3 +2799,9 @@ Luồng realtime text-to-TTS chặn riêng câu lỗi “I’m sorry, there was 
 ACK tool Gemini lưu tên hàm gốc cùng call ID và trả cả hai trong `FunctionResponse`. Thiếu `name` vi phạm contract provider và đã tái hiện câu báo lỗi hệ thống sau khi `look` chụp ảnh thành công trên Gemini 3.8. Tên được giữ đến khi gửi ACK thành công và xoá khi reset session. Không thay đổi cách gửi ảnh hay replay audio.
 
 Với tool NON_BLOCKING của Gemini, `complete_response` tới trước mọi nội dung trả lời được ACK nhưng không xác nhận hoàn thành và không chặn lời nói đến sau. Vẫn áp dụng kiểm tra câu trả lời/outcome và ưu tiên delegate đến muộn; nếu không có câu trả lời vẫn fallback sang main. Quy tắc này áp dụng cả generation mới sau replay `look`.
+
+Voice được local/Jev xử lý (`handledLocally=true`) giải phóng cue thinking
+realtime đang giữ mà không chờ TTS. Phản hồi mute hoặc không có lời nói không
+giữ cue vô hạn. Cleanup giữ emotion mới, khôi phục LED đã lưu (kể cả tắt/dim);
+TTS/nhạc đang phát giữ overlay tới teardown bình thường. Lượt do agent xử lý
+vẫn giữ cue thinking.
