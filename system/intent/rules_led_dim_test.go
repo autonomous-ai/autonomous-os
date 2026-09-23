@@ -68,3 +68,18 @@ func TestDimFailureDoesNotClaimSuccess(t *testing.T) {
 		})
 	}
 }
+
+func TestConcurrentAdjustmentDoesNotQueue(t *testing.T) {
+	dimMu.Lock()
+	result := dimCurrentLight()
+	dimMu.Unlock()
+	if !result.ExecutionFailed {
+		t.Fatal("busy dim should fail promptly")
+	}
+	volumeAdjustmentMu.Lock()
+	result = adjustVolume(false)
+	volumeAdjustmentMu.Unlock()
+	if !result.ExecutionFailed {
+		t.Fatal("busy volume should fail promptly")
+	}
+}

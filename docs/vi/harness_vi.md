@@ -189,3 +189,28 @@ Thu giọng Harness có bộ âm hai nốt riêng: đi lên khi sẵn sàng ghi 
 Chuyển focus thành công dùng câu xác nhận cố định ngắn theo ngôn ngữ (“Đã chuyển agent.”), không đọc tên agent.
 
 Khi Harness mode duy trì ON, watcher mode MPR121 giữ LED thở lime nhẹ từ `button_led.harness_on` trong preset thiết bị. OFF nháy nhẹ một lần theo `harness_off`. Đèn báo nhường sleep, riêng tư và phản hồi voice/nhạc, trở lại qua luồng restore LED, không thay đổi cài đặt đèn người dùng đã lưu. Thiết bị không có RGB bỏ qua phản hồi LED.
+
+### Intent local và ngữ cảnh công việc số
+
+Voice, Web Chat và MQTT dùng chung bước chuyển câu phụ thuộc ngữ cảnh về main
+trước local/Jev. Response route Harness đang chờ là bằng chứng task còn tồn tại
+kể cả khi timer follow-up hết hạn; timer chỉ là gợi ý, không cấp phép gửi task.
+Khi có một trong hai tín hiệu, câu không nêu rõ đích phần cứng được để main xử lý.
+Chỉ paired/connected không tắt intent. Lệnh nhắm rõ Lamp/đèn/loa/âm lượng vẫn
+được local/Jev phân loại; câu nói về render/ảnh/video chuyển main. Câu điều chỉnh
+mơ hồ như “brighter”, “make it brighter” không nêu đích phần cứng luôn chuyển main,
+kể cả khi chưa có bằng chứng task, để bảo vệ follow-up preparation chưa quan sát
+được. Chuyển main không tự gửi Harness hay chuẩn bị agent mới. Main chịu trách
+nhiệm hiểu context, hỏi rõ và dùng workflow hiện có. Harness-only voice vẫn chạy
+trước; request có attachments giữ luồng cũ.
+
+Nhánh local `leo-super-dev/harness-2` được đối chiếu cho OS PR #482 giữ Store
+intent trong journal helper; `observeHarnessPreparation` hiển thị snapshot RPC
+nhưng chưa cung cấp preparation đang chờ cho sensing. Thay đổi này không đọc
+journal riêng, không sửa Store/helper, không thêm API Store hay state delivery.
+Trước khi thêm routing phụ thuộc preparation, cần phối hợp chủ sở hữu Store tại
+điểm quan sát đó: thống nhất tín hiệu chỉ đọc theo conversation, quy tắc restart/
+hết hạn và trạng thái kết thúc. Hiện main/`workflow-status` khôi phục intent đã lưu.
+Mock OS chứng minh chuyển main mà không tự chạy hardware/gửi Harness; không chứng
+minh model thật tiếp tục đúng preparation. Session Harness cần kiểm tra tích hợp
+với journal và test idempotency hiện có.

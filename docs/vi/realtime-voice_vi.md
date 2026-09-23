@@ -2801,3 +2801,5 @@ Thứ tự delegation của Gemini: với việc cần main (gồm nhạc, truy 
 Luồng realtime text-to-TTS chặn riêng câu lỗi “I’m sorry, there was a system error.” (kể cả khi nhận nhiều mảnh hoặc thiếu dấu kết câu). HAL vẫn ghi log câu bị chặn, loại câu đó khỏi transcript lời đã phát và giữ nguyên delegate/fallback. Các câu khác và phát native audio không thay đổi.
 
 ACK tool Gemini lưu tên hàm gốc cùng call ID và trả cả hai trong `FunctionResponse`. Thiếu `name` vi phạm contract provider và đã tái hiện câu báo lỗi hệ thống sau khi `look` chụp ảnh thành công trên Gemini 3.8. Tên được giữ đến khi gửi ACK thành công và xoá khi reset session. Không thay đổi cách gửi ảnh hay replay audio.
+
+Với tool NON_BLOCKING của Gemini, `complete_response` tới trước mọi nội dung trả lời được ACK nhưng không xác nhận hoàn thành và không chặn lời nói đến sau. Vẫn áp dụng kiểm tra câu trả lời/outcome và ưu tiên delegate đến muộn; nếu không có câu trả lời vẫn fallback sang main. Quy tắc này áp dụng cả generation mới sau replay `look`.

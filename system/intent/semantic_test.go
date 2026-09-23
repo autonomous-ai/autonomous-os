@@ -114,6 +114,10 @@ func TestJevExpandedActionsUseExistingHALContracts(t *testing.T) {
 		t.Run(tc.intent, func(t *testing.T) {
 			var calls []string
 			routeIntentHAL(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/emotion/status" {
+					_, _ = w.Write([]byte(`{"sleeping":false}`))
+					return
+				}
 				body, _ := io.ReadAll(r.Body)
 				calls = append(calls, r.URL.Path+" "+string(body))
 			})
@@ -181,6 +185,10 @@ func configureJevTest(t *testing.T) *atomic.Int32 {
 	calls := &atomic.Int32{}
 	color := [3]int{160, 120, 80}
 	routeIntentHAL(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/emotion/status" {
+			_, _ = w.Write([]byte(`{"sleeping":false}`))
+			return
+		}
 		calls.Add(1)
 		if r.URL.Path == "/led/color" {
 			_ = json.NewEncoder(w).Encode(map[string]any{"color": color})

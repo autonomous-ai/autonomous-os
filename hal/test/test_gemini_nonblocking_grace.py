@@ -1036,3 +1036,60 @@ def test_ordinary_or_live_commit_does_not_signal_replay(monkeypatch, live, repla
         assert not agent._replay_commit_signal.is_set()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("after_terminal", [False, True])
+@pytest.mark.parametrize("late_delegate", [False, True])
+@pytest.mark.parametrize("live", [False, True])
+def test_early_completion_does_not_mute_visual_answer(monkeypatch, after_terminal, late_delegate, live):
+    monkeypatch.setattr(gemini_live.app_config, "LIVE_MODE", live)
+    from hal.realtime import response_outcome
+
+    async def check(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr(response_outcome, "spoken_response_complete", check)
+    answer = _terminal()
+    answer.server_content.turn_complete = False
+    answer.server_content.output_transcription = SimpleNamespace(
+        text="You're wearing a beige shirt with DO IT ANYWAY printed on it.")
+    messages = [_tool("complete_response", "early")]
+    if after_terminal:
+        messages.append(_terminal())
+    messages.extend([answer, _terminal()])
+    if late_delegate:
+        messages.append(_tool())
+    agent = _agent(messages)
+    agent._user_transcript = "Look at me and see what I wear."
+    events = _receive(agent)
+    texts = [e.output.text for e in events
+             if isinstance(e, OutputEvent) and isinstance(e.output, TextOutput)]
+    assert bool(texts) == (not after_terminal or not late_delegate)
+    if texts:
+        assert texts == [answer.server_content.output_transcription.text]
+    assert not events[-1].fallback_to_main
+    assert bool(_calls(events)) == late_delegate
+
+
+def test_early_completion_without_answer_still_falls_back():
+    agent = _agent([_tool("complete_response", "empty"), _terminal()])
+    events = _receive(agent)
+    assert events[-1].fallback_to_main
+    assert not events[-1].execution_completed
+    assert not agent._pending_tool_calls
+
+
+@pytest.mark.parametrize("live", [False, True])
+def test_interrupt_after_early_completion_still_cancels(monkeypatch, live):
+    monkeypatch.setattr(gemini_live.app_config, "LIVE_MODE", live)
+    interrupt = _terminal(generation=True)
+    interrupt.server_content.generation_complete = False
+    interrupt.server_content.interrupted = True
+    agent = _agent([
+        _tool("complete_response", "early"), _terminal(generation=True),
+        interrupt, _speech("This should not be released."), _terminal(generation=True),
+    ])
+    events = _receive(agent)
+    assert not any(isinstance(e, OutputEvent) and isinstance(e.output, TextOutput)
+                   for e in events)
+    assert not events[-1].execution_completed

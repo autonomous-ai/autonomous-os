@@ -165,6 +165,7 @@ type SensingHandler struct {
 	realtimeHistory        func(string, string) (string, error)
 	harnessConnected       func() bool
 	harnessFollowup        func() bool
+	harnessTaskPending     func() bool
 	harnessFollowupContext func() string
 	harnessVoice           func(*gin.Context, SensingEventRequest) bool
 }
@@ -345,7 +346,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// Keep attachments on the agent path so intent matching cannot discard them.
 	isVoice := req.Type == "voice" || req.Type == "voice_command" || req.Type == "voice_followup"
 	isChat := sensingmsg.IsChat(req.Type)
-	if (isVoice || isChat) && len(req.Images) == 0 && len(req.Files) == 0 && h.config.LocalIntentEnabled() {
+	if (isVoice || isChat) && len(req.Images) == 0 && len(req.Files) == 0 && h.config.LocalIntentEnabled() && !h.deferContextualIntent(req.Message) {
 		if result := h.matchVoiceIntent(c.Request.Context(), req.Message); result != nil {
 			// Generate a dedicated local-intent trace ID so this turn doesn't
 			// share the global trace of an in-flight agent turn.

@@ -1401,6 +1401,41 @@ Both sources selected reading for “need focus to read book”. Voice TTS reach
 HAL but was suppressed by speaker mute; microphone/STT and audible playback
 were not verified. MQTT reply/session handling passed automated tests.
 
+The canonical fast path also accepts anchored `[voice-instruction]` envelopes
+(with optional leading `[user]`/`[ambient]`). Only the authoritative instruction
+is matched; a negated, contextual, empty or malformed instruction never falls
+back to a command in `[transcript]`. Complete plural aliases “turn off/on the
+lights” and “lights off/on” map to the existing light commands. Unknown prefixes
+and instruction constraints remain intact and defer to semantic/agent handling.
+
+#### Intent full-flow boundaries
+
+Local and Jev classification now use the same conservative voice normalization:
+anchored instruction wins over transcript, including an empty instruction;
+malformed/embedded markers cannot discard a prefix or negate a constraint.
+Known speaker/audio decorations and exact no-STT realtime handoff suffixes are
+recognized; unknown content remains significant. See [Harness routing](harness.md#local-intent-versus-digital-task-context)
+for why contextual fragments may bypass both classifiers.
+
+Failed command results no longer emit success text or LED/emotion state-change
+notifications. Solid-light commands check HAL sleep first, returning an explicit
+blocked response rather than silently waking the device. RGB reads reject absent,
+null or invalid values. Dim/volume concurrent adjustments return busy instead of
+waiting indefinitely. This is not a transaction against concurrent HAL effects;
+readback verification remains best-effort and other commands still rely on HAL's
+reported execution status.
+
+Ordinary voice delivery waits 30 seconds (Jev's 3-second budget plus sequential
+HAL calls); image requests stay at 90 seconds and Harness-only requests at 5.
+An ambiguous connection failure on user voice is not retried: an interaction ID
+is telemetry, not an execution idempotency key. Explicit 503 retries remain.
+There is no new global execution deadline or durable deduplication contract.
+Jev logs skipped reasons (`busy`, `cooldown`, `invalid_input`, `no_candidates`,
+`missing_config`, `disabled`, `unavailable`, `cancelled`) without user text or keys.
+This revision was validated with local/mock tests only, without live Jev,
+robot deployment or paid Harness tasks. Mic/STT and Store integration remain
+separate acceptance checks.
+
 ## Harness Store preparation
 
 The loopback-only `POST /api/harness/request` now forwards negotiated Store v1 operations (`store.list`, `store.inspect`, `agent.prepare`, `operation.get`) over the existing direct E2EE connection. No new public endpoint is exposed. All four capabilities are required; `agent.prepare` addresses the paired machine without a pre-existing agent ID. A `PreparationUnknownError` explains same-key/parameter retry or retained-operation polling, distinct from uncertain task delivery and `receipt.get`. Preparation progress uses local response metadata stripped before transport; it does not claim the final reply. Durable intent/task state belongs to the skill's private journal. See [Harness Store](harness-store.md) for commands, schema provenance, recovery and mock-versus-live validation.

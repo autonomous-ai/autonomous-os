@@ -178,12 +178,22 @@ func GetColor() ([3]int, error) {
 		return [3]int{}, fmt.Errorf("GET /led/color returned %d", resp.StatusCode)
 	}
 	var result struct {
-		Color [3]int `json:"color"`
+		Color []*int `json:"color"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return [3]int{}, fmt.Errorf("decode /led/color: %w", err)
 	}
-	return result.Color, nil
+	if len(result.Color) != 3 {
+		return [3]int{}, errors.New("/led/color returned missing or invalid color")
+	}
+	var color [3]int
+	for i, channel := range result.Color {
+		if channel == nil || *channel < 0 || *channel > 255 {
+			return [3]int{}, errors.New("/led/color returned invalid color channel")
+		}
+		color[i] = *channel
+	}
+	return color, nil
 }
 
 // ─── Voice / TTS ────────────────────────────────────────────────────────────
@@ -644,12 +654,15 @@ func GetSleeping() (bool, error) {
 		return false, fmt.Errorf("GET /emotion/status returned %d", resp.StatusCode)
 	}
 	var r struct {
-		Sleeping bool `json:"sleeping"`
+		Sleeping *bool `json:"sleeping"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
 		return false, fmt.Errorf("decode /emotion/status: %w", err)
 	}
-	return r.Sleeping, nil
+	if r.Sleeping == nil {
+		return false, errors.New("/emotion/status returned missing sleeping state")
+	}
+	return *r.Sleeping, nil
 }
 
 // GetEmotion returns the current emotion reported by HAL's /emotion/status.

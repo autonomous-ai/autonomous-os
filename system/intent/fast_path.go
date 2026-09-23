@@ -1,16 +1,17 @@
 package intent
 
-import "strings"
+import (
+	"strings"
+
+	"go.autonomous.ai/os/system/intent/jev"
+)
 
 // matchCanonical executes only a complete, unqualified command locally. Legacy
 // substring matching remains available to Match, but contextual user requests
 // must reach semantic classification before any hardware side effect.
 func matchCanonical(text string) *Result {
-	fields := voiceFields(normalize(text))
-	if len(fields) != 1 || fields[0] != normalize(text) {
-		return nil
-	}
-	text = strings.Join(strings.Fields(strings.TrimRight(strings.TrimSpace(fields[0]), ".!?")), " ")
+	text = canonicalVoiceText(text)
+	text = strings.Join(strings.Fields(strings.TrimRight(normalize(text), ".!?")), " ")
 	if chitchatEnabled() {
 		if result := matchChitchat(text); result != nil {
 			return result
@@ -18,6 +19,13 @@ func matchCanonical(text string) *Result {
 	}
 	text = strings.TrimPrefix(text, "please ")
 	text = strings.TrimSuffix(text, " please")
+	// Resolve only complete aliases, never replace words inside qualified requests.
+	switch text {
+	case "turn off the lights", "lights off":
+		text = "turn off the light"
+	case "turn on the lights", "lights on":
+		text = "turn on the light"
+	}
 	if canonicalCommand(text) {
 		return MatchCommands(text)
 	}
@@ -73,4 +81,9 @@ func canonicalCommand(text string) bool {
 		}
 	}
 	return false
+}
+
+// Keep deterministic and semantic execution on the same transport parser.
+func canonicalVoiceText(text string) string {
+	return jev.NormalizeText(text)
 }
