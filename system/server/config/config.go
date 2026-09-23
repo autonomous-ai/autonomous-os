@@ -285,6 +285,10 @@ type Config struct {
 	// It shares the configured Autonomous proxy URL and device API key.
 	JevIntent *JevIntentConfig `json:"jev_intent,omitempty" yaml:"jevIntent"`
 
+	// JevHarness enables Harness session selection (default true).
+	// Uncertain selections and provider failures defer to the main agent.
+	JevHarness *JevIntentConfig `json:"jev_harness,omitempty" yaml:"jevHarness"`
+
 	// LLMDisableThinking disables extended thinking/reasoning for all LLM models (default false).
 	// Enable this to reduce latency on fast models like Haiku that don't benefit from thinking.
 	LLMDisableThinking *bool `json:"llm_disable_thinking,omitempty" yaml:"llmDisableThinking"`

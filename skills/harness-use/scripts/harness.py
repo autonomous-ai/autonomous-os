@@ -18,12 +18,12 @@ KNOWN_RECEIPT_STATES = ('queued', 'delivered', 'started', 'completed', 'rejected
 AGENT_RECAP_MAX_CHARS = 1000
 
 
-def api(path, payload=None):
+def api(path, payload=None, timeout=40):
     raw = None if payload is None else json.dumps(payload, ensure_ascii=False, allow_nan=False).encode()
     req = urllib.request.Request(BASE + path, data=raw, headers={'Content-Type': 'application/json'})
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        response = opener.open(req, timeout=40)
+        response = opener.open(req, timeout=timeout)
     except urllib.error.HTTPError as error:
         # OS includes actionable preparation/delivery guidance in error envelopes.
         response = error
@@ -466,7 +466,7 @@ def run(action, params, path=None):
         explicit = params.get('agentId') or params.get('agent')
         if action in ('send', 'answer', 'stop') and not explicit:
             raise ValueError('EXPLICIT_TARGET_REQUIRED: Inspect context/list and the matching task workspace, then supply agentId or a unique agent name. Never use the retained default or resend a previous request as a fallback.')
-        require_connection()
+        initial_connection = require_connection()
         listing = request('agents.list')
         if listing.get('error'):
             return listing
@@ -517,6 +517,22 @@ def run(action, params, path=None):
                 payload['response'] = response
         else:
             raise ValueError('Unknown action')
+        if action == 'send':
+            # Resolve once before reserving delivery. Uncertain sends retain this exact target.
+            try:
+                decision = api('/select-agent', {**target, 'text': text}, timeout=4)
+            except (OSError, ValueError, TypeError):
+                decision = None
+            if (isinstance(decision, dict) and decision.get('mode') == 'jev'
+                    and decision.get('machineId') == machine
+                    and isinstance(decision.get('agentId'), str)
+                    and sum(a.get('agentId') == decision['agentId'] for a in agents) == 1):
+                target = {'machineId': machine, 'agentId': decision['agentId']}
+            current_connection = require_connection()
+            if (current_connection.get('machine_id') != machine
+                    or initial_connection.get('machine_id') != machine
+                    or current_connection.get('server_instance_id') != initial_connection.get('server_instance_id')):
+                raise ValueError('Harness connection identity changed during selection; inspect status before sending')
         key = str(uuid.uuid4())
         context.update(target)
         context['pending'] = {

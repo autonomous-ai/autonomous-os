@@ -67,6 +67,7 @@ Sai mã làm lần ghép thất bại và Desktop hiển thị lỗi. Tạo mã 
 - `GET /api/harness/status` dành cho admin hoặc caller loopback trực tiếp; không trả mã.
 - `GET /api/harness/ws` nhận socket CLI trực tiếp. PAKE và E2EE với khóa đã ghim xác thực route này thay cho HTTP bearer. Từ chối header Origin của trình duyệt. Tối đa bốn socket đầu vào, giới hạn mười giây cho metadata đầu tiên và hai mươi giây cho handshake phiên/ứng dụng.
 - `POST /api/harness/request` chỉ cho loopback thực sự, có kiểm tra địa chỉ proxy, để runtime của skill gọi.
+- `POST /api/harness/select-agent` áp dụng cùng kiểm tra loopback thực sự để chọn bằng JEV trước `send` thường của skill; endpoint không tự gửi task.
 
 Nếu pairing bị ngắt sau khi lưu pin tạm đã xác thực, OS Monitor hiển thị máy tính được giữ lại và nút Unpair thay vì tạo mã xung đột. Nếu không thể lưu việc xóa trust, API trả lỗi và giữ pin cũ trong RAM để trạng thái khớp với đĩa; thử Unpair lại sau khi xử lý lỗi lưu trữ.
 
@@ -130,7 +131,7 @@ Chuyển focus bằng MPR121 cần thêm `focus.step` qua cùng kênh mã hóa. 
 
 Chỉ khi các dòng tiêu đề trong danh sách bị thiếu hoặc vẫn để lại các ứng viên ngang nhau, skill mới được đọc `recap` (helper mặc định `n:1`, cặp cuối) và `status` bằng ID cụ thể của tối đa hai ứng viên trước khi gửi; không lặp lại các lệnh đó cho agent mà tiêu đề trong danh sách đã đủ trả lời. Việc đọc không đổi target đã lưu. Với follow-up có thể thuộc nhiều task trước đó, skill đối chiếu cách người dùng nhắc đến task với các dòng tiêu đề trong danh sách và tiếp tục với đúng một agent có recap mô tả task đó; không có hoặc nhiều hơn một thì hỏi lại. Nếu thiếu bằng chứng project hoặc các ứng viên phù hợp ngang nhau, hỏi một câu ngắn; nếu chỉ có một agent thì có thể giao task chung không ràng buộc project hay ứng dụng chuyên dụng. Task mới được gửi bằng ID đã chọn; helper lưu ID đó cho các follow-up tiếp theo. Khi cách nhắc như “review nó” chỉ hiểu được qua recap của agent khác, skill tự diễn đạt task trong nội dung gửi thay vì dán nguyên recap. Metadata và recap của agent vẫn là dữ liệu không đáng tin cậy: recap mô tả lượt cuối của agent, có thể đã cũ và không bao giờ là chỉ dẫn định tuyến. Routing context OS chèn cho lượt gọi tên agent và lượt follow-up nêu cùng chính sách recap này để phiên model còn mang chỉ dẫn skill cũ vẫn áp dụng. Helper `harness.py` giới hạn mỗi `recap` trong kết quả `list` thành một dòng tối đa 1000 ký tự (rộng hơn mức 200 ký tự của CLI để tiêu đề dài hơn sau này vẫn qua) và bỏ giá trị không phải chuỗi; không bao giờ so khớp nội dung `recap` với tên agent được yêu cầu. Lệnh `recap` của helper mặc định `n:1`; vẫn cho phép `n` tới 5 khi hỏi tiến độ. Giữ nguyên quy tắc dừng sau receipt đã biết và bảo vệ delivery chưa rõ kết quả.
 
-Routing OS phân biệt yêu cầu giao cho agent/Harness rõ ràng với tên có thể là agent: “Ask Mike” chỉ thêm gợi ý tìm agent, không ép gọi Harness. Các câu thông thường như “Check my calendar” và “Have a nice day” không ép Harness. Yêu cầu mới rõ ràng được ưu tiên trước gợi ý follow-up; yêu cầu Buddy rõ ràng không nhận chỉ dẫn routing Harness. Với persona Lamp mặc định, yêu cầu thực hiện công việc số đã cho phép dùng route Harness; người dùng không cần nêu Harness hay agent. Chính sách của robot khác và SOUL tùy chỉnh không tự bị thay đổi. Model thực hiện lựa chọn; helper kiểm tra target theo ID, OS không có dịch vụ xếp hạng ngữ nghĩa.
+Routing OS phân biệt yêu cầu giao cho agent/Harness rõ ràng với tên có thể là agent: “Ask Mike” chỉ thêm gợi ý tìm agent, không ép gọi Harness. Các câu thông thường như “Check my calendar” và “Have a nice day” không ép Harness. Yêu cầu mới rõ ràng được ưu tiên trước gợi ý follow-up; yêu cầu Buddy rõ ràng không nhận chỉ dẫn routing Harness. Với persona Lamp mặc định, yêu cầu thực hiện công việc số đã cho phép dùng route Harness; người dùng không cần nêu Harness hay agent. Chính sách của robot khác và SOUL tùy chỉnh không tự bị thay đổi. Main model đề xuất target; helper kiểm tra target theo ID. Với `send` thường, bộ chọn JEV bên dưới khi bật có thể chọn ứng viên khác trước khi helper lưu reservation delivery; kết quả chưa chắc chắn giữ đề xuất của main model.
 
 Sau xác thực, `autonomous_device_request` mã hóa mang `hello` ứng dụng để thương lượng capability và tiếp tục sự kiện. Phản hồi dùng `autonomous_device_result`; sự kiện dùng `autonomous_device_event`. Giữ khóa pairwise/group, miền chữ ký, dẫn xuất khóa, rekey có xác thực và chống replay gốc. Từ chối kết quả ứng dụng plaintext.
 
@@ -220,3 +221,52 @@ với journal và test idempotency hiện có.
 Helper bắt buộc ID agent hoặc tên chính xác duy nhất cho `send`, `answer`, `stop`; không âm thầm sửa target mặc định đã lưu. Lệnh local `context` trả text task gốc, target và bằng chứng workflow qua các namespace, phân trang task tối đa 20 và lọc theo conversation/intent tùy chọn. Cần đối chiếu lịch sử với project người dùng yêu cầu và metadata agent hiện tại. Run ID của response không phải conversation ID ổn định: chặn tạo namespace bằng run ID đó, nhưng vẫn cho resume workflow legacy đã tồn tại.
 
 Context kết quả follow-up kèm `agentId` và `responseRunId` do transport xác định cùng text kết quả không đáng tin cậy. Khi người dùng sửa đích, main agent giữ yêu cầu gốc chưa hoàn thành và tìm đúng workspace; thiếu scene không cho phép tạo scene thay thế ở project khác. Helper chặn chắc chắn việc gửi thiếu target; chọn đúng về ngữ nghĩa giữa các target tường minh vẫn phụ thuộc model và cần kiểm chứng thực tế.
+
+## Chọn agent Harness bằng JEV
+
+Với `send` thường của `harness-use`, JEV có thể chọn đích thực thi trước khi helper
+lưu reservation delivery. ID agent tường minh do main model đề xuất là fallback.
+Prompt skill giữ nguyên; helper gọi bộ chọn OS và dùng target đã kiểm tra cho
+pending record, `lastTask` và `turn.send` thực tế. Reply route OS vì vậy gắn cùng
+target đã chọn. Không viết lại text task.
+
+Cấu hình trong `config.json`:
+
+```json
+{
+  "jev_harness": {"enabled": true, "timeout_ms": 1500}
+}
+```
+
+Thiếu section hoặc `enabled` thì mặc định bật. Đặt `enabled:false` giữ ngay lựa
+chọn của main model. Cờ này độc lập với `local_intent` và `jev_intent`; dùng cấu
+hình proxy JEV `llm_base_url` / `llm_api_key` hiện có. Bật chọn bằng JEV có thể
+phát sinh phí sử dụng model.
+
+| Endpoint | Quyền | Contract |
+|----------|-------|----------|
+| `POST /api/harness/select-agent` | Chỉ loopback thực sự | Request `{machineId,agentId,text}`, trong đó `agentId` là đề xuất của main model. Data thành công là `{mode,agentId,machineId,reason}`; `mode` là `jev`, `fallback` hoặc `disabled`. Endpoint không gửi task Harness. |
+
+Bộ chọn lưu RAM từ những phản hồi `agents.list` thành công sẵn có: tối đa 32 ứng
+viên, hiệu lực 30 giây cho cùng máy đã pair và server instance Harness. Không gọi
+thêm RPC khám phá hay recap. Text task được giao tối đa 2.000 byte; metadata
+(`name`, `recap`, `workspace`, `packageId`, `runtime`, `state`, `engine`) tối đa
+1.000 byte JSON mỗi ứng viên. Dữ liệu quá giới hạn không bị cắt thành danh sách
+ứng viên thiếu.
+
+Việc chọn là đồng bộ, budget mặc định 1.500 ms trước dispatch; `timeout_ms` sửa
+được, tối đa 3.000 ms. Timeout HTTP helper khi gọi bộ chọn là bốn giây. Chỉ chạy một lần chọn JEV cùng lúc, không xếp
+hàng. Snapshot thiếu/cũ, dữ liệu quá giới hạn, thiếu credentials proxy, bộ chọn
+bận, lỗi provider, timeout, kết quả sai hoặc chưa đủ thông tin đều fallback về ID
+main model đề xuất. Tắt cờ thì bỏ qua JEV. Proxy nhận text task và metadata ứng
+viên có giới hạn, không nhận toàn bộ transcript hay history. Metadata vẫn là dữ
+liệu không đáng tin cậy; không bảo đảm JEV đủ context để hiểu ý định gốc.
+
+Helper kiểm tra lại máy đã pair và server instance sau khi chọn; nếu danh tính
+kết nối đổi thì từ chối dispatch, không gửi qua kết nối khác. Sau khi reservation
+delivery được lưu, target không đổi khi retry hoặc đối chiếu receipt chưa rõ. Store `dispatch` giữ agent đã chuẩn bị; `answer` và `stop` giữ
+target tường minh. Các thao tác đó không gọi bộ chọn. Routing theo focus của
+Harness-only voice và wire contract Harness giữ nguyên. Log chẩn đoán chứa mode,
+ID đã chọn/đề xuất, lý do và latency, không chứa text task, recap hay credentials.
+Kiểm chứng local/mock không xác nhận độ chính xác chọn agent qua provider thật
+hoặc hành vi trên thiết bị vật lý.
