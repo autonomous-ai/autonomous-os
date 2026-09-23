@@ -1090,14 +1090,16 @@ registers a `look` tool (`orchestrator.py`, `LOOK_TOOL`) and handles the call in
 3. **Extended-thinking sessions** (the session has reported `interaction_status`,
    so `supports_look_continuation` is true — 3.8 extended-thinking): the JPEG goes
    **inside the `look` tool response** (`FunctionCallResultInput.image` →
-   `FunctionResponse.parts`, log line `look: image attached to tool response
-   call_id=… bytes=… gen=…`), and there is no replay. The ack triggers the next
+   `FunctionResponse.parts`, log line `Sent look image in tool response
+   (call_id=… bytes=…)`), and there is no replay. The ack triggers the next
    generation, so a frame sent separately after it could still be processing
    when that generation began, and the model answered "I can't see" (#481).
    `send_realtime_input` gives no ordering guarantee. One message removes the
-   race without any wait. The Live SDK `json.dumps` the tool response without
-   base64-encoding bytes, so `gemini_live.py` puts the JPEG in as base64 text via
-   `model_construct`. Device-verified 2026-09-23: 3.8 extended-thinking answered
+   race without any wait. google-genai 2.12.1 does not serialize the nested image
+   bytes in `send_tool_response`, so only this result goes out as an explicit
+   base64 WebSocket payload, and it is discarded if its look call was cancelled,
+   resolved or cleared by a session reset (see the interaction-status section).
+   Proxy check 2026-09-23 with the same mechanism: 3.8 extended-thinking answered
    from the in-response image twice out of two, and plain 3.8-live three out of
    three with a neutral prompt. Plain 3.8-live does not report interaction status,
    so it still takes the path below.

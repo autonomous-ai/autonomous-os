@@ -1055,16 +1055,17 @@ tool `look` (`orchestrator.py`, `LOOK_TOOL`) và xử lý trong `_handle_look_ca
 3. **Session extended-thinking** (session đã báo `interaction_status`, nên
    `supports_look_continuation` là true — 3.8 extended-thinking): JPEG nằm
    **bên trong tool response của `look`** (`FunctionCallResultInput.image` →
-   `FunctionResponse.parts`, log `look: image attached to tool response
-   call_id=… bytes=… gen=…`), và không replay. Ack kích hoạt lượt generate kế
+   `FunctionResponse.parts`, log `Sent look image in tool response
+   (call_id=… bytes=…)`), và không replay. Ack kích hoạt lượt generate kế
    tiếp, nên một frame gửi riêng sau ack có thể vẫn đang được xử lý khi lượt
    generate đó bắt đầu, và model trả lời "không nhìn thấy" (#481).
    `send_realtime_input` không bảo đảm thứ tự. Gộp thành một message thì hết
-   race mà không phải chờ. Live SDK `json.dumps` tool response mà không
-   base64-encode bytes, nên `gemini_live.py` đưa JPEG vào dưới dạng chuỗi base64
-   qua `model_construct`. Kiểm chứng trên thiết bị 2026-09-23: 3.8
-   extended-thinking trả lời đúng từ ảnh trong response 2/2 lần, và 3.8-live
-   thường 3/3 lần với prompt trung tính. 3.8-live thường không báo interaction
+   race mà không phải chờ. google-genai 2.12.1 không serialize được bytes ảnh
+   lồng trong `send_tool_response`, nên riêng kết quả này được gửi bằng payload
+   WebSocket base64 tường minh, và bị bỏ nếu lời gọi look đã bị hủy, đã được trả
+   lời hoặc bị xóa khi reset session (xem phần interaction status). Kiểm tra qua
+   proxy 2026-09-23 với cùng cơ chế: 3.8 extended-thinking trả lời đúng từ ảnh
+   trong response 2/2 lần, và 3.8-live thường 3/3 lần với prompt trung tính. 3.8-live thường không báo interaction
    status, nên vẫn đi đường bên dưới.
 
    **Các session khác** (3.1, 3.8-live thường) đi đường cũ: đẩy frame vào làm
