@@ -21,6 +21,20 @@ const jevPluginName = "jev"
 //go:embed plugins/jev/__init__.py plugins/jev/router.py plugins/jev/preload.py plugins/jev/plugin.yaml
 var jevPluginFiles embed.FS
 
+// JevSelectorAssets shares the bounded Python selector with native runtime hooks.
+// Callers supply their own eligible catalog and safe skill loader.
+func JevSelectorAssets() (map[string][]byte, error) {
+	assets := make(map[string][]byte)
+	for _, name := range []string{"router.py", "preload.py"} {
+		data, err := jevPluginFiles.ReadFile("plugins/jev/" + name)
+		if err != nil {
+			return nil, fmt.Errorf("read Jev selector asset: %w", err)
+		}
+		assets[name] = data
+	}
+	return assets, nil
+}
+
 // ensureJevPlugin reconciles existing devices on OS startup, without invoking
 // installers or adding a gateway restart reason. Remote Hermes is host-owned.
 func (s *HermesService) ensureJevPlugin() error {
