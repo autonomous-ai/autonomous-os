@@ -1024,8 +1024,17 @@ thứ nhìn thấy: nếu cùng turn còn kèm hành động ("quay sang phải,
 nói xem thấy gì"), prompt bắt buộc gọi một `delegate_to_main` gộp cả hai vế — không
 `look` — để lệnh chuyển động không bị âm thầm bỏ rơi. Mô tả tool và prompt Gemini
 đều loại trừ việc tìm một vật cụ thể ("cây bút của tôi đâu", "bạn có thấy chìa khóa
-không") — đó là một lượt tìm kiếm được delegate, không phải look. Orchestrator đăng ký tool `look` (`orchestrator.py`,
-`LOOK_TOOL`) và xử lý trong `_handle_look_call`:
+không") — đó là một lượt tìm kiếm được delegate, không phải look. Model vẫn có thể
+bỏ qua lời dặn đó ("Find my mouse" đã đi vào `look` trên 3.8 extended-thinking,
+#481), nên orchestrator ép buộc bằng code: khi `look` được gọi và transcript của
+provider cho turn đó khớp `hal/realtime/find_intent.py` (tiếng Anh: find / locate /
+search / look for / look around / where is / do hoặc can you see my; tiếng Việt:
+tìm / ở đâu / đâu rồi), `_redirect_find_look` **không** ngắm và không chụp. Nó ack
+call bằng `{"result": "delegated"}`, xóa `realtime_look_frame_path`, kết thúc turn
+và delegate transcript, nên main agent chạy `/servo/search` mà không có
+`[vision-image]`. Transcript rỗng tại thời điểm gọi thì bỏ qua guard (log
+`look: no transcript at call time — find guard skipped`). Orchestrator đăng ký
+tool `look` (`orchestrator.py`, `LOOK_TOOL`) và xử lý trong `_handle_look_call`:
 
 1. **Ngắm đầu vào đối tượng trước**, trên thiết bị có thể chuyển động — nếu
    không thì model sẽ trả lời đầy tự tin về bất cứ thứ gì cái đầu tình cờ đang
@@ -1043,14 +1052,31 @@ không") — đó là một lượt tìm kiếm được delegate, không phải
    300ms cố định; không thêm độ trễ khi servo vốn đang đứng yên hoặc thiết bị
    không có servo), downscale về `HAL_GEMINI_VISION_MAX_WIDTH`
    (mặc định 768px) để giới hạn token ảnh.
-3. Đẩy vào làm **video input** realtime (`ImageInput` → `send_realtime_input(video=…)`),
+3. **Session extended-thinking** (session đã báo `interaction_status`, nên
+   `supports_look_continuation` là true — 3.8 extended-thinking): JPEG nằm
+   **bên trong tool response của `look`** (`FunctionCallResultInput.image` →
+   `FunctionResponse.parts`, log `Sent look image in tool response
+   (call_id=… bytes=…)`), và không replay. Ack kích hoạt lượt generate kế
+   tiếp, nên một frame gửi riêng sau ack có thể vẫn đang được xử lý khi lượt
+   generate đó bắt đầu, và model trả lời "không nhìn thấy" (#481).
+   `send_realtime_input` không bảo đảm thứ tự. Gộp thành một message thì hết
+   race mà không phải chờ. google-genai 2.12.1 không serialize được bytes ảnh
+   lồng trong `send_tool_response`, nên riêng kết quả này được gửi bằng payload
+   WebSocket base64 tường minh, và bị bỏ nếu lời gọi look đã bị hủy, đã được trả
+   lời hoặc bị xóa khi reset session (xem phần interaction status). Kiểm tra qua
+   proxy 2026-09-23 với cùng cơ chế: 3.8 extended-thinking trả lời đúng từ ảnh
+   trong response 2/2 lần, và 3.8-live thường 3/3 lần với prompt trung tính. 3.8-live thường không báo interaction
+   status, nên vẫn đi đường bên dưới.
+
+   **Các session khác** (3.1, 3.8-live thường) đi đường cũ: đẩy frame vào làm
+   **video input** realtime (`ImageInput` → `send_realtime_input(video=…)`),
    rồi **replay turn**: Live API xếp frame gửi giữa-turn vào turn KẾ TIẾP
    (device-proven: flow ack-tool → tiếp-turn cũ khiến mọi câu look trả lời bằng
    ảnh của lần look *trước* — lệch 1 ảnh, delay ack bao nhiêu cũng không cứu),
    nên thay vì ack tool call, orchestrator yield `LookReplaySignal` và
    `run_realtime_turn` gửi lại audio của turn + commit lần nữa trên CÙNG
    session. Frame đang xếp hàng vào đúng turn replay.
-4. Turn replay kích hoạt `look` lần nữa, rơi vào reuse guard
+4. (Chỉ đường replay.) Turn replay kích hoạt `look` lần nữa, rơi vào reuse guard
    (`VISION_MIN_INTERVAL_S`) và được ack `trigger_response=True` — model trả
    lời bằng frame lúc này đã thật sự nằm trong context.
 
@@ -1140,9 +1166,13 @@ worker; handshake thất bại rollback loop/thread ngay. Nhờ vậy một rece
 kẹt không sống sót qua session rebuild. Với họ native-audio, HAL gửi websocket
 ping mỗi 20 giây nhưng không đặt ping timeout: traffic đi ra giữ đường proxy
 sống mà pong bị thiếu không bị hiểu là lỗi client. HAL cũng
-recycle Gemini đồng bộ trước khi stream audio nếu lượt trước đã kết thúc quá
+recycle Gemini đồng bộ trước khi stream audio nếu session hiện tại đã idle quá
 `HAL_GEMINI_PRE_TURN_RECYCLE_S` giây, để câu nói sau khoảng nghỉ không rơi vào
-socket đã chết vì idle ở proxy.
+socket đã chết vì idle ở proxy. Thời gian idle tính từ mốc muộn hơn giữa lúc turn
+trước kết thúc và lúc session kết nối (`_idle_since_monotonic`). Chỉ tính từ turn
+trước thì một session vừa kết nối sau khi bật lại mic bằng công tắc riêng tư cũng
+bị recycle, và turn rơi về main agent trong ~10 giây kết nối lại (thiết bị
+2026-09-23).
 
 **Park khi idle.** Session Gemini không ai nói chuyện cùng sẽ bị server đóng bằng
 WS `1008` "The operation was aborted" (thời gian sống khi idle đo được: 86-198
@@ -2688,10 +2718,10 @@ trong `config.json`:
 | `HAL_REALTIME_FIRST_CHUNK_MAX_CHARS` | `0` | Mặc định nói ngay câu hoàn chỉnh đầu tiên và tổng hợp trước các câu sau qua hàng đợi, không chờ toàn bộ câu trả lời. Giá trị dương bật cắt mệnh đề đầu, hoặc cắt theo khoảng trắng khi vượt giới hạn này; câu hoàn chỉnh bỏ qua bộ cắt. Giữ nguyên voice tag trong ngoặc vuông (kể cả khi cắt theo khoảng trắng), bỏ qua dấu phẩy/hai chấm trong số và dấu hai chấm của URL, yêu cầu 8 ký tự hiển thị ngoài tag. Cắt sớm vẫn có thể tạo khoảng ngắt giữa các yêu cầu tổng hợp. |
 | `HAL_REALTIME_MIN_COMMIT_DURATION_S` | `0.8` | Session ngắn hơn ngưỡng này mà không có STT transcript bị coi là nhiễu VAD, không commit lên model. Chỉ xét khi `HAL_REALTIME_REQUIRE_TRANSCRIPT=false`. |
 | `HAL_REALTIME_NOISE_GUARD_MAX_WORDS` | `3` | Mở rộng guard voiced-ratio của Silero sang cả turn CÓ transcript, tối đa ngần này từ. STT bịa một từ đệm ngắn từ tiếng ồn phòng và báo confidence tối đa cho nó, nên turn kiểu đó trước đây lọt hết mọi guard (guard chỉ chạy khi transcript rỗng) và commit nhiễu thuần lên model. Transcript nhiều nhất ngần này từ sẽ bị kiểm lại theo `HAL_REALTIME_NOISE_SPEECH_RATIO` và bị bỏ nếu audio chưa từng voiced; lệnh ngắn nói thật vẫn là voiced nên vẫn commit. Tỉ lệ được đo trên **span voiced** — từ chunk voiced đầu tới chunk voiced cuối — chứ không phải toàn buffer, vì bản capture luôn kèm pre-roll của VAD ở đầu và 200ms đuôi giữ lại ở cuối; phần đệm cố định đó làm loãng câu ngắn nặng hơn câu dài rất nhiều. Đo toàn buffer từng vứt nhầm một câu `Yes, that's right.` nói thật ở mức 0.500 (`peak=1.000`) — tức là guard quay ra phạt đúng lớp câu nó sinh ra để soi. Tiếng ồn kéo dài vẫn rớt, vì các chunk voiced của nó thưa ngay bên trong span. Transcript dài hơn không bao giờ bị kiểm lại, nên ngưỡng này không thể làm câm một câu nói thật. `0` = tắt. |
-| `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Kiểm soát chi phí: khi một turn đến sau ngần này giây im lặng, recycle (rebuild) session **sau** turn đó để turn kế tiếp bỏ phần context mỗi-turn mà provider re-bill trên session sống lâu. Turn sau khoảng nghỉ dài coi như cuộc hội thoại mới; trí nhớ dài hạn vẫn còn nhờ nạp lại `summary.md`. Với Gemini native-audio, bước này bị bỏ qua nếu pre-turn recycle thành công đã làm mới session cho chính idle gap đó. `0` = tắt. Dùng lại đường rebuild của zombie-recovery. |
+| `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Kiểm soát chi phí: khi một turn đến sau ngần này giây im lặng (tính từ mốc muộn hơn giữa turn trước và lúc session hiện tại kết nối), recycle (rebuild) session **sau** turn đó để turn kế tiếp bỏ phần context mỗi-turn mà provider re-bill trên session sống lâu. Turn sau khoảng nghỉ dài coi như cuộc hội thoại mới; trí nhớ dài hạn vẫn còn nhờ nạp lại `summary.md`. Với Gemini native-audio, bước này bị bỏ qua nếu pre-turn recycle thành công đã làm mới session cho chính idle gap đó. `0` = tắt. Dùng lại đường rebuild của zombie-recovery. |
 | `HAL_GEMINI_SESSION_RESUMPTION` | `false` | Resume cùng session Gemini qua reconnect. Mặc định OFF — proxy `campaign-api` không forward đúng resumption handshake nên resume qua nó tạo session zombie (cold reconnect thì chạy được). Chỉ bật khi endpoint hỗ trợ. |
 | `HAL_GEMINI_IDLE_PARK_S` | `45` | Park Gemini khi idle: đóng transport của session sau ngần này giây không có hoạt động turn, để server không phải đóng nó bằng WS `1008` (backend ghi thành lỗi và bắn cảnh báo). Orchestrator vẫn `available` trong lúc parked; `prepare_turn()` của turn kế tiếp nối lại đồng bộ trước khi stream audio. Phải nhỏ hơn thời gian idle chết ngắn nhất đo được (86 giây). `0` = tắt. |
-| `HAL_GEMINI_PRE_TURN_RECYCLE_S` | `60` | Guard transport cho Gemini: khi lượt nói mới bắt đầu sau ngần này giây idle, rebuild session Gemini **trước khi** stream pre-roll/audio để turn không đụng socket chết vì idle ở proxy/SDK. `0` = tắt. Pre-turn recycle thành công sẽ chặn idle recycle generic sau chính turn đó, nên một idle gap chỉ tạo tối đa một rebuild phục vụ transport/chi phí. |
+| `HAL_GEMINI_PRE_TURN_RECYCLE_S` | `60` | Guard transport cho Gemini: khi lượt nói mới bắt đầu sau ngần này giây session idle (tính từ mốc muộn hơn giữa turn trước và lúc session kết nối), rebuild session Gemini **trước khi** stream pre-roll/audio để turn không đụng socket chết vì idle ở proxy/SDK. `0` = tắt. Pre-turn recycle thành công sẽ chặn idle recycle generic sau chính turn đó, nên một idle gap chỉ tạo tối đa một rebuild phục vụ transport/chi phí. |
 | `HAL_AGENT_GATEWAY` | `openclaw` | Chọn context manager (cũng đọc từ `agent_runtime` trong config.json) |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | — | Key Gemini; fallback về `llm_api_key` |
 | `HAL_GEMINI_LIVE_MODEL` | `gemini-2.5-flash-native-audio-preview-12-2025` | |
