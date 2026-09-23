@@ -1,6 +1,9 @@
 package config
 
-import "strings"
+import (
+	"go.autonomous.ai/os/system/intent/jev"
+	"strings"
+)
 
 // JevIntentConfig exposes a kill switch and a bounded classification budget.
 // URL/authentication reuse config.json's llm_base_url and llm_api_key.
@@ -22,11 +25,11 @@ type JevIntentSettings struct {
 // or runs on its own.
 func (c *Config) JevIntentSettings() JevIntentSettings {
 	settings := JevIntentSettings{
-		TimeoutMS: 350,
+		Enabled:   true,
+		TimeoutMS: int(jev.DefaultTimeout.Milliseconds()),
 		APIKey:    strings.TrimSpace(c.LLMAPIKey),
 	}
-	// Proposed BFF contract, mirroring /chat/completions on the same base.
-	// Until BFF deploys this route, leave enabled=false; a 404 falls through.
+	// Reuse the configured proxy; unavailable routes fall through to the main agent.
 	if base := strings.TrimRight(strings.TrimSpace(c.LLMBaseURL), "/"); base != "" {
 		settings.Endpoint = base + "/jev/decisions"
 	}
@@ -38,9 +41,9 @@ func (c *Config) JevIntentSettings() JevIntentSettings {
 	}
 	settings.Enabled = settings.Enabled && c.LocalIntentEnabled()
 	if settings.TimeoutMS <= 0 {
-		settings.TimeoutMS = 350
-	} else if settings.TimeoutMS > 1000 {
-		settings.TimeoutMS = 1000
+		settings.TimeoutMS = int(jev.DefaultTimeout.Milliseconds())
+	} else if settings.TimeoutMS > int(jev.MaxTimeout.Milliseconds()) {
+		settings.TimeoutMS = int(jev.MaxTimeout.Milliseconds())
 	}
 	return settings
 }

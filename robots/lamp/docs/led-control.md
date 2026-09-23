@@ -328,3 +328,10 @@ as turn-based voice, including their existing LED, display and body behavior.
 It requires recognized input text and the regular addressing gate; noise or
 opening the mic cannot start these emotions. Thinking requires provider end
 evidence, never a local silence estimate. There is no separate LIVE LED overlay. See [realtime voice](../../../docs/realtime-voice.md#hw-emotion-feedback-in-live-mode) for timing and cleanup.
+
+### Relative intent dimming
+
+The local/Jev `dim` action reads `/led/color`, halves each RGB channel, writes
+`/led/solid`, and verifies the readback. Repeated requests dim again; black
+stays black. Integer rounding may reach off. This stops effects and scenes,
+using the reported base color or brightest pixel; it does not preserve patterns.

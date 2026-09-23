@@ -145,6 +145,7 @@ class GeminiLiveAgent(VoiceAgentBase):
         # deliberately not acknowledged to Gemini, so that session must be
         # replaced before another turn rather than locally clearing the call.
         self._pending_tool_calls: set[str] = set()
+        self._pending_tool_names: dict[str, str] = {}
         self._requires_fresh_session: bool = False
         self._user_transcript: str = ""
         self._gated_audio_frames: int = 0
@@ -430,6 +431,7 @@ class GeminiLiveAgent(VoiceAgentBase):
 
     def _clear_pending_tool_calls(self) -> None:
         self._pending_tool_calls.clear()
+        getattr(self, "_pending_tool_names", {}).clear()
         if self._gated_audio_frames:
             logger.debug(
                 "[realtime] Dropped %d audio frame(s) during tool call",
@@ -535,12 +537,17 @@ class GeminiLiveAgent(VoiceAgentBase):
             # deployed 3.8 extended-thinking backend closes with 1007 when a
             # FunctionResponse includes scheduling (device-observed 2026-09-21).
             await self._session.send_tool_response(
-                function_responses=[types.FunctionResponse(id=_input.call_id, response=parsed)]
+                function_responses=[types.FunctionResponse(
+                    id=_input.call_id,
+                    name=getattr(self, "_pending_tool_names", {}).get(_input.call_id),
+                    response=parsed,
+                )]
             )
             # Gemini accepted the response, so this call is resolved. Keeping the
             # gate until after the await avoids racing subsequent client input
             # against the tool response on the wire.
             self._pending_tool_calls.discard(_input.call_id)
+            getattr(self, "_pending_tool_names", {}).pop(_input.call_id, None)
             if not self._pending_tool_calls:
                 self._clear_pending_tool_calls()
 
@@ -1416,6 +1423,14 @@ class GeminiLiveAgent(VoiceAgentBase):
                 self._pending_tool_calls.update(
                     fc.id or "" for fc in message.tool_call.function_calls
                 )
+                # FunctionResponse requires the original name as well as the id.
+                # Keep this provider metadata here rather than making each tool
+                # handler reconstruct it (missing names produce model error replies).
+                if not hasattr(self, "_pending_tool_names"):
+                    self._pending_tool_names = {}
+                self._pending_tool_names.update(
+                    (fc.id or "", fc.name) for fc in message.tool_call.function_calls
+                )
                 if response_user_turn_id is None:
                     response_user_turn_id = getattr(self, "_live_user_turn_id", "")
                 user_transcript = getattr(self, "_user_transcript", "").strip() or _turn_transcript
@@ -1436,6 +1451,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                                                    response={"result": "recorded"})
                         ])
                         self._pending_tool_calls.discard(fc.id or "")
+                        self._pending_tool_names.pop(fc.id or "", None)
                         _outcome_received = True
                         _direct_answer_confirmed = True
                         # The plain ACK can prompt another spoken answer. Once

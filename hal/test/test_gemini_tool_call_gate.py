@@ -375,3 +375,53 @@ def test_a_disabled_aim_makes_no_claim_either_way():
     """LOOK_AIM_ENABLED off, or the aim raised — no aim ran, so nothing is
     known about framing and the model should not be told otherwise."""
     assert "found_user" not in _ack_payload(None)
+
+
+@pytest.mark.parametrize("tool_name", ["look", "express_emotion", "delegate_to_main"])
+def test_tool_response_preserves_provider_call_name(tool_name):
+    session = _RecordingSession()
+    agent = _agent(session)
+    message = _tool_call_message("call-named")
+    message.tool_call.function_calls[0].name = tool_name
+    session._messages = [message]
+    agent._recv_queue = queue.Queue()
+    agent._first_audio_received = False
+    asyncio.run(agent._async_receive_turn())
+
+    asyncio.run(agent._async_send_input(FunctionCallResultInput(
+        call_id="call-named", output='{"result": "done"}',
+    )))
+
+    response, = session.tool_responses[-1]
+    assert response.id == "call-named"
+    assert response.name == tool_name
+    assert response.response == {"result": "done"}
+    assert not agent._pending_tool_calls
+    assert not agent._pending_tool_names
+
+
+def test_tool_name_survives_failed_ack_and_is_cleared_on_session_reset():
+    session = _RecordingSession()
+    agent = _agent(session)
+    agent._pending_tool_calls = {"look-1"}
+    agent._pending_tool_names = {"look-1": "look"}
+    session.fail_tool_response = True
+    with pytest.raises(RuntimeError, match="tool response send failed"):
+        asyncio.run(agent._async_send_input(FunctionCallResultInput(
+            call_id="look-1", output='{"result": "frame incoming"}',
+        )))
+    assert agent._pending_tool_names == {"look-1": "look"}
+    agent._clear_pending_tool_calls()
+    assert agent._pending_tool_names == {}
+
+
+def test_ack_keeps_other_pending_tool_names():
+    session = _RecordingSession()
+    agent = _agent(session)
+    agent._pending_tool_calls = {"look-1", "emotion-2"}
+    agent._pending_tool_names = {"look-1": "look", "emotion-2": "express_emotion"}
+    asyncio.run(agent._async_send_input(FunctionCallResultInput(
+        call_id="look-1", output='{"result": "frame incoming"}',
+    )))
+    assert agent._pending_tool_calls == {"emotion-2"}
+    assert agent._pending_tool_names == {"emotion-2": "express_emotion"}
