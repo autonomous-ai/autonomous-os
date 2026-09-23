@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.autonomous.ai/os/system/harness"
 	"go.autonomous.ai/os/system/lib/flow"
+	"go.autonomous.ai/os/system/server/config"
 	"go.autonomous.ai/os/system/server/serializers"
 	"go.autonomous.ai/os/system/telemetry"
 )
@@ -31,7 +32,7 @@ type harnessReplyRequest struct {
 // registerHarnessRoutes exposes management to the owner and commands only to the device runtime.
 func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context) {
 	s.initializeHarnessVoice(ctx)
-	s.harnessShadow = newHarnessShadow()
+	s.harnessSelector = newHarnessSelector()
 	go s.watchHarnessPreparationWaits(ctx)
 	group := api.Group("harness")
 	group.Use(func(c *gin.Context) {
@@ -85,6 +86,30 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 		}
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(gin.H{"unpaired": true}))
 	})
+	group.POST("select-agent", localOnlyMiddleware(), func(c *gin.Context) {
+		var input struct {
+			MachineID string `json:"machineId"`
+			AgentID   string `json:"agentId"`
+			Text      string `json:"text"`
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64*1024)
+		if err := c.ShouldBindJSON(&input); err != nil || input.MachineID == "" || input.AgentID == "" || strings.TrimSpace(input.Text) == "" || len(input.Text) > 16384 || len(input.AgentID) > 128 || len(input.MachineID) > 128 {
+			c.JSON(http.StatusBadRequest, serializers.ResponseError("Invalid Harness selection request"))
+			return
+		}
+		settings := config.JevIntentSettings{}
+		if s.config != nil {
+			settings = s.config.JevHarnessSettings()
+		}
+		frame := harness.Frame{"machineId": input.MachineID, "agentId": input.AgentID, "text": input.Text}
+		before := s.harnessService.Status()
+		selection := s.harnessSelector.selectAgent(c.Request.Context(), frame, before, settings)
+		after := s.harnessService.Status()
+		if selection.Mode == "jev" && (!after.Connected || before.MachineID != after.MachineID || before.ServerInstanceID != after.ServerInstanceID) {
+			selection.Mode, selection.AgentID, selection.Reason = "fallback", input.AgentID, "connection_changed"
+		}
+		c.JSON(http.StatusOK, serializers.ResponseSuccess(selection))
+	})
 	group.POST("request", localOnlyMiddleware(), func(c *gin.Context) {
 		var frame harness.Frame
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64*1024)
@@ -114,19 +139,15 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 		}
 		requestCtx, cancel := context.WithTimeout(c.Request.Context(), 35*time.Second)
 		defer cancel()
-		// Observation has its own bounded worker; it never delays the receipt path.
-		if kind == "turn.send" && s.config != nil {
-			s.harnessShadow.compare(ctx, frame, s.harnessService.Status(), s.config.JevHarnessSettings())
-		}
 		requestStatus := s.harnessService.Status()
 		result, err := s.harnessService.Request(requestCtx, frame)
 		if kind == "agents.list" {
 			currentStatus := s.harnessService.Status()
 			if currentStatus.MachineID != requestStatus.MachineID || currentStatus.ServerInstanceID != requestStatus.ServerInstanceID {
 				errSnapshot := errors.New("Harness identity changed during discovery")
-				s.harnessShadow.remember(nil, errSnapshot, currentStatus)
+				s.harnessSelector.remember(nil, errSnapshot, currentStatus)
 			} else {
-				s.harnessShadow.remember(result, err, currentStatus)
+				s.harnessSelector.remember(result, err, currentStatus)
 			}
 		}
 		if err != nil {

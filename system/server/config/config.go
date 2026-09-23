@@ -285,7 +285,8 @@ type Config struct {
 	// It shares the configured Autonomous proxy URL and device API key.
 	JevIntent *JevIntentConfig `json:"jev_intent,omitempty" yaml:"jevIntent"`
 
-	// JevHarness observes Harness session selection without changing dispatch (default true).
+	// JevHarness enables Harness session selection (default true).
+	// Uncertain selections and provider failures defer to the main agent.
 	JevHarness *JevIntentConfig `json:"jev_harness,omitempty" yaml:"jevHarness"`
 
 	// LLMDisableThinking disables extended thinking/reasoning for all LLM models (default false).

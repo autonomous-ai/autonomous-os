@@ -17,7 +17,7 @@ class HarnessSkillTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name) / 'voice.json'
         self.connection = {'paired': True, 'connected': True, 'machine_id': 'machine'}
-        api_mock = patch.object(harness, 'api', side_effect=lambda path: dict(self.connection))
+        api_mock = patch.object(harness, 'api', side_effect=lambda *args, **kwargs: dict(self.connection))
         api_mock.start()
         self.addCleanup(api_mock.stop)
         self.mutations = []
@@ -34,6 +34,87 @@ class HarnessSkillTests(unittest.TestCase):
         if kind == 'receipt.get':
             return {'receipt': {'state': 'started'}}
         return {'state': 'running', **fields}
+
+    def selection_api(self, decision):
+        def call(path, payload=None, timeout=40):
+            if path == '/select-agent':
+                self.assertEqual(payload, {'agentId': 'a', 'machineId': 'machine', 'text': 'Add trees'})
+                self.assertEqual(timeout, 4)
+                if isinstance(decision, Exception):
+                    raise decision
+                return decision
+            return dict(self.connection)
+        return call
+
+    def test_jev_target_owns_delivery_and_persisted_task(self):
+        decision = {'mode': 'jev', 'machineId': 'machine', 'agentId': 'b'}
+        with patch.object(harness, 'api', side_effect=self.selection_api(decision)), patch.object(harness, 'request', self.request):
+            harness.run('send', {'agentId': 'a', 'text': 'Add trees'}, self.path)
+        state = json.loads(self.path.read_text())['voice']
+        self.assertEqual(self.mutations[0]['agentId'], 'b')
+        self.assertEqual(state['agentId'], 'b')
+        self.assertEqual(state['lastTask']['agentId'], 'b')
+        self.assertEqual(state['lastTask']['receiptState'], 'queued')
+        self.assertNotIn('pending', state)
+
+    def test_jev_uncertain_unavailable_and_invalid_selection_keep_main_target(self):
+        for decision in [None, OSError('timeout'), ValueError('bad JSON'), [],
+                         {'mode': 'fallback', 'machineId': 'machine', 'agentId': 'b'},
+                         {'mode': 'disabled', 'machineId': 'machine', 'agentId': 'b'},
+                         {'mode': 'jev', 'machineId': 'other', 'agentId': 'b'},
+                         {'mode': 'jev', 'machineId': 'machine', 'agentId': 'missing'},
+                         {'mode': 'jev', 'machineId': 'machine', 'agentId': []}]:
+            with self.subTest(decision=decision), patch.object(harness, 'api', side_effect=self.selection_api(decision)), patch.object(harness, 'request', self.request):
+                harness.run('send', {'agentId': 'a', 'text': 'Add trees'}, self.path)
+                self.assertEqual(self.mutations[-1]['agentId'], 'a')
+                self.assertEqual(json.loads(self.path.read_text())['voice']['lastTask']['agentId'], 'a')
+
+    def test_jev_duplicate_candidate_falls_back_to_main(self):
+        def rpc(kind, **fields):
+            result = self.request(kind, **fields)
+            if kind == 'agents.list':
+                result['agents'].append({'agentId': 'b', 'name': 'Duplicate'})
+            return result
+        decision = {'mode': 'jev', 'machineId': 'machine', 'agentId': 'b'}
+        with patch.object(harness, 'api', side_effect=self.selection_api(decision)), patch.object(harness, 'request', rpc):
+            harness.run('send', {'agentId': 'a', 'text': 'Add trees'}, self.path)
+        self.assertEqual(self.mutations[0]['agentId'], 'a')
+
+    def test_jev_lost_ack_preserves_final_target_and_does_not_reselect(self):
+        self.uncertain = True
+        decision = {'mode': 'jev', 'machineId': 'machine', 'agentId': 'b'}
+        with patch.object(harness, 'api', side_effect=self.selection_api(decision)) as api, patch.object(harness, 'request', self.request):
+            with self.assertRaises(OSError):
+                harness.run('send', {'agentId': 'a', 'text': 'Add trees'}, self.path)
+            state = json.loads(self.path.read_text())['voice']
+            self.assertEqual(state['pending']['agentId'], 'b')
+            self.assertEqual(state['lastTask']['agentId'], 'b')
+            before = self.path.read_bytes()
+            with self.assertRaisesRegex(ValueError, 'unresolved'):
+                harness.run('send', {'agentId': 'a', 'text': 'Add trees'}, self.path)
+            self.assertEqual(self.path.read_bytes(), before)
+            self.assertEqual(sum(c.args[0] == '/select-agent' for c in api.call_args_list), 1)
+            self.assertEqual(len(self.mutations), 1)
+
+    def test_connection_identity_change_during_selection_does_not_reserve(self):
+        for changed in [{'machine_id': 'other'}, {'server_instance_id': 'restarted'}]:
+            self.connection = {'paired': True, 'connected': True, 'machine_id': 'machine'}
+            def call(path, payload=None, timeout=40):
+                if path == '/select-agent':
+                    self.connection.update(changed)
+                    return {'mode': 'jev', 'machineId': 'machine', 'agentId': 'b'}
+                return dict(self.connection)
+            with self.subTest(changed=changed), patch.object(harness, 'api', side_effect=call), patch.object(harness, 'request', self.request):
+                with self.assertRaisesRegex(ValueError, 'identity changed'):
+                    harness.run('send', {'agentId': 'a', 'text': 'Add trees'}, self.path)
+                self.assertFalse(self.path.exists())
+                self.assertEqual(self.mutations, [])
+
+    def test_answer_and_stop_never_call_selector(self):
+        with patch.object(harness, 'api', side_effect=lambda *args, **kwargs: dict(self.connection)) as api, patch.object(harness, 'request', self.request):
+            harness.run('answer', {'agentId': 'a', 'questionRequestId': 'q', 'answers': {}}, self.path)
+            harness.run('stop', {'agentId': 'a'}, self.path)
+            self.assertFalse(any(c.args[0] == '/select-agent' for c in api.call_args_list))
 
     def test_disconnected_actions_do_not_dispatch_or_change_saved_state(self):
         original = {'voice': {'agentId': 'a', 'machineId': 'machine',

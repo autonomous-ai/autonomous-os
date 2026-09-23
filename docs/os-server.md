@@ -1455,23 +1455,31 @@ Harness Store preparation now has a 120-second OS deadline per response run, in 
 
 Harness follow-up context retains `agentId`, `responseRunId`, and the original result `text` as JSON during the existing follow-up window. Routing instructions keep that provenance separate from the helper's retained selection and preserve the unfinished user request when correcting its destination. See [Harness integration](harness.md) for explicit-target and local task-context rules.
 
-## JEV Harness shadow selection
+## JEV Harness agent selection
 
-`config.json` accepts `"jev_harness":{"enabled":true,"timeout_ms":3000}`.
+`config.json` accepts `"jev_harness":{"enabled":true,"timeout_ms":1500}`.
 The section and `enabled` default to enabled independently of `local_intent` and
-`jev_intent`, using the existing `llm_base_url` / `llm_api_key` JEV proxy settings.
-Missing credentials skip evaluation; enabled evaluations can incur model usage.
+`jev_intent`, using existing `llm_base_url` / `llm_api_key` JEV proxy settings.
+Enabled selection can incur model usage; `enabled:false` retains main's target.
 
-OS observes existing successful `agents.list` responses in a RAM cache of at most
-32 candidates, valid for 30 seconds for the same machine/server instance. On
-`turn.send`, a separate asynchronous comparison logs whether JEV agrees with the
-chosen target or abstains. Missing, stale or oversized evidence skips evaluation.
-There is one in-flight evaluation, no queue, a maximum three-second timeout and
-shutdown cancellation. It does not block or alter dispatch, select a new target,
-or rewrite the task. No skill prompt or Harness contract changes are required.
+Strict-loopback `POST /api/harness/select-agent` accepts `{machineId,agentId,text}`
+and returns success data `{mode,agentId,machineId,reason}`, with mode `jev`,
+`fallback` or `disabled`. The ordinary skill `send` calls it before durable
+reservation. JEV may replace main's proposed ID; the resulting ID is saved in
+pending state and used for `turn.send` and its OS reply route. The endpoint itself
+never sends a task. Store dispatch, answer, stop and already-reserved deliveries
+retain their existing targets. Skill prompts and Harness wire contracts are unchanged.
 
-The proxy receives delegated task text and bounded candidate metadata, not full
-conversation history. Logs contain IDs, outcomes/skip reasons and latency, never
-task text, recaps or credentials. Local/mock tests do not establish live-provider
-accuracy. See [Harness shadow comparison](harness.md#jev-shadow-comparison-of-agent-selection)
-for scope and interpretation.
+The selector reuses a RAM cache from successful existing `agents.list` calls,
+with at most 32 candidates and 30-second validity for the same machine/server
+instance. Delegated text is bounded to 2,000 bytes and metadata to 1,000 JSON bytes
+per candidate. One synchronous JEV selection runs at a time, with no queue and
+a default 1,500 ms budget (`timeout_ms` configurable up to 3,000 ms; helper HTTP
+timeout: four seconds). Missing/stale
+or oversized data, missing credentials, busy state, errors, timeout or uncertain/
+invalid selections retain main's proposal. No target changes after reservation.
+
+The proxy receives bounded task text and metadata, not full history. Logs contain
+mode, selected/proposed IDs, reason and latency, without task text, recaps or
+credentials. Local/mock tests do not establish provider accuracy or device behavior.
+See [Harness agent selection](harness.md#jev-harness-agent-selection).

@@ -2,11 +2,12 @@ package config
 
 import "go.autonomous.ai/os/system/intent/jev"
 
-// JevHarnessSettings configures observation only, independently of local intents.
+// JevHarnessSettings configures Harness session selection independently of local intents.
+// Selection is enabled by default; uncertainty or provider failure defers to the main agent.
 func (c *Config) JevHarnessSettings() JevIntentSettings {
 	settings := c.JevIntentSettings()
 	settings.Enabled = true
-	settings.TimeoutMS = int(jev.DefaultTimeout.Milliseconds())
+	settings.TimeoutMS = 1500
 	if c.JevHarness != nil {
 		if c.JevHarness.Enabled != nil {
 			settings.Enabled = *c.JevHarness.Enabled

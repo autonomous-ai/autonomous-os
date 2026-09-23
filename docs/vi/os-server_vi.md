@@ -1426,22 +1426,29 @@ Preparation Harness Store có deadline OS 120 giây theo response run, ngoài bu
 
 Context Harness follow-up lưu `agentId`, `responseRunId` và `text` kết quả gốc dưới dạng JSON trong cửa sổ follow-up hiện có. Chỉ dẫn routing phân biệt nguồn kết quả này với lựa chọn đã lưu của helper và giữ yêu cầu người dùng chưa hoàn thành khi sửa đích. Xem [tích hợp Harness](harness_vi.md) về target tường minh và context task local.
 
-## Đối chiếu lựa chọn Harness bằng JEV
+## Chọn agent Harness bằng JEV
 
-`config.json` nhận `"jev_harness":{"enabled":true,"timeout_ms":3000}`.
+`config.json` nhận `"jev_harness":{"enabled":true,"timeout_ms":1500}`.
 Thiếu section hoặc `enabled` thì mặc định bật, độc lập với `local_intent` và
-`jev_intent`, dùng cấu hình proxy JEV `llm_base_url` / `llm_api_key` hiện có. Thiếu
-credentials thì bỏ qua; đánh giá khi bật có thể phát sinh phí sử dụng model.
+`jev_intent`, dùng cấu hình proxy JEV `llm_base_url` / `llm_api_key` hiện có.
+Bật chọn bằng JEV có thể tốn phí model; `enabled:false` giữ target main đề xuất.
 
-OS quan sát phản hồi `agents.list` thành công sẵn có, lưu RAM tối đa 32 ứng viên
-trong 30 giây cho cùng máy/server instance. Khi có `turn.send`, đánh giá bất đồng
-bộ riêng ghi nhận JEV đồng ý với target đã chọn hay không đủ thông tin. Dữ liệu
-thiếu, cũ hoặc quá giới hạn thì bỏ qua. Chỉ chạy một đánh giá cùng lúc, không xếp
-hàng, timeout tối đa ba giây và hủy khi shutdown. Không chặn hay đổi dispatch,
-chọn target mới hoặc viết lại task. Không cần đổi prompt skill hay contract Harness.
+`POST /api/harness/select-agent` chỉ cho loopback thực sự, nhận
+`{machineId,agentId,text}` và trả data thành công `{mode,agentId,machineId,reason}`,
+với mode `jev`, `fallback` hoặc `disabled`. `send` thường của skill gọi trước khi
+lưu reservation bền vững. JEV có thể thay ID main đề xuất; ID kết quả được lưu vào
+pending và dùng cho `turn.send` cùng reply route OS. Endpoint không tự gửi task.
+Store dispatch, answer, stop và delivery đã reserve giữ target cũ. Prompt skill
+và wire contract Harness giữ nguyên.
 
-Proxy nhận text task được giao và metadata ứng viên có giới hạn, không nhận toàn
-bộ history hội thoại. Log chỉ chứa ID, kết quả/lý do bỏ qua và latency, không chứa
-text task, recap hay credentials. Test local/mock không xác nhận độ chính xác
-của provider thật. Xem [đối chiếu Harness](harness_vi.md#đối-chiếu-lựa-chọn-agent-bằng-jev)
-về phạm vi và cách hiểu kết quả.
+Bộ chọn dùng lại cache RAM từ `agents.list` thành công sẵn có, tối đa 32 ứng viên
+và hiệu lực 30 giây cho cùng máy/server instance. Text task tối đa 2.000 byte,
+metadata tối đa 1.000 byte JSON mỗi ứng viên. Một lần chọn JEV đồng bộ chạy tại
+mỗi thời điểm, không xếp hàng, budget mặc định 1.500 ms (`timeout_ms` sửa được,
+tối đa 3.000 ms; timeout HTTP helper bốn giây). Dữ liệu thiếu/cũ/quá giới hạn, thiếu credentials, bận, lỗi, timeout hoặc
+kết quả sai/chưa chắc chắn đều giữ đề xuất của main. Target không đổi sau reservation.
+
+Proxy nhận text task và metadata có giới hạn, không nhận toàn bộ history. Log chứa
+mode, ID đã chọn/đề xuất, lý do và latency, không chứa text task, recap hay credentials.
+Test local/mock không xác nhận độ chính xác provider hoặc hành vi thiết bị.
+Xem [chọn agent Harness](harness_vi.md#chọn-agent-harness-bằng-jev).
