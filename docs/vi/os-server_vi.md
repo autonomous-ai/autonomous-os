@@ -107,8 +107,10 @@ cho phép tính thời gian thu nhận liên tục sẵn có vào warm-up khi ch
 vẫn loại component không hợp lệ/stale.
 Skill `environment` diễn giải
 số đo và tham khảo `wellbeing` để gợi ý phù hợp. Thu nhận phần cứng tách biệt
-chính sách thay đổi ở OS; tính năng không bật capability đang comment hay SEN55/SCD41/SEN63C
-đang tắt của Lamp. Xem [cảm biến môi trường Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md#chính-sách-thay-đổi-của-os-và-api-cho-agent)
+chính sách thay đổi ở OS; policy không bật phần cứng. Lamp khai báo `environment`
+tùy chọn (`required: false`) và chỉ bật SEN63C trên `orangepi_sun60`, bus `0`;
+SEN55/SCD41 và board thiếu entry tương ứng vẫn tắt. Thiếu SEN63C thì báo lỗi và
+thử lại, không chặn khởi động. Tắt SEN63C trước khi bật SEN55 + SCD41 thay thế. Xem [cảm biến môi trường Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md#chính-sách-thay-đổi-của-os-và-api-cho-agent)
 để biết mặc định, validation, payload và use case.
 
 ### Device Setup

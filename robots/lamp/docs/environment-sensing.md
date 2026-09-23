@@ -18,8 +18,9 @@ polls that snapshot and sends qualifying `environment.update` events through
 The `environment` skill interprets measurements and consults `wellbeing` for
 considerate advice. Web and MQTT reads remain read-only and do not trigger turns.
 There is no environmental history store, scheduled follow-up service, automatic
-actuator control, or medical alarm. Lamp still ships with this hardware disabled
-and its capability commented out; the worker requires the declared capability.
+actuator control, or medical alarm. Lamp declares the optional `environment` capability and enables SEN63C on
+OrangePi `orangepi_sun60`, bus `0`; SEN55/SCD41 remain disabled. Other boards
+without a matching entry remain disabled. The worker requires the declared capability.
 
 ## Wiring and mounting
 
@@ -65,10 +66,10 @@ enabling acquisition. This inspection did not change device configuration.
 
 ## Enable in HAL
 
-Lamp's `ROBOT.md` keeps the optional `environment` declaration commented out.
-HAL does not mount its endpoints or load its wiring until that line is uncommented.
-The prepared declaration uses driver `composite`, `routes: [environment]`, and
-`required: false`.
+Lamp's `ROBOT.md` declares optional `environment` with driver `composite`,
+`routes: [environment]`, and `required: false`. HAL mounts its endpoints and
+loads its component configuration. A missing SEN63C reports component `error`
+and retries; this optional sensor is not a startup requirement.
 
 HAL discovers registered component drivers and reads their per-device, per-board
 JSON configuration: `sen55.json`, `scd41.json`, and `sen63c.json`. Each
@@ -76,9 +77,9 @@ JSON configuration: `sen55.json`, `scd41.json`, and `sen63c.json`. Each
 not access hardware. There is no separate component selection list; an old
 `environment.json` is ignored. Each enabled component runs its own worker.
 
-To replace SEN55 + SCD41 with SEN63C, set the former two entries to
-`"enabled": false` and SEN63C to `"enabled": true` with confirmed wiring, then
-restart HAL. Two enabled components cannot own the same metric: SEN55 + SEN63C
+SEN63C is the default OrangePi component. To use SEN55 + SCD41 instead, first
+set SEN63C to `"enabled": false`, then enable the replacement entries with
+confirmed wiring and restart HAL. Two enabled components cannot own the same metric: SEN55 + SEN63C
 or SCD41 + SEN63C is rejected as a configuration error instead of silently
 overwriting readings. Disabled components do not participate in this check.
 Adding future hardware requires its driver, registered metric ownership and
@@ -87,6 +88,10 @@ The binding lives in `hal/drivers/environment/registry.py`: config loader,
 driver (`start`, `read`, `close`), timing defaults and supported metric keys.
 Setup and `build-orangepi` extract the full device-profile archive, so new
 sensor JSON files need no sensor-specific installation branch.
+Existing devices need both the updated HAL package and device-profile package:
+a HAL-only update does not change an older disabled `sen63c.json` or commented
+`ROBOT.md`. The device update replaces the extracted profile and restarts HAL
+and os-server.
 
 SEN55 configuration belongs to `robots/<device>/sen55.json`, using a
 `boards` map like `mpr121.json`. The target board is OrangePi (`orangepi_sun60`); Lamp ships its entry disabled
@@ -95,8 +100,8 @@ or selected-board entry disables the sensor. Disabled entries may omit `bus` or 
 Enabling acquisition requires a nonnegative integer `bus`.
 Invalid configuration, including unknown fields, is rejected at startup.
 
-To enable it after wiring is confirmed, uncomment the capability in `ROBOT.md`,
-edit the actual board's entry, and restart HAL. This template
+To enable SEN55 after wiring is confirmed, first disable SEN63C to avoid
+overlapping metrics, edit the actual board's SEN55 entry, and restart HAL. This template
 uses placeholders and is not directly loadable JSON:
 
 ```text
@@ -149,8 +154,9 @@ Actual SCD41 wiring and measurements have not been verified on hardware.
 
 ## SEN63C combined component
 
-`robots/lamp/sen63c.json` uses the same `boards` map and ships disabled, with
-`bus`, `sda_pin`, and `scl_pin` null. Confirm its wiring before enabling; the
+`robots/lamp/sen63c.json` uses the same `boards` map and enables SEN63C for
+`orangepi_sun60` on bus `0`. `sda_pin` and `scl_pin` remain null; other boards
+without an entry remain disabled. Confirm wiring for each installation; the
 SEN55 pin note above does not establish SEN63C wiring. The driver uses I2C
 address `0x6B`, verifies the SEN63C product type, checks word CRCs, and reads
 PM1/PM2.5/PM4/PM10, temperature, humidity and measured `co2_ppm`. VOC/NOx remain
@@ -288,9 +294,11 @@ component under `status.components`; legacy single-sensor snapshots remain suppo
 thresholds or historical storage. OS → agent events come from the independent
 worker below, not browser refreshes.
 
-With Lamp's current commented capability, the card shows `N/A` without polling.
-Declaring the capability while leaving `enabled: false` shows the disabled state
-and `N/A` values. UI visibility does not enable acquisition or agent events.
+Lamp's declared capability lets the card poll by default; OrangePi SEN63C
+readings appear when fresh. Missing hardware shows errors and `N/A` while the
+worker retries. Disabling all components, or using a board without matching
+entries, shows the disabled state and `N/A`. UI visibility does not enable
+acquisition or agent events.
 
 ## MQTT reads
 
@@ -304,8 +312,8 @@ in `data`.
 
 A missing capability returns `status: "failure"` with
 `error: "environment capability not declared"`. HAL transport errors, non-200
-HTTP responses, and invalid status JSON also return failure. Lamp's currently
-commented capability therefore returns the missing-capability error. This is
+HTTP responses, and invalid status JSON also return failure. Lamp declares the
+capability by default, so missing hardware is reported in the snapshot. This is
 request/reply, with no continuous stream, automatic events, or agent invocation.
 See the [MQTT protocol](../../../docs/mqtt.md) for payloads and response rules.
 

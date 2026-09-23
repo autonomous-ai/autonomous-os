@@ -18,8 +18,9 @@ HAL giữ snapshot gần nhất trong RAM. Worker môi trường của OS đọc
 Skill `environment` diễn giải số đo, tham khảo `wellbeing` để đưa gợi ý phù hợp.
 Web và MQTT vẫn chỉ đọc, không kích hoạt lượt agent.
 Chưa có kho lịch sử môi trường, dịch vụ hẹn kiểm tra lại, tự điều khiển actuator
-hay cảnh báo y tế. Lamp vẫn tắt phần cứng này và comment capability;
-worker chỉ chạy khi device khai báo capability.
+hay cảnh báo y tế. Lamp khai báo capability `environment` tùy chọn và bật SEN63C trên OrangePi
+`orangepi_sun60`, bus `0`; SEN55/SCD41 vẫn tắt. Board khác thiếu entry tương ứng
+vẫn tắt. Worker yêu cầu capability được khai báo.
 
 ## Đấu dây và lắp đặt
 
@@ -65,10 +66,10 @@ không thay đổi cấu hình trên device.
 
 ## Bật trong HAL
 
-Dòng khai báo tùy chọn `environment` trong `ROBOT.md` của Lamp đang được comment.
-HAL chưa mount API hoặc đọc cấu hình dây nối cho đến khi bỏ comment dòng này.
-Khai báo chuẩn bị sẵn dùng driver `composite`, `routes: [environment]` và
-`required: false`.
+`ROBOT.md` của Lamp khai báo `environment` tùy chọn với driver `composite`,
+`routes: [environment]` và `required: false`. HAL mount API và nạp cấu hình
+component. Thiếu SEN63C thì component báo `error` và thử lại; sensor tùy chọn
+này không phải điều kiện bắt buộc để khởi động.
 
 HAL duyệt driver component đã đăng ký và đọc JSON riêng theo device/board:
 `sen55.json`, `scd41.json`, `sen63c.json`. Cờ `enabled` điều khiển từng
@@ -76,8 +77,9 @@ component; entry tắt hoặc thiếu không truy cập hardware. Không có dan
 chọn component riêng; file `environment.json` cũ bị bỏ qua. Mỗi component bật
 có worker độc lập.
 
-Để thay SEN55 + SCD41 bằng SEN63C, đặt hai entry cũ thành `"enabled": false`,
-đặt SEN63C thành `"enabled": true` với dây nối đã xác nhận, rồi restart HAL.
+SEN63C là component mặc định trên OrangePi. Để dùng SEN55 + SCD41 thay thế,
+trước hết đặt SEN63C thành `"enabled": false`, rồi bật các entry thay thế với
+dây nối đã xác nhận và restart HAL.
 Hai component bật không được cùng sở hữu một chỉ số: SEN55 + SEN63C hoặc
 SCD41 + SEN63C bị báo lỗi cấu hình thay vì âm thầm ghi đè dữ liệu. Component
 tắt không tham gia kiểm tra trùng này. Thêm hardware sau này cần driver,
@@ -87,6 +89,9 @@ vẫn dùng chung.
 (`start`, `read`, `close`), timing mặc định và các key chỉ số hỗ trợ.
 Setup và `build-orangepi` giải nén toàn bộ archive profile device, nên file
 JSON sensor mới không cần nhánh cài đặt riêng theo loại sensor.
+Device hiện có cần cập nhật cả gói HAL lẫn gói profile device: chỉ cập nhật HAL
+không đổi `sen63c.json` đang tắt hay `ROBOT.md` đang comment của bản cũ. Cập nhật
+device thay profile đã giải nén và restart HAL cùng os-server.
 
 Cấu hình SEN55 thuộc device tại `robots/<device>/sen55.json`, dùng map `boards`
 như `mpr121.json`. Board mục tiêu là OrangePi (`orangepi_sun60`); Lamp có entry tắt
@@ -95,8 +100,8 @@ entry của board đang chọn thì cảm biến tắt. Entry tắt có thể b�
 Khi bật, `bus` phải là số nguyên không âm.
 Cấu hình sai, kể cả trường không được hỗ trợ, bị từ chối khi khởi động.
 
-Để bật sau khi xác nhận dây nối, bỏ comment capability trong `ROBOT.md`,
-sửa entry đúng board rồi khởi động lại HAL. Mẫu sau có placeholder,
+Để bật SEN55 sau khi xác nhận dây nối, trước hết tắt SEN63C để tránh trùng
+chỉ số, sửa entry SEN55 của board thực tế rồi restart HAL. Mẫu sau có placeholder,
 chưa phải JSON có thể nạp trực tiếp:
 
 ```text
@@ -144,8 +149,9 @@ Chưa kiểm chứng dây nối hay số đo SCD41 trên hardware thật.
 
 ## Component kết hợp SEN63C
 
-`robots/lamp/sen63c.json` dùng cùng map `boards`, mặc định tắt với `bus`,
-`sda_pin`, `scl_pin` là null. Xác nhận dây trước khi bật; ghi chú chân SEN55
+`robots/lamp/sen63c.json` dùng cùng map `boards`, bật SEN63C cho
+`orangepi_sun60` trên bus `0`. `sda_pin`, `scl_pin` vẫn là null; board khác
+thiếu entry tương ứng vẫn tắt. Xác nhận dây cho từng máy; ghi chú chân SEN55
 ở trên không xác nhận dây SEN63C. Driver dùng I2C `0x6B`, kiểm tra product type
 SEN63C, CRC từng word và đọc PM1/PM2.5/PM4/PM10, nhiệt độ, độ ẩm, `co2_ppm`
 đo thật. VOC/NOx giữ null trong sample chung. CO₂ có thể chưa có trong 22–24
@@ -278,9 +284,10 @@ component ở `status.components`; vẫn hỗ trợ snapshot một sensor kiểu
 chỉ đọc, không có ngưỡng tốt/xấu hay lưu lịch sử. Event OS → agent do worker
 độc lập bên dưới tạo, không do trình duyệt làm mới.
 
-Với capability đang comment của Lamp, card hiện `N/A` và không polling. Nếu
-khai báo capability nhưng giữ `enabled: false`, card hiển thị trạng thái đã tắt
-và số đo `N/A`. Hiển thị UI không bật thu nhận hay event agent.
+Capability đã khai báo của Lamp cho phép card polling mặc định; số đo SEN63C
+trên OrangePi hiện khi còn mới. Thiếu phần cứng thì hiện lỗi và `N/A` trong khi
+worker thử lại. Tắt mọi component hoặc dùng board thiếu entry tương ứng sẽ
+hiện trạng thái đã tắt và `N/A`. Hiển thị UI không bật thu nhận hay event agent.
 
 ## Đọc qua MQTT
 
@@ -293,8 +300,8 @@ kiểm tra `state`, `stale`, `sample`, `last_error` trong `data`.
 
 Thiếu capability trả `status: "failure"`,
 `error: "environment capability not declared"`. Lỗi kết nối HAL, HTTP khác 200
-hoặc status JSON không hợp lệ cũng trả failure. Lamp hiện vẫn comment capability
-nên trả lỗi thiếu capability. Đây là request/reply, không stream hay event tự
+hoặc status JSON không hợp lệ cũng trả failure. Lamp khai báo capability mặc
+định nên thiếu phần cứng được báo trong snapshot. Đây là request/reply, không stream hay event tự
 động, không gọi agent. Xem [giao thức MQTT](../../../../docs/vi/mqtt_vi.md)
 để biết payload và quy tắc phản hồi.
 

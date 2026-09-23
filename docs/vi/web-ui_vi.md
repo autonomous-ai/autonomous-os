@@ -748,8 +748,10 @@ với `status.timing` cấp cao nhất và nhãn cảm biến chung. Sample ho�
 sample là `null` sẽ hiện trạng thái chờ, không hiển thị ngày epoch. Giải thích về
 gas index chỉ xuất hiện khi VOC hoặc NOx có nguồn được khai báo hoặc giá trị đo.
 
-Lamp vẫn để `environment` được comment trong `ROBOT.md` và SEN55/SCD41 tắt trong
-file JSON tương ứng, nên card này ẩn cho đến khi capability được khai báo. Xem
+Lamp khai báo `environment` tùy chọn (`required: false`) trong `ROBOT.md`, nên
+card polling mặc định. SEN63C chỉ bật trên `orangepi_sun60`, bus `0`; SEN55/SCD41
+và board thiếu entry tương ứng vẫn tắt. Thiếu SEN63C thì hiện lỗi và `N/A` trong
+khi HAL thử lại, không chặn khởi động. Tắt SEN63C trước khi bật SEN55 + SCD41 thay thế. Xem
 [tài liệu cảm biến môi trường của Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md)
 về đấu dây, bật cảm biến và contract dữ liệu HAL.
 
