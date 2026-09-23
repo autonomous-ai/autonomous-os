@@ -335,3 +335,9 @@ Action `dim` local/Jev đọc `/led/color`, chia đôi từng kênh RGB, ghi
 `/led/solid` rồi đọc lại kiểm chứng. Gọi tiếp giảm tiếp; đèn tắt giữ nguyên.
 Làm tròn xuống có thể đưa về tắt. Effect/scene chuyển thành màu tĩnh từ màu nền
 hoặc pixel sáng nhất được báo; không giữ pattern.
+
+Voice được local/Jev xử lý (`handledLocally=true`) giải phóng cue thinking
+realtime đang giữ mà không chờ TTS. Phản hồi mute hoặc không có lời nói không
+giữ cue vô hạn. Cleanup giữ emotion mới, khôi phục LED đã lưu (kể cả tắt/dim);
+TTS/nhạc đang phát giữ overlay tới teardown bình thường. Lượt do agent xử lý
+vẫn giữ cue thinking.

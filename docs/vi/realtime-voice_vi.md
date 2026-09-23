@@ -2803,3 +2803,13 @@ Luồng realtime text-to-TTS chặn riêng câu lỗi “I’m sorry, there was 
 ACK tool Gemini lưu tên hàm gốc cùng call ID và trả cả hai trong `FunctionResponse`. Thiếu `name` vi phạm contract provider và đã tái hiện câu báo lỗi hệ thống sau khi `look` chụp ảnh thành công trên Gemini 3.8. Tên được giữ đến khi gửi ACK thành công và xoá khi reset session. Không thay đổi cách gửi ảnh hay replay audio.
 
 Với tool NON_BLOCKING của Gemini, `complete_response` tới trước mọi nội dung trả lời được ACK nhưng không xác nhận hoàn thành và không chặn lời nói đến sau. Vẫn áp dụng kiểm tra câu trả lời/outcome và ưu tiên delegate đến muộn; nếu không có câu trả lời vẫn fallback sang main. Quy tắc này áp dụng cả generation mới sau replay `look`.
+
+Voice được local/Jev xử lý (`handledLocally=true`) giải phóng cue thinking
+realtime đang giữ mà không chờ TTS. Phản hồi mute hoặc không có lời nói không
+giữ cue vô hạn. Cleanup giữ emotion mới, khôi phục LED đã lưu (kể cả tắt/dim);
+TTS/nhạc đang phát giữ overlay tới teardown bình thường. Lượt do agent xử lý
+vẫn giữ cue thinking.
+
+### Lifecycle interaction của Gemini Extended Thinking
+
+Với `gemini-3.8-live-extended-thinking`, `serverContent.interactionStatus` là trạng thái lifecycle của provider: kết thúc một đoạn nói khi còn `IN_PROGRESS` không kết thúc interaction. HAL giữ trường này bằng adapter riêng từng session vì google-genai 2.12.1 loại bỏ trường phản hồi chưa biết. Lời nói tiếp theo vẫn stream trong cùng lượt, kể cả sau filler và tool `complete_response` chỉ mang tính gợi ý. Khi `IDLE`, HAL kiểm tra toàn bộ câu trả lời trước khi xác nhận thành công hoặc fallback; idle không đồng nghĩa task thành công. Delegate/reject tường minh và interrupt vẫn được ưu tiên. Interaction bị kẹt có giới hạn im lặng bằng giá trị lớn hơn giữa `REALTIME_TURN_MAX_SILENCE_S` và `REALTIME_RECV_QUEUE_TIMEOUT_S`, gia hạn khi có output/tool, không gia hạn chỉ vì status heartbeat lặp lại. Model/session không có tín hiệu này giữ nhánh grace có giới hạn hiện hữu. Khi session đã báo trạng thái async này, `look` mới tiếp tục interaction hiện tại thay vì replay audio người dùng và ngắt nó. Session không có tín hiệu vẫn giữ replay. Nếu còn ACK tool khác đang chờ, HAL giữ một frame hiện tại đến khi chúng hoàn tất; reset session sẽ xoá frame đó.

@@ -425,3 +425,30 @@ def test_ack_keeps_other_pending_tool_names():
     )))
     assert agent._pending_tool_calls == {"emotion-2"}
     assert agent._pending_tool_names == {"emotion-2": "express_emotion"}
+
+
+def test_async_look_frame_waits_for_sibling_tool_ack():
+    session = _RecordingSession()
+    agent = _agent(session)
+    agent.supports_look_continuation = True
+    agent._pending_tool_calls = {"emotion"}
+    agent._pending_tool_names = {"emotion": "express_emotion"}
+    asyncio.run(agent._async_send_input(ImageInput(image=_frame())))
+    assert session.realtime_inputs == []
+    asyncio.run(agent._async_send_input(FunctionCallResultInput(
+        call_id="emotion", output='{"result": "ok"}',
+    )))
+    assert len(session.realtime_inputs) == 1
+    assert session.realtime_inputs[0]["video"].mime_type == "image/jpeg"
+    assert agent._pending_image is None
+
+
+def test_pending_async_image_is_not_reused_after_reset():
+    session = _RecordingSession()
+    agent = _agent(session)
+    agent.supports_look_continuation = True
+    agent._pending_tool_calls = {"old"}
+    asyncio.run(agent._async_send_input(ImageInput(image=_frame())))
+    agent._clear_pending_tool_calls()
+    asyncio.run(agent._finish_tool_ack("old"))
+    assert session.realtime_inputs == []

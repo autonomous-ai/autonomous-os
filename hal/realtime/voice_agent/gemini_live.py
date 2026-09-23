@@ -22,6 +22,7 @@ from websockets.exceptions import ConnectionClosed
 
 from hal import config as app_config
 from hal.realtime.config import GeminiConfig, gemini_needs_idle_workaround
+from hal.realtime.voice_agent.gemini_status import install_interaction_status
 from hal.realtime.enums import GeminiThinkingLevel
 from hal.realtime.models import (
     AgentInputEvent,
@@ -146,6 +147,8 @@ class GeminiLiveAgent(VoiceAgentBase):
         # replaced before another turn rather than locally clearing the call.
         self._pending_tool_calls: set[str] = set()
         self._pending_tool_names: dict[str, str] = {}
+        self.supports_look_continuation = False
+        self._pending_image = None
         self._requires_fresh_session: bool = False
         self._user_transcript: str = ""
         self._gated_audio_frames: int = 0
@@ -352,6 +355,7 @@ class GeminiLiveAgent(VoiceAgentBase):
 
     async def _async_connect(self) -> None:
         # A reopened session must not inherit input ownership or playback acks.
+        self.supports_look_continuation = False
         self._live_user_turn_id = ""
         self._live_speech_emitted = False
         self._awaiting_playback_turn_complete = False
@@ -367,6 +371,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                 config=self._build_config(),
             )
         )
+        install_interaction_status(self._session)
         logger.info("[realtime] Gemini Live session open (voice=%s)", self._config.voice)
 
     async def _async_disconnect(self) -> None:
@@ -432,6 +437,7 @@ class GeminiLiveAgent(VoiceAgentBase):
     def _clear_pending_tool_calls(self) -> None:
         self._pending_tool_calls.clear()
         getattr(self, "_pending_tool_names", {}).clear()
+        self._pending_image = None
         if self._gated_audio_frames:
             logger.debug(
                 "[realtime] Dropped %d audio frame(s) during tool call",
@@ -464,6 +470,11 @@ class GeminiLiveAgent(VoiceAgentBase):
         if not isinstance(_input, FunctionCallResultInput) and self._tool_call_pending():
             if isinstance(_input, AudioInput):
                 self._gated_audio_frames += 1
+            elif isinstance(_input, ImageInput) and getattr(self, "supports_look_continuation", False):
+                # A sibling async tool can still be pending after look's ACK.
+                # Keep one current frame until all tool responses reach the wire.
+                self._pending_image = _input
+                logger.info("[realtime] Holding look frame until pending tool acknowledgements finish")
             else:
                 logger.debug(
                     "[realtime] Dropped %s while tool call(s) %s are pending",
@@ -546,10 +557,16 @@ class GeminiLiveAgent(VoiceAgentBase):
             # Gemini accepted the response, so this call is resolved. Keeping the
             # gate until after the await avoids racing subsequent client input
             # against the tool response on the wire.
-            self._pending_tool_calls.discard(_input.call_id)
-            getattr(self, "_pending_tool_names", {}).pop(_input.call_id, None)
-            if not self._pending_tool_calls:
-                self._clear_pending_tool_calls()
+            await self._finish_tool_ack(_input.call_id)
+
+    async def _finish_tool_ack(self, call_id: str) -> None:
+        self._pending_tool_calls.discard(call_id)
+        getattr(self, "_pending_tool_names", {}).pop(call_id, None)
+        if not self._pending_tool_calls:
+            pending_image = getattr(self, "_pending_image", None)
+            self._clear_pending_tool_calls()
+            if pending_image is not None:
+                await self._async_send_input(pending_image)
 
     async def _async_commit(
         self, turn_end_queued_at: float | None = None, *, session: object | None = None,
@@ -650,6 +667,8 @@ class GeminiLiveAgent(VoiceAgentBase):
         _outcome_received = False
         _routing_received = False
         _direct_answer_confirmed = False
+        interaction_status = None
+        interaction_deadline = 0.0
         _turn_transcript = ""
         _spoken_response = ""
         _initial_speech = False
@@ -927,6 +946,8 @@ class GeminiLiveAgent(VoiceAgentBase):
                 _continuation_overflow = _grounded = False
                 _search_context.clear()
                 execution_interrupted = False
+                interaction_status = None
+                interaction_deadline = 0.0
                 replay_response = replay_boundary_pending = True
                 self._skip_stale_turn_done = False
                 self._turn_gen += 1
@@ -936,7 +957,15 @@ class GeminiLiveAgent(VoiceAgentBase):
                 _note_progress()
                 _log_timing("look_replay_response_started")
             try:
-                if _deferred_finalize is not None:
+                if interaction_status == "IN_PROGRESS":
+                    remaining = interaction_deadline - time.monotonic()
+                    if remaining <= 0:
+                        logger.warning("[realtime] Interaction stalled while IN_PROGRESS")
+                        self._requires_fresh_session = True
+                        await _finalize_generation_complete()
+                        return
+                    message = await read_message(remaining)
+                elif _deferred_finalize is not None:
                     # Progress buys time only for an unfinished outcome. A real
                     # completed answer still observes the ordinary routing grace.
                     progress_deadline = _progress_until
@@ -972,7 +1001,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                 if message is None:
                     continue
             except StopAsyncIteration:
-                if _deferred_finalize is not None or replay_response:
+                if _deferred_finalize is not None or replay_response or interaction_status == "IN_PROGRESS":
                     # The SDK receive() iterator ends at turn_complete, not at
                     # socket close. Read the next iterator on the SAME session
                     # while preserving this logical turn and its deadline.
@@ -981,6 +1010,11 @@ class GeminiLiveAgent(VoiceAgentBase):
                     continue
                 return
             except (asyncio.TimeoutError, TimeoutError):
+                if interaction_status == "IN_PROGRESS":
+                    logger.warning("[realtime] Interaction stalled while IN_PROGRESS")
+                    self._requires_fresh_session = True
+                    await _finalize_generation_complete()
+                    return
                 if _deferred_finalize is not None:
                     logger.info("[realtime] NON_BLOCKING grace expired (%.2fs, pending_tools=%d)",
                                 _grace_s, len(self._pending_tool_calls))
@@ -1123,13 +1157,57 @@ class GeminiLiveAgent(VoiceAgentBase):
                     if has_reply:
                         replay_boundary_pending = False
                     elif (content.interrupted or content.turn_complete
-                          or getattr(content, "generation_complete", False)):
+                          or getattr(content, "generation_complete", False)
+                          or getattr(content, "interaction_status", None) == "IDLE"):
                         # The cancelled filler may end with interrupted, a late
                         # terminal, both, or neither. Retire that boundary here;
                         # never discard the replay's own TurnDoneEvent.
                         if content.turn_complete:
                             replay_boundary_pending = False
                         continue
+
+                status = getattr(content, "interaction_status", None)
+                if _requires_outcome and status in {"IN_PROGRESS", "IDLE"}:
+                    self.supports_look_continuation = True
+                    first_status = interaction_status is None
+                    interaction_status = status
+                    logger.info("[realtime] interaction_status=%s gen=%s", status, self._turn_gen)
+                    if first_status:
+                        # The SDK terminal may precede this status. Retire its
+                        # provisional filler classification, not the user's turn.
+                        for check in (_outcome_check, _continuation_check):
+                            if check is not None:
+                                check.cancel()
+                                await asyncio.gather(check, return_exceptions=True)
+                        _outcome_check = _continuation_check = None
+                        _outcome_deadline = 0.0
+                        _deferred_finalize = None
+                        _direct_answer_confirmed = False
+                        _outcome_received = _routing_received
+                        routing_in_message = any(
+                            fc.name in {"delegate_to_main", "reject_turn", "end_conversation"}
+                            for fc in (message.tool_call.function_calls if message.tool_call else []))
+                        if (_continuation and not _continuation_overflow
+                                and not _routing_received and not routing_in_message
+                                and not execution_interrupted and not content.interrupted):
+                            for event in _continuation:
+                                self._recv_queue.put(event)
+                            _spoken_response += _continuation_text
+                            _initial_speech = bool(_spoken_response.strip())
+                            _continuation.clear()
+                            _continuation_text = ""
+                            _continuation_bytes = 0
+                    if first_status and status == "IN_PROGRESS":
+                        interaction_deadline = time.monotonic() + max(
+                            app_config.REALTIME_TURN_MAX_SILENCE_S,
+                            app_config.REALTIME_RECV_QUEUE_TIMEOUT_S)
+                        self.allow_progress_until(interaction_deadline)
+                if interaction_status == "IN_PROGRESS" and (
+                        content.model_turn or content.output_transcription):
+                    interaction_deadline = time.monotonic() + max(
+                        app_config.REALTIME_TURN_MAX_SILENCE_S,
+                        app_config.REALTIME_RECV_QUEUE_TIMEOUT_S)
+                    self.allow_progress_until(interaction_deadline)
 
                 interrupted_user_turn_id = ""
                 if content.interrupted and app_config.LIVE_MODE:
@@ -1151,9 +1229,10 @@ class GeminiLiveAgent(VoiceAgentBase):
                 # The initial response streams immediately. Post-terminal output
                 # stays off-speaker until an incomplete initial reply and a valid
                 # continuation are confirmed without a trailing routing tool.
-                accept_speech = not _direct_answer_confirmed and not (
-                    _requires_outcome and _deferred_finalize is not None
-                )
+                accept_speech = (not execution_interrupted and not _routing_received
+                                 and (interaction_status is not None or (
+                                     not _direct_answer_confirmed and not (
+                                         _requires_outcome and _deferred_finalize is not None))))
                 if (not accept_speech and not _direct_answer_confirmed
                         and not _routing_received and not execution_interrupted
                         and not content.interrupted and not _continuation_overflow):
@@ -1296,6 +1375,9 @@ class GeminiLiveAgent(VoiceAgentBase):
                     )
 
                 if content.interrupted:
+                    # A late sibling ACK must not flush the old frame into the
+                    # new user's interaction. Tool ids still need normal ACKs.
+                    self._pending_image = None
                     execution_interrupted = True
                     logger.info(content)
                     try:
@@ -1366,7 +1448,11 @@ class GeminiLiveAgent(VoiceAgentBase):
                     self._first_audio_received = False
                     self._turn_done.set()
 
-                if content.turn_complete:
+                if interaction_status is not None and content.interrupted:
+                    await _finalize_turn_complete(False)
+                    return
+
+                if interaction_status is None and content.turn_complete:
                     _continuation_active_until = 0.0
                     delayed_playback_ack = app_config.LIVE_MODE and getattr(
                         self, "_awaiting_playback_turn_complete", False
@@ -1387,7 +1473,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                     await _finalize_turn_complete(delayed_playback_ack)
                     return
 
-                if getattr(content, "generation_complete", False):
+                if interaction_status is None and getattr(content, "generation_complete", False):
                     _continuation_active_until = 0.0
                     # Gemini Live can defer turn_complete until its assumed
                     # real-time audio playback ends. HAL plays the received
@@ -1409,7 +1495,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                     await _finalize_generation_complete()
                     return
 
-            elif message.tool_call and message.tool_call.function_calls:
+            if message.tool_call and message.tool_call.function_calls:
                 if any(fc.name not in {"complete_response", "delegate_to_main",
                                        "reject_turn", "end_conversation", "express_emotion"}
                        for fc in message.tool_call.function_calls):
@@ -1450,8 +1536,10 @@ class GeminiLiveAgent(VoiceAgentBase):
                             types.FunctionResponse(id=fc.id, name=fc.name,
                                                    response={"result": "recorded"})
                         ])
-                        self._pending_tool_calls.discard(fc.id or "")
-                        self._pending_tool_names.pop(fc.id or "", None)
+                        await self._finish_tool_ack(fc.id or "")
+                        if interaction_status is not None:
+                            logger.info("[realtime] complete_response is advisory; awaiting server IDLE")
+                            continue
                         if not (_spoken_response.strip() or _continuation_text.strip()):
                             # NON_BLOCKING tools can arrive before their answer.
                             # A receipt without speech must not mute the answer
@@ -1491,6 +1579,14 @@ class GeminiLiveAgent(VoiceAgentBase):
                             ),
                         )
                     )
+                if interaction_status is not None and _routing_received:
+                    await _finalize_turn_complete(False)
+                    return
+                if interaction_status == "IN_PROGRESS":
+                    interaction_deadline = time.monotonic() + max(
+                        app_config.REALTIME_TURN_MAX_SILENCE_S,
+                        app_config.REALTIME_RECV_QUEUE_TIMEOUT_S)
+                    self.allow_progress_until(interaction_deadline)
                 if _deferred_finalize is not None and any(
                     fc.name in {"delegate_to_main", "reject_turn", "end_conversation"}
                     for fc in message.tool_call.function_calls
@@ -1500,6 +1596,14 @@ class GeminiLiveAgent(VoiceAgentBase):
                     _log_timing("deferred_wait_expired")
                     await _deferred_finalize()
                     return
+
+            if interaction_status == "IDLE":
+                # Process any co-delivered routing tool before closing. IDLE
+                # ends server processing, not semantic success of the answer.
+                _progress_until = 0.0
+                _start_outcome_check()
+                await _finalize_turn_complete(False)
+                return
 
             if message.session_resumption_update:
                 update = message.session_resumption_update

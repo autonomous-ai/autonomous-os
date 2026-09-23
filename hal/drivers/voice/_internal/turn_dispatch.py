@@ -118,9 +118,34 @@ def _note_dispatch_outcome(interaction_id: str, result) -> None:
       neither      → the POST never landed. A valid command went unserved and
                      stays in the denominator as a failure.
     """
-    if result.run_id or getattr(result, "handled_locally", False):
+    if getattr(result, "handled_locally", False):
+        _finish_local_intent_cue()
+        return
+    if result.run_id:
         return
     voice_metrics.mark_failed(interaction_id, voice_metrics.FAIL_DISPATCH_FAILED)
+
+
+def _finish_local_intent_cue() -> None:
+    """Local completion owns no main-agent lifecycle or guaranteed TTS callback.
+
+    Release only the retained realtime cue. Restore through the normal LED path
+    so the command's saved color/off state, sleep and ongoing playback win.
+    """
+    try:
+        from hal import app_state as state
+        from hal.presets import EMO_THINKING
+        from hal.drivers.voice._internal.realtime_turn import _thinking_cue_clear
+        from hal.routes.led import restore_led
+
+        if not state._thinking_cue_active:
+            return
+        still_thinking = state._current_emotion == EMO_THINKING
+        _thinking_cue_clear()
+        if still_thinking and not state._tts_speaking and not state._music_playing:
+            restore_led()
+    except Exception as exc:
+        logger.warning("[turn] local intent cue cleanup failed: %s", exc)
 
 
 def dispatch_turn(
