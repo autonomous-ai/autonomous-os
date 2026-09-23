@@ -67,6 +67,7 @@ def _agent(messages, model="gemini-3.8-live-extended-thinking"):
     agent._last_audio_sent_at = None
     agent._activity_end_sent_at = None
     agent._pending_tool_calls = set()
+    agent._gated_audio_frames = 0
     agent._turn_gen = 0
     agent._live_user_turn_id = "user-1"
     agent._user_transcript = "play a song"
@@ -1093,3 +1094,90 @@ def test_interrupt_after_early_completion_still_cancels(monkeypatch, live):
     assert not any(isinstance(e, OutputEvent) and isinstance(e.output, TextOutput)
                    for e in events)
     assert not events[-1].execution_completed
+
+
+def _status(value):
+    message = _terminal()
+    message.server_content.interaction_status = value
+    return message
+
+
+@pytest.mark.parametrize("live", [False, True])
+@pytest.mark.parametrize("completed", [True, False])
+def test_server_status_keeps_filler_and_answer_in_one_interaction(monkeypatch, live, completed):
+    from hal.realtime import response_outcome
+    monkeypatch.setattr(gemini_live.app_config, "LIVE_MODE", live)
+    checked = []
+
+    async def check(request, answer, **kwargs):
+        checked.append(answer)
+        return completed
+
+    monkeypatch.setattr(response_outcome, "spoken_response_complete", check)
+    agent = _agent([
+        _speech("Let me look."), _terminal(generation=True), _status("IN_PROGRESS"),
+        _tool("complete_response"), _speech("Your shirt says DO IT ANYWAY."),
+        _terminal(generation=True), _status("IDLE"),
+    ])
+    events = _receive(agent)
+    texts = [e.output.text for e in events
+             if isinstance(e, OutputEvent) and isinstance(e.output, TextOutput)]
+    assert texts == ["Let me look.", "Your shirt says DO IT ANYWAY."]
+    assert checked[-1] == "Let me look.Your shirt says DO IT ANYWAY."
+    assert events[-1].fallback_to_main == (not completed)
+    assert events[-1].execution_completed == completed
+
+
+def test_routing_finishes_in_progress_without_waiting_for_idle():
+    agent = _agent([_status("IN_PROGRESS"), _tool()])
+    events = _receive(agent)
+    assert _calls(events)[0].name == "delegate_to_main"
+    assert not events[-1].fallback_to_main
+
+
+@pytest.mark.parametrize("live", [False, True])
+def test_server_status_does_not_override_user_interrupt(monkeypatch, live):
+    monkeypatch.setattr(gemini_live.app_config, "LIVE_MODE", live)
+    interrupted = _terminal()
+    interrupted.server_content.interrupted = True
+    agent = _agent([_status("IN_PROGRESS"), interrupted, _speech("Stale answer")])
+    agent._pending_image = object()
+    events = _receive(agent)
+    assert not events[-1].execution_completed
+    assert agent._pending_image is None
+    assert not any(isinstance(e, OutputEvent) and isinstance(e.output, TextOutput) for e in events)
+
+
+def test_in_progress_stall_has_bounded_fallback(monkeypatch):
+    monkeypatch.setattr(gemini_live.app_config, "REALTIME_TURN_MAX_SILENCE_S", 0.02)
+    agent = _agent([_status("IN_PROGRESS")])
+    events = _receive(agent)
+    assert events[-1].fallback_to_main
+    assert agent.requires_fresh_session
+
+
+@pytest.mark.parametrize("status", ["IN_PROGRESS", "IDLE"])
+def test_status_with_routing_tool_does_not_lose_handoff(status):
+    message = _tool()
+    message.server_content = _status(status).server_content
+    agent = _agent([message])
+    events = _receive(agent)
+    assert _calls(events)[0].name == "delegate_to_main"
+    assert not events[-1].fallback_to_main
+
+
+def test_first_status_preserves_already_buffered_answer_prefix(monkeypatch):
+    from hal.realtime import response_outcome
+    async def check(*args, **kwargs):
+        return True
+    monkeypatch.setattr(response_outcome, "spoken_response_complete", check)
+    agent = _agent([
+        _speech("Let me see."), _terminal(generation=True),
+        _speech("Your shirt "), _status("IN_PROGRESS"),
+        _speech("is yellow."), _status("IDLE"),
+    ])
+    events = _receive(agent)
+    texts = [e.output.text for e in events
+             if isinstance(e, OutputEvent) and isinstance(e.output, TextOutput)]
+    assert texts == ["Let me see.", "Your shirt ", "is yellow."]
+    assert not events[-1].fallback_to_main

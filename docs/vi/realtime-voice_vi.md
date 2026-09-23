@@ -2805,3 +2805,7 @@ realtime đang giữ mà không chờ TTS. Phản hồi mute hoặc không có l
 giữ cue vô hạn. Cleanup giữ emotion mới, khôi phục LED đã lưu (kể cả tắt/dim);
 TTS/nhạc đang phát giữ overlay tới teardown bình thường. Lượt do agent xử lý
 vẫn giữ cue thinking.
+
+### Lifecycle interaction của Gemini Extended Thinking
+
+Với `gemini-3.8-live-extended-thinking`, `serverContent.interactionStatus` là trạng thái lifecycle của provider: kết thúc một đoạn nói khi còn `IN_PROGRESS` không kết thúc interaction. HAL giữ trường này bằng adapter riêng từng session vì google-genai 2.12.1 loại bỏ trường phản hồi chưa biết. Lời nói tiếp theo vẫn stream trong cùng lượt, kể cả sau filler và tool `complete_response` chỉ mang tính gợi ý. Khi `IDLE`, HAL kiểm tra toàn bộ câu trả lời trước khi xác nhận thành công hoặc fallback; idle không đồng nghĩa task thành công. Delegate/reject tường minh và interrupt vẫn được ưu tiên. Interaction bị kẹt có giới hạn im lặng bằng giá trị lớn hơn giữa `REALTIME_TURN_MAX_SILENCE_S` và `REALTIME_RECV_QUEUE_TIMEOUT_S`, gia hạn khi có output/tool, không gia hạn chỉ vì status heartbeat lặp lại. Model/session không có tín hiệu này giữ nhánh grace có giới hạn hiện hữu. Khi session đã báo trạng thái async này, `look` mới tiếp tục interaction hiện tại thay vì replay audio người dùng và ngắt nó. Session không có tín hiệu vẫn giữ replay. Nếu còn ACK tool khác đang chờ, HAL giữ một frame hiện tại đến khi chúng hoàn tất; reset session sẽ xoá frame đó.

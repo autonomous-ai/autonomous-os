@@ -2889,3 +2889,7 @@ realtime thinking cue without waiting for TTS. Muted or silent replies therefore
 do not leave the cue active. Cleanup preserves newer emotions and restores the
 saved LED state (including off/dim); active speech/music retains its overlay
 until normal playback teardown. Agent-owned turns retain their thinking cue.
+
+### Gemini Extended Thinking interaction lifecycle
+
+For `gemini-3.8-live-extended-thinking`, `serverContent.interactionStatus` is the provider lifecycle signal: an utterance terminal with `IN_PROGRESS` does not finish the interaction. HAL preserves this field through a per-session compatibility adapter because google-genai 2.12.1 drops unknown response fields. Subsequent speech streams through the same turn, including after filler and advisory `complete_response` calls. At `IDLE`, HAL checks the full answer before deciding success or fallback; idle alone is not task success. Explicit delegation/rejection and interruption still take priority. A stalled interaction has a silence bound using the larger of `REALTIME_TURN_MAX_SILENCE_S` and `REALTIME_RECV_QUEUE_TIMEOUT_S`, renewed by output/tool activity, not repeated status heartbeats. Models or sessions without the signal retain the existing bounded grace path. When a session has reported this async status, a fresh `look` continues the current interaction instead of replaying user audio and interrupting it. Sessions without this signal retain replay. If sibling tool acknowledgements are pending, HAL holds one current frame until they finish; session reset clears it.

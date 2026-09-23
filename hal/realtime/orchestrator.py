@@ -1700,14 +1700,11 @@ class RealtimeOrchestrator:
         sent and the turn must be REPLAYED (see LookReplaySignal), False when
         the turn should just continue (frame reused from context, or no camera).
 
-        Why replay: the Live API queues a frame sent MID-TURN for the NEXT
-        turn — the tool-ack → continue-turn flow made the model answer every
-        look from the PREVIOUS look's image (device-proven 2026-07-02; neither
-        ack delays nor client_content injection fix it). So on a fresh frame we
-        send the image, do NOT ack the tool call (the replayed audio activity
-        cancels the pending turn), and let the turn driver re-commit the user's
-        audio — the new turn picks up the queued frame and the model answers
-        about the CURRENT scene.
+        Extended Thinking sessions with observed interaction status continue
+        their async tool interaction after the fresh image. They must not replay
+        user activity, which would interrupt background work. Legacy sessions
+        retain audio replay: those previously answered from the preceding image
+        when given only a mid-turn frame and an acknowledgement.
 
         Reuse path (already looked this turn / within VISION_MIN_INTERVAL_S of
         the last send): the recent frame is genuinely in context — in the
@@ -1836,9 +1833,8 @@ class RealtimeOrchestrator:
         # send_tool_response and clears the gate; trigger_response=False is the
         # fire-and-forget path, which deliberately tells Gemini nothing and
         # therefore leaves the session quarantined. The response it triggers is
-        # cancelled immediately after by end_turn() + skip_next_turn_done() in
-        # the caller — the payload tells the model to hold, and the replayed
-        # turn is what it actually answers.
+        # cancelled by replay only on the legacy path. Status-aware async
+        # sessions instead continue the tool interaction with the fresh frame.
         # Tell the model whether the aim actually found the user, not just that
         # a frame is coming. Without it the model cannot tell a well-framed shot
         # from "wherever the camera happened to be pointing after failing to
@@ -1902,14 +1898,18 @@ class RealtimeOrchestrator:
                 state.realtime_look_monitor_path = persist_for_monitor(saved_path)
             except Exception as e:
                 logger.debug("[realtime] look: monitor copy skipped: %s", e)
+        continue_interaction = getattr(self._agent, "supports_look_continuation", False) is True
         logger.info(
-            "[realtime] look: captured frame %s in %.0fms → %s — replaying "
-            "turn so the frame joins it",
+            "[realtime] look: captured frame %s in %.0fms → %s — %s",
             getattr(frame, "shape", "?"),
             (time.monotonic() - now) * 1000,
             saved_path or "(persist failed)",
+            "continuing asynchronous interaction" if continue_interaction else "replaying turn",
         )
-        return True
+        # Extended Thinking keeps the tool interaction alive after its filler.
+        # Replaying user activity would interrupt that work. Legacy sessions
+        # without authoritative interaction status retain their replay path.
+        return not continue_interaction
 
     @staticmethod
     def _capture_frame(settle_s: float = 0.3) -> Any:
