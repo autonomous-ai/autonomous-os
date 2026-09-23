@@ -7,12 +7,29 @@ import shutil
 import tempfile
 import unittest
 
+from hal.board.device import parse_device
+from hal.drivers.environment.group import create_environment_group
+
 
 REPO = Path(__file__).resolve().parents[3]
 SOURCE = REPO / "robots/lamp"
 spec = importlib.util.spec_from_file_location("overrides", REPO / "scripts/provision/apply-overrides.py")
 overrides = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(overrides)
+
+
+def alsa_block(text, name):
+    """Extract a named block, including any nested slave configuration."""
+    start = text.index(name + " {")
+    depth = 0
+    for index in range(text.index("{", start), len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:index + 1]
+    raise AssertionError(f"unclosed ALSA block: {name}")
 
 
 class DeviceOverrideTests(unittest.TestCase):
@@ -26,6 +43,8 @@ class DeviceOverrideTests(unittest.TestCase):
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(SOURCE / name, dest)
         shutil.copytree(SOURCE / "overrides", self.profile / "overrides")
+        for source in SOURCE.glob("*.json"):
+            shutil.copy2(source, self.profile / source.name)
 
     def select(self, value):
         path = self.root / overrides.PROFILE_PATH
@@ -48,20 +67,49 @@ class DeviceOverrideTests(unittest.TestCase):
             self.assertIsNone(overrides.apply_overrides(self.profile, self.root))
             self.assertEqual(before, self.snapshot())
 
-    def test_selected_audio_preserves_other_settings_and_identity(self):
-        identity = self.select("pro\n")
-        self.assertEqual(overrides.apply_overrides(self.profile, self.root), "pro")
+    def test_respeaker_lite_audio_preserves_other_settings_and_identity(self):
+        identity = self.select("pro-respeaker-lite\n")
+        self.assertEqual(overrides.apply_overrides(self.profile, self.root), "pro-respeaker-lite")
         env = (self.profile / "rootfs/opt/hal/.env").read_text()
         for value in ("HAL_AEC_ENABLED=true", "HAL_LIVE_MODE=false",
                       "HAL_SILERO_THRESHOLD=0.10",
-                      "HAL_VOLUME_STATE_PATH=/root/config/.volume-pro", "HAL_TTS_SPEED=1.1"):
+                      "HAL_VOLUME_STATE_PATH=/root/config/.volume-pro-respeaker-lite", "HAL_TTS_SPEED=1.1",
+                      "HAL_LIVE_UPLINK_DURING_PLAYBACK=always"):
             self.assertIn(value + "\n", env)
         self.assertIn("startup_volume: 35", (self.profile / "ROBOT.md").read_text())
         self.assertIn("max_volume: 35", (self.profile / "SAFETY.md").read_text())
         self.assertIn("max_speed: 120", (self.profile / "SAFETY.md").read_text())
-        self.assertEqual((self.profile / "rootfs/etc/asound.conf").read_bytes(), (SOURCE / "overrides/pro/rootfs/etc/asound.conf").read_bytes())
-        self.assertEqual(identity.read_text(), "pro\n")
+        alsa = (self.profile / "rootfs/etc/asound.conf").read_text()
+        self.assertEqual(alsa, (SOURCE / "overrides/pro-respeaker-lite/rootfs/etc/asound.conf").read_text())
+        self.assertIn('slave { pcm "respeaker_capture_shared" channels 2 }', alsa)
+        self.assertIn("ctl.device_micro1 { type hw card sndi2s4 }", alsa)
+        self.assertEqual(identity.read_text(), "pro-respeaker-lite\n")
         self.assertFalse((self.root / "opt/hal/.env").exists())
+
+    def test_pro_uses_standard_microphones_and_keeps_lite_speaker(self):
+        self.select("pro")
+        overrides.apply_overrides(self.profile, self.root)
+        env = (self.profile / "rootfs/opt/hal/.env").read_text()
+        for value in ("HAL_AEC_ENABLED=true", "HAL_LIVE_MODE=false",
+                      "HAL_SILERO_THRESHOLD=0.15", "HAL_LIVE_UPLINK_DURING_PLAYBACK=cancelled",
+                      "HAL_AUDIO_INPUT_ALSA=plug:device_micro2", "HAL_AUDIO_SENSING_DEVICE=plug:device_micro1",
+                      "HAL_AUDIO_OUTPUT_ALSA=plug:device_speaker", "HAL_VOLUME_STATE_PATH=/root/config/.volume-pro"):
+            self.assertIn(value + "\n", env)
+        alsa = (self.profile / "rootfs/etc/asound.conf").read_text()
+        self.assertIn("ctl.device_micro1 { type hw card device_cmedia }", alsa)
+        self.assertIn("ctl.device_micro2 { type hw card device_micro2 }", alsa)
+        self.assertNotIn("respeaker_capture_shared", alsa)
+        self.assertIn('pcm.device_speaker { type plug slave.pcm "respeaker_playback_vol" }', alsa)
+        self.assertIn("ctl.device_speaker { type hw card Lite }", alsa)
+        standard = (SOURCE / "rootfs/etc/asound.conf").read_text()
+        lite = (SOURCE / "overrides/pro-respeaker-lite/rootfs/etc/asound.conf").read_text()
+        for name in ("pcm.device_micro1", "ctl.device_micro1", "pcm.device_micro2", "ctl.device_micro2"):
+            self.assertEqual(alsa_block(alsa, name), alsa_block(standard, name))
+        for name in ("pcm.respeaker_playback_shared", "pcm.respeaker_playback_vol",
+                     "pcm.device_speaker", "ctl.device_speaker", "pcm.!default", "ctl.!default"):
+            self.assertEqual(alsa_block(alsa, name), alsa_block(lite, name))
+        self.assertIn("startup_volume: 35", (self.profile / "ROBOT.md").read_text())
+        self.assertIn("max_volume: 35", (self.profile / "SAFETY.md").read_text())
 
     def test_pro_xvf3800_keeps_the_array_tuning(self):
         # The reSpeaker XVF3800 assembly tested before the ReSpeaker Lite: live
@@ -128,6 +176,98 @@ class DeviceOverrideTests(unittest.TestCase):
         (self.profile / "overrides/pro/rootfs/opt/hal/.env").unlink()
         overrides.apply_overrides(self.profile, self.root)
         self.assertIn("HAL_VOLUME_STATE_PATH=/root/config/.volume-pro", (self.profile / "rootfs/opt/hal/.env").read_text())
+
+    def test_standard_environment_is_disabled(self):
+        self.select("standard")
+        overrides.apply_overrides(self.profile, self.root)
+        robot = (self.profile / "ROBOT.md").read_text()
+        self.assertNotRegex(robot, r"(?m)^  environment:")
+        self.assertNotIn("environment", parse_device("lamp", robot).declared_routes())
+        sensor = json.loads((self.profile / "sen63c.json").read_text())
+        self.assertFalse(sensor["boards"]["orangepi_sun60"]["enabled"])
+
+    def test_all_pro_profiles_enable_environment_and_sensor(self):
+        for name in ("pro", "pro-respeaker-lite", "pro-xvf3800"):
+            with self.subTest(profile=name):
+                for filename in ("ROBOT.md", "sen63c.json"):
+                    shutil.copy2(SOURCE / filename, self.profile / filename)
+                self.select(name)
+                overrides.apply_overrides(self.profile, self.root)
+                self.assertRegex((self.profile / "ROBOT.md").read_text(), r"(?m)^  environment:")
+                sensor = json.loads((self.profile / "sen63c.json").read_text())
+                self.assertTrue(sensor["boards"]["orangepi_sun60"]["enabled"])
+                self.assertEqual(sensor["boards"]["orangepi_sun60"]["bus"], 0)
+                parsed = parse_device("lamp", (self.profile / "ROBOT.md").read_text())
+                self.assertIn("environment", parsed.declared_routes())
+                group = create_environment_group(str(self.profile), "orangepi_sun60")
+                self.assertEqual([key for key, worker in group.components.items() if worker.enabled], ["sen63c"])
+                first = self.snapshot()
+                overrides.apply_overrides(self.profile, self.root)
+                self.assertEqual(first, self.snapshot())
+
+    def test_fresh_standard_package_removes_previous_pro_environment(self):
+        self.select("pro")
+        overrides.apply_overrides(self.profile, self.root)
+        self.assertIn("environment", parse_device("lamp", (self.profile / "ROBOT.md").read_text()).capabilities)
+        # Profile changes render a fresh package; they do not undo a prior render.
+        for filename in ("ROBOT.md", "SAFETY.md", "rootfs/opt/hal/.env", "rootfs/etc/asound.conf"):
+            shutil.copy2(SOURCE / filename, self.profile / filename)
+        for source in SOURCE.glob("*.json"):
+            shutil.copy2(source, self.profile / source.name)
+        self.select("standard")
+        before = self.snapshot()
+        overrides.apply_overrides(self.profile, self.root)
+        self.assertEqual(before, self.snapshot())
+        self.assertNotIn("environment", parse_device("lamp", (self.profile / "ROBOT.md").read_text()).capabilities)
+        group = create_environment_group(str(self.profile), "orangepi_sun60")
+        self.assertFalse(any(worker.enabled for worker in group.components.values()))
+
+    def test_capabilities_preserve_unrelated_content_and_can_disable(self):
+        text = "---\ncapabilities:\n  audio: { required: true }\n  # environment: { routes: [environment], required: false } # keep\nother:\n  environment: elsewhere\n---\nBody\n  environment: body\n"
+        enabled = overrides.capability_fields(text, {"environment": True})
+        self.assertEqual(enabled, text.replace("  # environment:", "  environment:", 1))
+        self.assertEqual(overrides.capability_fields(enabled, {"environment": False}), text)
+        self.assertEqual(overrides.capability_fields(text, {"environment": False}), text)
+
+    def test_invalid_capabilities_fail_without_partial_writes(self):
+        self.select("pro")
+        settings = self.profile / "overrides/pro/profile.json"
+        robot = self.profile / "ROBOT.md"
+        original = robot.read_text()
+        cases = [[], {"../environment": True}, {"environment": 1},
+                 {"environment": "true"}, {"missing": True}]
+        for capabilities in cases:
+            with self.subTest(capabilities=capabilities):
+                settings.write_text(json.dumps({"startup_volume": 42, "capabilities": capabilities}))
+                before = self.snapshot()
+                with self.assertRaises(ValueError):
+                    overrides.apply_overrides(self.profile, self.root)
+                self.assertEqual(before, self.snapshot())
+        settings.write_text(json.dumps({"startup_volume": 42, "capabilities": {"environment": True}}))
+        robot.write_text(original.replace("capabilities:\n", "capabilities:\n  environment: { required: false }\n", 1))
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, "expected one declaration"):
+            overrides.apply_overrides(self.profile, self.root)
+        self.assertEqual(before, self.snapshot())
+
+    def test_invalid_device_overrides_fail_without_partial_writes(self):
+        self.select("pro")
+        device = self.profile / "overrides/pro/device"
+        for filename, content in (("sen63c.json", "not json"),
+                                  ("sen63c.json", "[]"),
+                                  ("sen63c.json", "null"),
+                                  ("unknown.json", "{}"),
+                                  ("ROBOT.md", "{}"),
+                                  ("nested/sen63c.json", "{}")):
+            with self.subTest(filename=filename, content=content):
+                shutil.rmtree(device, ignore_errors=True)
+                source = device / filename
+                source.parent.mkdir(parents=True)
+                source.write_text(content)
+                before = self.snapshot()
+                with self.assertRaises(ValueError):
+                    overrides.apply_overrides(self.profile, self.root)
+                self.assertEqual(before, self.snapshot())
 
 
 if __name__ == "__main__":
