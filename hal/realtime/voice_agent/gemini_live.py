@@ -1452,6 +1452,15 @@ class GeminiLiveAgent(VoiceAgentBase):
                         ])
                         self._pending_tool_calls.discard(fc.id or "")
                         self._pending_tool_names.pop(fc.id or "", None)
+                        if not (_spoken_response.strip() or _continuation_text.strip()):
+                            # NON_BLOCKING tools can arrive before their answer.
+                            # A receipt without speech must not mute the answer
+                            # still in flight or count as completed execution.
+                            logger.info(
+                                "[realtime] Early complete_response acknowledged — "
+                                "awaiting answer text before confirming completion"
+                            )
+                            continue
                         _outcome_received = True
                         _direct_answer_confirmed = True
                         # The plain ACK can prompt another spoken answer. Once
