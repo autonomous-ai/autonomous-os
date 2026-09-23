@@ -179,3 +179,31 @@ Harness capture uses its own two-note sound: rising tones when recording is read
 Successful focus switching uses a short fixed localized confirmation (English: “Agent switched.”), without speaking the agent name.
 
 While Harness mode stays ON, the MPR121 mode watcher maintains a dim lime breathing indicator from `button_led.harness_on` in the device presets. OFF uses one brief dim blink from `harness_off`. The indicator yields to sleep, privacy and active voice/music feedback, returns on normal LED restore, and never changes saved user light settings. Devices without RGB skip LED feedback.
+
+### Local intent versus digital-task context
+
+Voice, Web Chat and MQTT share an intent deferral gate before local rules/Jev.
+Registered outstanding Harness response routes remain task evidence after the
+short follow-up timer expires; the timer is only a hint, not authorization to
+send work. With either signal, requests without an explicit physical target
+are left to the main runtime. Pairing/connection alone never disables intents.
+Explicit Lamp/light/speaker/volume commands remain eligible for local/Jev
+classification; naming a digital artifact (render/image/video/etc.) defers.
+Ambiguous adjustment fragments such as “brighter” or “make it brighter” without
+a physical target defer even without task evidence. This conservative rule
+also protects preparation follow-ups when preparation state is unavailable.
+Deferral neither dispatches Harness nor prepares a new agent; main owns context
+resolution, clarification and the existing skill workflow. Harness-only voice
+still runs first, and requests with attachments retain their existing path.
+
+The inspected local `leo-super-dev/harness-2` branch for OS PR #482 keeps Store
+intents in the helper journal; `observeHarnessPreparation` displays RPC snapshots
+but does not expose a pending preparation to sensing. This change reads neither
+that private journal nor Store/helper files and adds no Store API or delivery
+state. Before context-specific preparation routing is added, coordinate with the
+Store owner at that observation boundary: define a read-only, conversation-scoped
+pending-preparation signal, its restart/expiry semantics and terminal transitions.
+Until then, main/`workflow-status` owns recovery of the saved intent. OS mock tests
+prove forwarding without hardware or direct Harness dispatch; they do not prove
+that a live model resumes the correct preparation. The Harness session must test
+that integration with its existing journal/idempotency tests.

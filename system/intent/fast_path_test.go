@@ -40,7 +40,11 @@ func TestContextualCommandsBypassLocalExecution(t *testing.T) {
 func TestCanonicalCommandsStayLocal(t *testing.T) {
 	for _, text := range []string{"light off", "Please turn off the light!", "set the light purple.", "track the cup", "follow me", "stop tracking", "reading mode", "deactivate focus mode", "what time is it?"} {
 		t.Run(text, func(t *testing.T) {
-			routeIntentHAL(t, func(w http.ResponseWriter, r *http.Request) {})
+			routeIntentHAL(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/emotion/status" {
+					_, _ = w.Write([]byte(`{"sleeping":false}`))
+				}
+			})
 			resolver := fakeJevSelectionResolver(func([]jev.Candidate) jev.Selection {
 				t.Fatal("canonical command contacted resolver")
 				return jev.Selection{}

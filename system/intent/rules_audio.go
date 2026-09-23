@@ -14,7 +14,9 @@ import (
 var volumeAdjustmentMu sync.Mutex
 
 func adjustVolume(increase bool) *Result {
-	volumeAdjustmentMu.Lock()
+	if !volumeAdjustmentMu.TryLock() {
+		return &Result{ExecutionFailed: true, TTSText: "I couldn't change that setting because another adjustment is in progress. Please try again."}
+	}
 	defer volumeAdjustmentMu.Unlock()
 	result := &Result{Actions: []string{"GET /audio/volume"}}
 	current, ceiling, err := hal.GetVolume()

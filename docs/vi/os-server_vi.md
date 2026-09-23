@@ -1383,3 +1383,27 @@ instruction phủ định, có điều kiện, rỗng hoặc sai cấu trúc kh�
 `[transcript]` để chạy thay. Alias trọn câu “turn off/on the lights” và
 “lights off/on” ánh xạ tới lệnh đèn hiện có. Prefix lạ và điều kiện của
 instruction được giữ nguyên để chuyển semantic/agent.
+
+#### Giới hạn full flow intent
+
+Local và Jev dùng chung parser voice bảo thủ: instruction ở đầu có thẩm quyền
+hơn transcript, kể cả instruction rỗng; marker sai/nhúng giữa câu không được
+xóa prefix hay phủ định. Nhận dạng decoration speaker/audio và suffix handoff
+realtime không-STT đúng mẫu producer; nội dung lạ vẫn có ý nghĩa. Xem
+[Routing Harness](harness_vi.md#intent-local-và-ngữ-cảnh-công-việc-số) về câu phụ
+thuộc context được bỏ qua cả hai bộ phân loại.
+
+Command thất bại không phát câu thành công hay thông báo đổi trạng thái LED/
+emotion. Lệnh màu tĩnh kiểm tra HAL sleep trước, trả lời bị chặn thay vì tự đánh
+thức. RGB thiếu/null/sai bị từ chối. Dim/volume đồng thời trả busy thay vì chờ vô
+hạn. Đây không phải transaction với effect HAL chạy đồng thời; kiểm chứng đọc lại
+là best-effort, các lệnh khác vẫn dựa vào trạng thái thực thi HAL báo.
+
+Voice thông thường chờ 30 giây (budget Jev 3 giây cộng các call HAL tuần tự);
+request ảnh vẫn 90 giây, Harness-only vẫn 5 giây. Mất kết nối không rõ đã thực thi
+hay chưa không tự retry voice người dùng: interaction ID chỉ là telemetry, không
+phải khóa idempotency. Vẫn retry phản hồi 503 rõ ràng. Không thêm deadline toàn cục
+hay contract dedup bền vững. Jev log lý do skip `busy`, `cooldown`, `invalid_input`,
+`no_candidates`, `missing_config`, `disabled`, `unavailable`, `cancelled`, không
+kèm câu người dùng hoặc key. Bản này chỉ test local/mock, không gọi Jev thật,
+không deploy robot hay chạy task Harness có phí; mic/STT và Store cần acceptance riêng.

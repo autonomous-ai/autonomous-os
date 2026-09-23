@@ -43,18 +43,35 @@ func NewResolver() *Resolver { return &Resolver{client: &jevClient{}} }
 // Resolve returns a code-owned selection or an empty Intent to defer to the
 // main agent. The caller owns capability checks and all hardware execution.
 func (r *Resolver) Resolve(ctx context.Context, text string, candidates []Candidate, options Options) Selection {
-	if ctx.Err() != nil {
+	skip := func(reason string) Selection {
+		// Routing diagnostics must not expose the utterance or provider settings.
+		slog.Info("intent Jev decision", "component", "intent", "outcome", "skipped", "reason", reason)
 		return Selection{}
 	}
-	if r == nil || !options.Enabled || strings.TrimSpace(options.Endpoint) == "" || strings.TrimSpace(options.APIKey) == "" {
-		return Selection{}
+	if ctx.Err() != nil {
+		return skip("cancelled")
+	}
+	if r == nil {
+		return skip("unavailable")
+	}
+	if !options.Enabled {
+		return skip("disabled")
+	}
+	if strings.TrimSpace(options.Endpoint) == "" || strings.TrimSpace(options.APIKey) == "" {
+		return skip("missing_config")
 	}
 	text = jevText(text)
 	if text == "" || len(text) > jevMaxInputBytes {
-		return Selection{}
+		return skip("invalid_input")
 	}
-	if len(candidates) == 0 || time.Now().UnixNano() < r.retryAfter.Load() || !r.busy.CompareAndSwap(false, true) {
-		return Selection{}
+	if len(candidates) == 0 {
+		return skip("no_candidates")
+	}
+	if time.Now().UnixNano() < r.retryAfter.Load() {
+		return skip("cooldown")
+	}
+	if !r.busy.CompareAndSwap(false, true) {
+		return skip("busy")
 	}
 	defer r.busy.Store(false)
 	budget := options.Timeout

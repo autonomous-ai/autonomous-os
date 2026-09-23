@@ -156,10 +156,14 @@ class SensingSender:
         # images 8-20s but TEXT-DENSE images 23-38s per attempt) before the
         # response comes back — don't let the plain-text timeout abort them
         # into a spurious "failed to send" warning.
-        timeout_s = 90 if image_b64 else 5
+        harness_only = bool(harness_voice and harness_voice["enabled"])
+        user_voice = event_type in ("voice", "voice_command", "voice_followup")
+        # Local/Jev handling can take 3s for classification and multiple 5s HAL
+        # calls. Give it time to return a receipt; keep direct Harness unchanged.
+        timeout_s = 90 if image_b64 else (30 if user_voice and not harness_only else 5)
         # A transport error can occur after Harness accepted the turn. Never
         # retry that mutation without a known receipt / idempotency outcome.
-        max_retries = 1 if harness_voice and harness_voice["enabled"] else 3
+        max_retries = 1 if harness_only else 3
         for attempt in range(1, max_retries + 1):
             try:
                 resp = requests.post(OS_SENSING_URL, json=payload, timeout=timeout_s)
@@ -180,6 +184,12 @@ class SensingSender:
                     return _result_of(resp)
                 return SendResult()
             except requests.ConnectionError as e:
+                # A disconnect does not prove the POST was rejected. Relative
+                # dim/volume commands must not be replayed after a lost receipt.
+                # interaction_id is telemetry, not an idempotency guarantee.
+                if user_voice:
+                    logger.warning("Voice event delivery uncertain; not retrying: %s", e)
+                    return SendResult()
                 if attempt < max_retries:
                     logger.warning(
                         "os-server not reachable (attempt %d/%d), retrying in 2s...",

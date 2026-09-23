@@ -113,7 +113,9 @@ var ledRules = []rule{
 var dimMu sync.Mutex
 
 func dimCurrentLight() *Result {
-	dimMu.Lock()
+	if !dimMu.TryLock() {
+		return &Result{ExecutionFailed: true, TTSText: "I couldn't change that setting because another adjustment is in progress. Please try again."}
+	}
 	defer dimMu.Unlock()
 	actions := []string{"GET /led/color"}
 	failure := func() *Result {

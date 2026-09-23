@@ -1,6 +1,10 @@
 package intent
 
-import "strings"
+import (
+	"strings"
+
+	"go.autonomous.ai/os/system/intent/jev"
+)
 
 // matchCanonical executes only a complete, unqualified command locally. Legacy
 // substring matching remains available to Match, but contextual user requests
@@ -79,23 +83,7 @@ func canonicalCommand(text string) bool {
 	return false
 }
 
-// Only anchored, known transport wrappers may be removed for local execution.
-// The instruction is authoritative: never fall through to the transcript after
-// a contextual, negated, empty or malformed instruction.
+// Keep deterministic and semantic execution on the same transport parser.
 func canonicalVoiceText(text string) string {
-	text = strings.TrimSpace(text)
-	for _, prefix := range []string{"[user]", "[ambient]"} {
-		text = strings.TrimSpace(strings.TrimPrefix(text, prefix))
-	}
-	if strings.HasPrefix(text, instructionMarker) {
-		if strings.Count(text, instructionMarker) != 1 || strings.Count(text, transcriptMarker) > 1 {
-			return ""
-		}
-		text = strings.TrimSpace(strings.TrimPrefix(text, instructionMarker))
-		if i := strings.Index(text, transcriptMarker); i >= 0 {
-			text = strings.TrimSpace(text[:i])
-		}
-		return text
-	}
-	return text
+	return jev.NormalizeText(text)
 }

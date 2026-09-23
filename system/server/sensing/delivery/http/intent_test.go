@@ -71,6 +71,9 @@ func TestVoiceIntentWiresJevFlagKeyAndFallback(t *testing.T) {
 			}
 			body = string(encoded)
 		} else {
+			if req.URL.Path == "/emotion/status" {
+				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"sleeping":false}`))}, nil
+			}
 			halCalls++
 			if req.URL.Path == "/led/color" {
 				encoded, _ := json.Marshal(map[string]any{"color": color})

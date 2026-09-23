@@ -209,6 +209,7 @@ func ProvideServer(
 	sensingH.SetHarnessConnected(harnessConnected)
 	sensingmsg.SetHarnessConnected(harnessConnected)
 	sensingH.SetHarnessFollowup(s.HarnessVoiceFollowup)
+	sensingH.SetHarnessTaskPending(s.HarnessTaskPending)
 	sensingH.SetHarnessFollowupContext(s.HarnessFollowupContext)
 	sensingH.SetHarnessVoice(s.handleHarnessVoice)
 	return s
