@@ -73,6 +73,12 @@ func TestJevProviderToModelInput(t *testing.T) {
 	if err := os.WriteFile(cfg.JevConfigPath, credentials, 0600); err != nil {
 		t.Fatal(err)
 	}
+	// Even with valid credentials and installed skills, the default makes no request.
+	defaultResult := New(cfg, nil).prepareSkill(context.Background(), turnPayload{Content: "read my calendar", Source: "user"})
+	if defaultResult.preload != "" || calls.Load() != 0 {
+		t.Fatal("default must not call Jev")
+	}
+	cfg.JevEnabled = true
 	s := New(cfg, nil)
 
 	s.sendUserMessage(turnPayload{Content: "read my calendar", Source: "user"})
@@ -107,7 +113,7 @@ func TestJevProviderToModelInput(t *testing.T) {
 	if blocked.preload != "" || blocked.Content != "read my calendar" || calls.Load() != 1 {
 		t.Fatal("native policy failed to prevent selection")
 	}
-	cfg.JevDisabled = true
+	cfg.JevEnabled = false
 	disabled := New(cfg, nil).prepareSkill(context.Background(), turnPayload{Content: "read my calendar", Source: "user"})
 	if disabled.preload != "" || calls.Load() != 1 {
 		t.Fatal("disabled adapter contacted provider")

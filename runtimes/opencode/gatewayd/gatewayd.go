@@ -52,7 +52,7 @@ var resumeErrHints = []string{"session not found", "no session", "not found", "u
 // (read once at start); tests construct it directly with temp paths.
 type Config struct {
 	JevConfigPath string
-	JevDisabled   bool
+	JevEnabled    bool
 	Token         string        // OPENCODE_WS_TOKEN
 	Port          string        // OPENCODE_PORT (Main only; tests inject a Listener)
 	Workspace     string        // OPENCODE_WORKSPACE
@@ -77,7 +77,7 @@ func configFromEnv() Config {
 	}
 	return Config{
 		JevConfigPath: envOr("JEV_CONFIG_PATH", "/root/config/config.json"),
-		JevDisabled:   envOr("JEV_SKILL_PRELOAD", "1") == "0",
+		JevEnabled:    os.Getenv("JEV_SKILL_PRELOAD") == "1",
 		Token:         envOr("OPENCODE_WS_TOKEN", "autonomous_opencode_token"),
 		Port:          envOr("OPENCODE_PORT", "18793"),
 		Workspace:     envOr("OPENCODE_WORKSPACE", "/root/.opencode/workspace"),

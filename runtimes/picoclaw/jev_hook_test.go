@@ -59,3 +59,23 @@ func TestJevOptOutSurvivesObserverOnboarding(t *testing.T) {
 		t.Fatal(cfg)
 	}
 }
+
+func TestJevHookDefaultsOffAndPreservesExplicitOptIn(t *testing.T) {
+	for _, raw := range []string{`{}`, `{"hooks":{"enabled":true}}`, `{"hooks":{"processes":{"jev":{}}}}`, `{"hooks":{"processes":{"jev":{"enabled":"true"}}}}`, `{"hooks":{"enabled":true,"processes":{"jev":{"enabled":true}}}}`} {
+		var cfg map[string]any
+		if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+			t.Fatal(err)
+		}
+		want := raw == `{"hooks":{"enabled":true,"processes":{"jev":{"enabled":true}}}}`
+		applyJevHook(cfg, "hook.py")
+		hooks := cfg["hooks"].(map[string]any)
+		if hooks["processes"].(map[string]any)["jev"].(map[string]any)["enabled"] != want {
+			t.Fatal(cfg)
+		}
+		applyObserverHook(cfg, "observer.py", "localhost")
+		applyJevHook(cfg, "hook.py")
+		if hooks["processes"].(map[string]any)["jev"].(map[string]any)["enabled"] != want {
+			t.Fatal("onboarding changed opt-in", cfg)
+		}
+	}
+}

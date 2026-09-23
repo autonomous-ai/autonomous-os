@@ -51,7 +51,7 @@ var resumeErrHints = []string{"no rollout found", "no conversation", "not found"
 // (read once at start); tests construct it directly with temp paths.
 type Config struct {
 	JevConfigPath string
-	JevDisabled   bool
+	JevEnabled    bool
 	Token         string        // CODEX_WS_TOKEN
 	Port          string        // CODEX_PORT (Main only; tests inject a Listener)
 	Workspace     string        // CODEX_WORKSPACE
@@ -81,7 +81,7 @@ func configFromEnv() Config {
 	home := envOr("CODEX_HOME", "/root/.codex")
 	return Config{
 		JevConfigPath: envOr("JEV_CONFIG_PATH", "/root/config/config.json"),
-		JevDisabled:   envOr("JEV_SKILL_PRELOAD", "1") == "0",
+		JevEnabled:    os.Getenv("JEV_SKILL_PRELOAD") == "1",
 		Token:         envOr("CODEX_WS_TOKEN", "autonomous_codex_token"),
 		Port:          envOr("CODEX_PORT", "18792"),
 		Workspace:     envOr("CODEX_WORKSPACE", home+"/workspace"),

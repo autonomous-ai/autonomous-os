@@ -55,7 +55,7 @@ const (
 // (read once at start); tests construct it directly with temp paths.
 type Config struct {
 	JevConfigPath  string
-	JevDisabled    bool
+	JevEnabled     bool
 	Token          string        // CLAUDECODE_WS_TOKEN
 	Port           string        // CLAUDECODE_PORT (Main only; tests inject a Listener)
 	Workspace      string        // CLAUDECODE_WORKSPACE (claude cwd)
@@ -83,7 +83,7 @@ func configFromEnv() Config {
 	home := envOr("CLAUDECODE_HOME", "/root/.claudecode")
 	return Config{
 		JevConfigPath: envOr("JEV_CONFIG_PATH", "/root/config/config.json"),
-		JevDisabled:   envOr("JEV_SKILL_PRELOAD", "1") == "0",
+		JevEnabled:    os.Getenv("JEV_SKILL_PRELOAD") == "1",
 		// Token defaults to runtimes/claudecode/constants.go Token — the two
 		// sides of the socket MUST agree.
 		Token:          envOr("CLAUDECODE_WS_TOKEN", claudecode.Token),

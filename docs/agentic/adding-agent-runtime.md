@@ -337,8 +337,12 @@ The Go adapters only preload simple static skills from the runtime's installed
 root; dynamic templates, custom frontmatter controls, conflicting project skill
 roots and unsupported native policy settings defer to native discovery. They
 recheck eligibility and content after inference. System/slash/attachment turns
-keep their existing route. Set `JEV_SKILL_PRELOAD=0` in a managed bridge's service
-environment to disable it; `JEV_CONFIG_PATH` selects its OS config file.
+keep their existing route. All new non-Hermes integrations are **disabled by
+default** pending native validation; Hermes is unchanged. Set
+`JEV_SKILL_PRELOAD=1` explicitly in a managed bridge's service environment to opt
+in and restart the service; all other values keep it off. PicoClaw and OpenClaw
+require their documented per-plugin opt-ins. `JEV_CONFIG_PATH` selects the bridge's
+OS config file.
 
 Bind a result to the originating request, preserve source/session identity, and
 reuse it only for a retry of that same request. Never persist a selected skill

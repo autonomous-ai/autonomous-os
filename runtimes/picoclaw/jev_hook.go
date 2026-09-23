@@ -61,15 +61,12 @@ func syncJevHook(cfgPath, osConfigPath, dir string) (bool, error) {
 	return changed, nil
 }
 
+// Install a disabled registration unless the operator explicitly opted in.
+// The observer owns the global hook gate; Jev must never enable it itself.
 func applyJevHook(cfg map[string]any, path string) {
 	hooks := ensurePicoMap(cfg, "hooks")
-	if enabled, present := hooks["enabled"]; present && enabled == false {
-		return
-	}
-	hooks["enabled"] = true
 	processes := ensurePicoMap(hooks, "processes")
-	if current, ok := processes["jev"].(map[string]any); ok && current["enabled"] == false {
-		return
-	}
-	processes["jev"] = map[string]any{"enabled": true, "transport": "stdio", "command": []any{"python3", path}, "intercept": []any{"before_llm"}}
+	current, _ := processes["jev"].(map[string]any)
+	enabled := current["enabled"] == true
+	processes["jev"] = map[string]any{"enabled": enabled, "transport": "stdio", "command": []any{"python3", path}, "intercept": []any{"before_llm"}}
 }

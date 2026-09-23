@@ -172,3 +172,14 @@ func TestJevExecArgumentBudgetPreservesOriginal(t *testing.T) {
 		t.Fatal("last valid argument boundary changed or truncated skill")
 	}
 }
+
+func TestJevRequiresExplicitEnvironmentOptIn(t *testing.T) {
+	for _, value := range []string{"", "0", "false", "true", "invalid", "1"} {
+		t.Run("value_"+value, func(t *testing.T) {
+			t.Setenv("JEV_SKILL_PRELOAD", value)
+			if got := configFromEnv().JevEnabled; got != (value == "1") {
+				t.Fatalf("value %q enabled=%v", value, got)
+			}
+		})
+	}
+}

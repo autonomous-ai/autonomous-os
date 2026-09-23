@@ -14,7 +14,7 @@ import (
 // share the same bounded selector without an additional OS dispatch decision.
 func newPreloader(cfg Config) func(context.Context, string) string {
 	router := jev.New(jev.Options{Runtime: "opencode", ConfigPath: cfg.JevConfigPath,
-		SkillsDir: filepath.Join(cfg.Home, ".config", "opencode", "skills"), Disabled: cfg.JevDisabled,
+		SkillsDir: filepath.Join(cfg.Home, ".config", "opencode", "skills"), Disabled: !cfg.JevEnabled,
 		Eligible: func(_ string, _ map[string]any) bool { return nativePreloadAllowed(cfg) }})
 	return router.Context
 }

@@ -489,11 +489,14 @@ in `ResetAgent`.
 
 OS onboarding installs a native `hooks.processes.jev` stdio hook, with
 `intercept: ["before_llm"]`. Asset or registration changes participate in the
-existing onboarding gateway restart; an unchanged reconcile is a no-op. Set
-`hooks.processes.jev.enabled: false` in PicoClaw `config.json` to opt out.
+existing onboarding gateway restart; an unchanged reconcile is a no-op.
+**Jev is disabled by default** pending native validation. To opt in for testing,
+set `hooks.processes.jev.enabled: true` and `hooks.enabled: true` in PicoClaw
+`config.json`, then restart the gateway. Only an explicit boolean true is preserved
+as enabled; onboarding never enables Jev automatically.
 The existing observer registration manages the global `hooks.enabled` gate;
-its onboarding behavior is unchanged. Use the per-process Jev flag above to keep
-this plugin disabled across onboarding. The Jev reconciler itself does not
+its onboarding behavior is unchanged. Set `hooks.processes.jev.enabled: false`
+to keep this plugin disabled across onboarding. The Jev reconciler itself does not
 turn an explicit global false into true.
 The sidecar stores only the absolute OS config path; credentials are read at use.
 
