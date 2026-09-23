@@ -52,8 +52,9 @@ SDA/SCL hỗ trợ logic 3,3 V. Dùng điện trở kéo lên 3,3 V với host 3
 5 V cấp nguồn cảm biến, không cấp cho GPIO host. Địa chỉ I2C là `0x69`,
 tốc độ bus tối đa 100 kHz. Cần xác định board thực tế, sơ đồ chân header,
 pin multiplexing, bus khả dụng và khả năng cấp nguồn trước khi đấu dây.
-HAL không chọn chân header hay cấu hình tốc độ bus. Khi lắp, giữ thông
-thoáng cửa hút/xả khí và tránh nhiệt từ host.
+HAL không chọn chân header; SEN55 cần cấu hình tốc độ bus ở cấp board
+(phần dưới mô tả xử lý Sunxi riêng cho SEN63C). Khi lắp, giữ thông thoáng
+cửa hút/xả khí và tránh nhiệt từ host.
 
 Kiểm tra device ngày 2026-09-11 đã xác nhận mapping bus phía host, nhưng
 lệnh đọc tên SEN55 tại `0x69` không nhận ACK địa chỉ (driver Sunxi trả
@@ -162,23 +163,36 @@ này gây lỗi CRC khi đọc product type; chuyển bus 0 về 100 kHz đã kh
 phản hồi nhận dạng và số đo hợp lệ. Không bỏ kiểm tra CRC để nhận gói dữ liệu
 hỏng. Kết quả này xác nhận bus của device đó, không xác nhận dây của các máy khác.
 
-Với máy đã xác nhận dùng Sunxi bus 0 và có thuộc tính sysfs `freq` cho phép ghi,
-drop-in systemd riêng trên device
-`/etc/systemd/system/hal.service.d/20-sen63c-i2c.conf` có thể đặt tốc độ trước
-khi HAL mở bus:
+Trước khi mở sensor, mỗi lần khởi tạo driver SEN63C đều gọi helper clock I2C
+chung cho bus đã cấu hình. Với adapter có `name` bắt đầu bằng `SUNXI TWI`, HAL
+đọc `/sys/class/i2c-adapter/i2c-N/device/info` và trường `twi->freqency`
+(đúng cách viết của kernel). Nếu tốc độ lớn hơn `100000` Hz, HAL hạ xuống
+`100000` qua thuộc tính `device/freq` của controller, rồi đọc lại để xác nhận
+không vượt `100000`. Tốc độ đã đạt yêu cầu được giữ nguyên. HAL cần quyền đọc
+các thuộc tính này và ghi `freq` khi phải hạ clock. Dữ liệu controller thiếu/sai
+định dạng, ghi thất bại hoặc đọc lại vẫn vượt giới hạn đều chặn truy cập sensor
+và hiện trong `last_error` của component; worker khởi tạo lại driver theo cơ chế
+retry hiện có để thử lại.
 
-```ini
-[Service]
-ExecStartPre=/bin/sh -c 'printf "100000\\n" > /sys/class/i2c-adapter/i2c-0/device/freq'
-```
+Bước chuẩn bị này chạy mỗi lần khởi tạo driver, gồm khi HAL khởi động lúc boot
+hoặc phục hồi sau lỗi. Cài HAL mới qua setup hoặc OTA vì vậy mang theo bản sửa,
+không cần cài riêng drop-in systemd. Component tắt và simulation không khởi tạo
+driver phần cứng, không ghi clock. Loại adapter khác được giữ nguyên: cần cấu
+hình bus tối đa 100 kHz bằng cơ chế được board/kernel hỗ trợ. Trường `bus` trong
+JSON sensor chọn adapter, không đặt tốc độ. Dây nối, pin-mux, nguồn và bus đúng
+vẫn cần xác nhận theo từng board. Hạ clock controller tác động mọi ngoại vi dùng
+chung bus vật lý đó.
 
-Sau khi cài drop-in, chạy `systemctl daemon-reload` và restart HAL.
-Kiểm tra `/sys/class/i2c-adapter/i2c-0/device/info` và `/environment/status`:
-controller phải báo `100000`, sample mới và không có lỗi CRC.
-Drop-in đặt lại tốc độ mỗi lần HAL khởi động, kể cả khi boot; chỉ ghi sysfs
-một lần sẽ không giữ được sau reboot. Thay đổi này tác động mọi ngoại vi trên
-cùng bus. Board/kernel khác phải dùng cách cấu hình clock bus được hỗ trợ;
-trường `bus` trong JSON sensor chọn adapter, không đặt tốc độ.
+Sau khi cài HAL mới, có thể xóa workaround riêng trên device trước đây tại
+`/etc/systemd/system/hal.service.d/20-sen63c-i2c.conf`; reload systemd sau khi xóa.
+Restart HAL rồi kiểm tra `device/info` của controller đã chọn và
+`/environment/status`: clock không vượt `100000`, sample mới và không có lỗi.
+Trên OrangePi Sun60 đã thử, đường chạy tự động được kiểm chứng bằng cách gỡ
+drop-in, đặt lại 400 kHz khi HAL đã dừng rồi khởi động HAL mới: driver ghi log
+hạ xuống 100 kHz và đọc lại số đo hợp lệ. MPR121 trên cùng bus đọc trạng thái
+thành công 100/100 lần khi SEN63C đang chạy (trung bình 0.823 ms, tối đa 5.040 ms).
+Kiểm tra này xác nhận giao tiếp; chưa thử thao tác chạm vật lý và reboot toàn
+board trong lần kiểm chứng đó.
 
 Log vòng đời HAL dùng key `[sen55]`, `[scd41]` và `[sen63c]`: tắt/khởi động, mẫu hợp lệ
 đầu tiên, bắt đầu đo, lỗi thử lại và dừng hiển thị ở INFO (lỗi có thể dùng

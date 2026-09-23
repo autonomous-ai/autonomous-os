@@ -52,7 +52,8 @@ SDA/SCL support 3.3 V logic. Use pull-ups to 3.3 V with a 3.3 V host;
 5 V powers the sensor, not the host GPIO. The I2C address is `0x69`, with
 bus speed at most 100 kHz. Confirm the actual board, header pin mapping,
 pin multiplexing, available bus, and power budget before wiring. HAL does
-not select board header pins or configure bus speed. Keep the air inlet and
+not select board header pins; SEN55 requires board-level bus-speed configuration
+(the SEN63C-specific Sunxi handling is described below). Keep the air inlet and
 outlet clear and avoid heat from the host when mounting.
 
 Device inspection on 2026-09-11 confirmed the host bus mapping, but the
@@ -168,23 +169,37 @@ caused product-type CRC failures; switching bus 0 to 100 kHz restored valid
 identity and measurement responses. Do not bypass CRC checks to accept these
 corrupted packets. This verifies that device's bus, not other installations' wiring.
 
-For a confirmed Sunxi bus 0 installation exposing the writable `freq` sysfs
-attribute, the device-local systemd drop-in
-`/etc/systemd/system/hal.service.d/20-sen63c-i2c.conf` can set the bus speed before
-HAL opens it:
+Before opening the sensor, every SEN63C driver construction calls the shared
+I2C clock helper for its configured bus. For adapters whose `name` starts with
+`SUNXI TWI`, HAL reads `/sys/class/i2c-adapter/i2c-N/device/info` and its
+`twi->freqency` field (the kernel's spelling). A rate above `100000` Hz is
+lowered to `100000` through the controller's `device/freq` attribute, then read
+back to verify that it is at most `100000`. An already compliant rate is left
+unchanged. HAL needs permission to read these attributes and write `freq` when
+lowering the clock. Missing/malformed controller data, a failed write, or a
+readback above the limit prevents sensor access and appears in the component's
+`last_error`; the normal worker retry reconstructs the driver and tries again.
 
-```ini
-[Service]
-ExecStartPre=/bin/sh -c 'printf "100000\\n" > /sys/class/i2c-adapter/i2c-0/device/freq'
-```
+This preparation runs on each driver construction, including after HAL starts
+at boot or recovers from an error. Installing updated HAL through setup or OTA
+therefore includes the fix without a separately installed systemd drop-in.
+Disabled components and simulation do not construct the hardware driver and
+never write the clock. Other adapter types are left unchanged: configure their
+bus to at most 100 kHz through the board/kernel's supported configuration.
+The sensor JSON's `bus` field selects the adapter, not its speed. Wiring,
+pin-mux, power and the correct bus still require per-board confirmation.
+Lowering the controller clock affects every peripheral sharing that physical bus.
 
-After installing the drop-in, run `systemctl daemon-reload` and restart HAL.
-Check `/sys/class/i2c-adapter/i2c-0/device/info` and `/environment/status`:
-the controller should report `100000`, with fresh samples and no CRC errors.
-The drop-in reapplies the speed on HAL starts, including boot; a one-time sysfs
-write alone does not survive reboot. This affects every peripheral on the same
-bus. Other boards/kernels require their supported bus-clock configuration;
-the sensor JSON's `bus` field selects the adapter, not its speed.
+After installing updated HAL, the earlier device-local workaround
+`/etc/systemd/system/hal.service.d/20-sen63c-i2c.conf` can be removed; reload
+systemd after removing it. Restart HAL and check the selected controller's
+`device/info` and `/environment/status` for a clock at most `100000`, fresh
+samples and no errors. On the tested OrangePi Sun60, the automatic path was
+verified by removing that drop-in, restoring 400 kHz with HAL stopped, and
+starting updated HAL: the driver logged the change to 100 kHz and resumed
+valid measurements. MPR121 on the same bus completed 100/100 status reads while
+SEN63C was running (mean 0.823 ms, maximum 5.040 ms). This checks communication;
+physical touch gestures and a full board reboot were not exercised in that test.
 
 HAL lifecycle logs use component keys `[sen55]`, `[scd41]`, and `[sen63c]`: disabled/start,
 measurement start, retry failures and stop are visible at INFO (failures may
