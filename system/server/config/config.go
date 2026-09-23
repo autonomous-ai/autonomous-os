@@ -119,6 +119,13 @@ type Config struct {
 	BluebubblesServerURL   string `json:"bluebubbles_server_url" yaml:"bluebubblesServerURL"`
 	BluebubblesPassword    string `json:"bluebubbles_password" yaml:"bluebubblesPassword"`
 	BluebubblesUserAddress string `json:"bluebubbles_user_address" yaml:"bluebubblesUserAddress"`
+	// BluebubblesCallerContext is an optional admin-supplied plaintext prompt
+	// that tells the LLM how to treat incoming iMessage traffic (e.g. "treat
+	// callers as customers of my sales business, do not reveal the owner's
+	// personal info"). Non-secret and surfaced verbatim in
+	// ConfigPublicResponse. presync maps it to BLUEBUBBLES_CALLER_CONTEXT in
+	// ~/.hermes/.env; empty means the Hermes plugin uses its default behavior.
+	BluebubblesCallerContext string `json:"bluebubbles_caller_context" yaml:"bluebubblesCallerContext"`
 
 	// ChannelsAppliedRuntime is the agent runtime ChannelReconcile last applied the
 	// configured channels for. When it differs from AgentRuntime on boot, the

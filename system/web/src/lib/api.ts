@@ -298,6 +298,9 @@ export interface WifiProvisionBody {
   bluebubbles_server_url?: string;
   bluebubbles_password?: string;
   bluebubbles_user_address?: string;
+  // Optional non-secret caller-context prompt: prepended to every incoming
+  // iMessage as a system-context block so the LLM treats callers correctly.
+  bluebubbles_caller_context?: string;
 }
 export async function wifiProvision(body: WifiProvisionBody): Promise<boolean> {
   return apiRequest<boolean>(`${API_BASE}/api/device/wifi-provision`, {
@@ -357,6 +360,8 @@ export interface DeviceConfig {
   // has_bluebubbles_password below.
   bluebubbles_server_url: string;
   bluebubbles_user_address: string;
+  // Non-secret caller-context prompt returned verbatim.
+  bluebubbles_caller_context: string;
   llm_model: string;
   llm_base_url: string;
   llm_disable_thinking: boolean;

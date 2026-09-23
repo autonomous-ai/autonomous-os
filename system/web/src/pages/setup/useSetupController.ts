@@ -211,6 +211,9 @@ export function useSetupController(mode: SetupMode) {
   const [discordBotToken, setDiscordBotToken] = useState(urlParams.discordBotToken || "");
   const [discordGuildId, setDiscordGuildId] = useState(urlParams.discordGuildId || "");
   const [discordUserId, setDiscordUserId] = useState(urlParams.discordUserId || "");
+  // Optional admin-supplied iMessage caller-context prompt. Non-secret
+  // plaintext; hydrated by useConfigPrefill and rendered in ChannelSection.
+  const [bluebubblesCallerContext, setBluebubblesCallerContext] = useState("");
   // Snapshot of channel credentials populated when entering Setup. Filled
   // values render with the Edit pencil to prevent accidental overwrites.
   const [channelLoaded, setChannelLoaded] = useState<ChannelLoadedState>({
@@ -225,6 +228,9 @@ export function useSetupController(mode: SetupMode) {
     // config load. Included here to keep the object shape aligned with
     // ChannelLoadedState.
     bluebubblesServerUrl: false, bluebubblesPassword: false, bluebubblesUserAddress: false,
+    // Same story for caller-context: never carried in URL params, filled in
+    // by useConfigPrefill once /api/device/config returns.
+    bluebubblesCallerContext: false,
   });
   const [mqttEndpoint, setMqttEndpoint] = useState("");
   const [mqttPort, setMqttPort] = useState("");
@@ -462,6 +468,7 @@ export function useSetupController(mode: SetupMode) {
     setMqttEndpoint, setMqttPort, setMqttUsername,
     setFaChannel, setFdChannel,
     setSttLanguage,
+    setBluebubblesCallerContext,
     setHasAdminPassword,
     setHasNetworkPassword,
   });
@@ -1049,6 +1056,10 @@ export function useSetupController(mode: SetupMode) {
     teleToken, setTeleToken, teleUserId, setTeleUserId,
     slackBotToken, setSlackBotToken, slackAppToken, setSlackAppToken, slackUserId, setSlackUserId,
     discordBotToken, setDiscordBotToken, discordGuildId, setDiscordGuildId, discordUserId, setDiscordUserId,
+    // iMessage caller-context prompt (optional, non-secret plaintext).
+    // Returned alongside the other channel state so a future Setup-wizard
+    // ChannelSection can render the textarea; hydrated by useConfigPrefill.
+    bluebubblesCallerContext, setBluebubblesCallerContext,
     // language + TTS
     sttLanguage, setSttLanguage,
     ttsProvider, setTtsProvider, ttsProviders, ttsVoice, setTtsVoice, ttsVoices,

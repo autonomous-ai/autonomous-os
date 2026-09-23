@@ -62,6 +62,9 @@ func (s *Service) AddChannel(ctx context.Context, data domain.AddChannelRequest)
 			c.BluebubblesServerURL = data.BluebubblesServerURL
 			c.BluebubblesPassword = data.BluebubblesPassword
 			c.BluebubblesUserAddress = data.BluebubblesUserAddress
+			// Optional caller-context prompt — plain field, no validation
+			// (empty means "use plugin default"). See config.go for the flow.
+			c.BluebubblesCallerContext = data.BluebubblesCallerContext
 		default:
 			c.TelegramBotToken = data.TelegramBotToken
 			c.TelegramUserID = data.TelegramUserID
@@ -156,6 +159,8 @@ func (s *Service) RefreshChannelConfig(ctx context.Context, channel string) (str
 		req.BluebubblesServerURL = s.config.BluebubblesServerURL
 		req.BluebubblesPassword = s.config.BluebubblesPassword
 		req.BluebubblesUserAddress = s.config.BluebubblesUserAddress
+		// Caller-context prompt (optional, empty is fine).
+		req.BluebubblesCallerContext = s.config.BluebubblesCallerContext
 	default:
 		return "", ErrChannelNotSupported
 	}

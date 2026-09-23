@@ -272,6 +272,11 @@ type AddChannelRequest struct {
 	BluebubblesServerURL   string `json:"bluebubbles_server_url"`
 	BluebubblesPassword    string `json:"bluebubbles_password"`
 	BluebubblesUserAddress string `json:"bluebubbles_user_address"`
+	// Optional plaintext prepended to every incoming iMessage as a system-
+	// context block so the LLM treats callers as customers. Empty = plugin
+	// default. Plumbed straight through persist-then-apply like the other
+	// bluebubbles_* fields.
+	BluebubblesCallerContext string `json:"bluebubbles_caller_context"`
 }
 
 // RefreshChannelRequest carries the credentials needed to re-apply a channel's
@@ -302,9 +307,10 @@ type RefreshChannelRequest struct {
 	DiscordUserID   string
 
 	// iMessage / BlueBubbles
-	BluebubblesServerURL   string
-	BluebubblesPassword    string
-	BluebubblesUserAddress string
+	BluebubblesServerURL     string
+	BluebubblesPassword      string
+	BluebubblesUserAddress   string
+	BluebubblesCallerContext string
 }
 
 // EffectiveSlackMode resolves SlackMode, defaulting to "socket" so unset
@@ -575,6 +581,26 @@ const (
 	//                                        | status=failure error=<code>
 	KindChannelRefreshConfig = "channel.refresh_config"
 
+	// KindAddChannel is the data-envelope twin of the legacy root command
+	// `cmd:"add_channel"` (see CommandAddChannel). Same shape decoded from
+	// env.Data as MQTTAddChannelCommand; kept as a data kind so the backend
+	// can push it through the privacy-typed envelope path (env.Type ==
+	// MQTTDataTypePrivacy) — credentials never travel inline over MQTT,
+	// they are fetched over TLS from the backend before dispatchData sees
+	// them. The legacy inline root command still works; both paths share
+	// processAddChannel on the device side.
+	//
+	// Flow (inline):
+	//   server → device : {"cmd":"data","kind":"add_channel","data":{channel,config}}
+	//   device → server : status=success|failure (MQTTAddChannelResponse-shaped ack)
+	//
+	// Flow (privacy):
+	//   server → device : {"cmd":"data","kind":"add_channel","type":"privacy",
+	//                       "privacy":{url,token,...}}
+	//   device fetches  : GET <url> with token → returns {channel, config}
+	//   device dispatches: same as inline path with populated env.Data
+	KindAddChannel = "add_channel"
+
 	// KindChatSend starts an agent turn from the backend — the MQTT twin of the
 	// web monitor's POST /api/sensing/event, forwarded as type "mqtt_chat"
 	// (same gates as the monitor's "web_chat", distinct only so the Monitor's
@@ -697,6 +723,19 @@ type MQTTAddChannelCommand struct {
 	Config  map[string]interface{} `json:"config"`
 }
 
+// firstNonEmptyString reads the first key from cfg whose value is a non-empty
+// string. Lets iMessage accept both the short MQTT payload names ("server_url")
+// and the long device-config names ("bluebubbles_server_url") the FE also
+// sends upstream, without forcing the backend to pick one convention.
+func firstNonEmptyString(cfg map[string]interface{}, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := cfg[k].(string); ok && v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 func (r *MQTTAddChannelCommand) ToRequest() AddChannelRequest {
 	var req AddChannelRequest
 	req.Channel = r.Channel
@@ -716,6 +755,14 @@ func (r *MQTTAddChannelCommand) ToRequest() AddChannelRequest {
 		req.SlackWebhookPath, _ = cfg["webhook_path"].(string)
 	case ChannelWhatsapp:
 		req.WhatsappUserID, _ = cfg["user_id"].(string)
+	case ChannelIMessage:
+		// Accept both the short MQTT names ("server_url") and the long
+		// device-config names ("bluebubbles_server_url") so the backend
+		// can forward the FE payload as-is or shorten it — either works.
+		req.BluebubblesServerURL = firstNonEmptyString(cfg, "server_url", "bluebubbles_server_url")
+		req.BluebubblesPassword = firstNonEmptyString(cfg, "password", "bluebubbles_password")
+		req.BluebubblesUserAddress = firstNonEmptyString(cfg, "user_address", "bluebubbles_user_address")
+		req.BluebubblesCallerContext = firstNonEmptyString(cfg, "caller_context", "bluebubbles_caller_context")
 	default:
 		req.TelegramBotToken, _ = cfg["bot_token"].(string)
 		req.TelegramUserID, _ = cfg["chat_id"].(string)
@@ -871,6 +918,14 @@ type MQTTDataCommand struct {
 	Kind string          `json:"kind"`
 	Type string          `json:"type,omitempty"`
 	Data json.RawMessage `json:"data"`
+	// Channel is an optional disambiguation hint the backend can attach to
+	// generic kinds ("add_channel", "channel.refresh_config") when the queued
+	// data on the backend is channel-keyed. When present the device forwards
+	// it to the privacy fetch endpoint (`?kind=<k>&channel=<c>`) so the
+	// backend can return the specific channel's payload rather than whatever
+	// happens to be cached under just the kind key. Ignored when empty —
+	// legacy MQTT payloads without this field keep the old behaviour.
+	Channel string `json:"channel,omitempty"`
 }
 
 // MQTT data delivery types and statuses for the privacy envelope flow.
@@ -1466,9 +1521,11 @@ type ConfigPublicResponse struct {
 	WhatsappUserID     string   `json:"whatsapp_user_id"`
 	// iMessage via BlueBubbles — server URL + user handle are non-secret so
 	// they come back verbatim; the server password is surfaced only via
-	// HasBluebubblesPassword below.
-	BluebubblesServerURL   string `json:"bluebubbles_server_url"`
-	BluebubblesUserAddress string `json:"bluebubbles_user_address"`
+	// HasBluebubblesPassword below. Caller context is a plaintext prompt the
+	// operator wrote, safe to expose (non-secret).
+	BluebubblesServerURL     string `json:"bluebubbles_server_url"`
+	BluebubblesUserAddress   string `json:"bluebubbles_user_address"`
+	BluebubblesCallerContext string `json:"bluebubbles_caller_context"`
 	LLMModel           string   `json:"llm_model"`
 	LLMBaseURL         string   `json:"llm_base_url"`
 	LLMDisableThinking bool     `json:"llm_disable_thinking"`
@@ -1548,12 +1605,13 @@ type UpdateConfigRequest struct {
 	WhatsappUserID string `json:"whatsapp_user_id"`
 
 	// iMessage via BlueBubbles. UI writes the plain fields on every save (server
-	// URL + user address); the password ships only when the operator typed a
-	// new one — an empty POST value means "keep the on-disk password", matching
-	// the pattern used for the other channel secrets.
-	BluebubblesServerURL   string `json:"bluebubbles_server_url"`
-	BluebubblesPassword    string `json:"bluebubbles_password"`
-	BluebubblesUserAddress string `json:"bluebubbles_user_address"`
+	// URL + user address + caller context); the password ships only when the
+	// operator typed a new one — an empty POST value means "keep the on-disk
+	// password", matching the pattern used for the other channel secrets.
+	BluebubblesServerURL     string `json:"bluebubbles_server_url"`
+	BluebubblesPassword      string `json:"bluebubbles_password"`
+	BluebubblesUserAddress   string `json:"bluebubbles_user_address"`
+	BluebubblesCallerContext string `json:"bluebubbles_caller_context"`
 
 	LLMBaseURL         string `json:"llm_base_url"`
 	LLMAPIKey          string `json:"llm_api_key"`

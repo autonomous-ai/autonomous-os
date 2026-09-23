@@ -26,4 +26,8 @@ export interface ChannelLoadedState {
   bluebubblesServerUrl: boolean;
   bluebubblesPassword: boolean;
   bluebubblesUserAddress: boolean;
+  // Optional caller-context prompt (plaintext). Presence flag so the setup
+  // page can render the textarea in its "already configured" state, matching
+  // the other channel fields.
+  bluebubblesCallerContext: boolean;
 }

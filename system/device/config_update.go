@@ -41,6 +41,7 @@ func (s *Service) GetPublicConfig() domain.ConfigPublicResponse {
 		WhatsappUserID:     s.config.WhatsappUserID,
 		BluebubblesServerURL:   s.config.BluebubblesServerURL,
 		BluebubblesUserAddress: s.config.BluebubblesUserAddress,
+		BluebubblesCallerContext: s.config.BluebubblesCallerContext,
 		LLMModel:           s.config.LLMModel,
 		LLMBaseURL:         s.config.LLMBaseURL,
 		LLMDisableThinking: disableThinking,
@@ -209,6 +210,9 @@ type channelSnapshot struct {
 	bluebubblesServerURL   string
 	bluebubblesPassword    string
 	bluebubblesUserAddress string
+	// Optional caller-context prompt — a change here still counts as a
+	// channel change so presync re-writes BLUEBUBBLES_CALLER_CONTEXT.
+	bluebubblesCallerContext string
 }
 
 func channelFields(c *config.Config) channelSnapshot {
@@ -225,6 +229,7 @@ func channelFields(c *config.Config) channelSnapshot {
 		bluebubblesServerURL:   c.BluebubblesServerURL,
 		bluebubblesPassword:    c.BluebubblesPassword,
 		bluebubblesUserAddress: c.BluebubblesUserAddress,
+		bluebubblesCallerContext: c.BluebubblesCallerContext,
 	}
 }
 
@@ -280,6 +285,7 @@ func applyUpdate(c *config.Config, data domain.UpdateConfigRequest, adminHash st
 		BluebubblesServerURL:   c.BluebubblesServerURL,
 		BluebubblesPassword:    c.BluebubblesPassword,
 		BluebubblesUserAddress: c.BluebubblesUserAddress,
+		BluebubblesCallerContext: c.BluebubblesCallerContext,
 	}
 	return ch
 }
@@ -459,6 +465,9 @@ func applyChannelPatch(c *config.Config, data domain.UpdateConfigRequest) {
 		if data.BluebubblesPassword != "" {
 			c.BluebubblesPassword = data.BluebubblesPassword
 		}
+		// Caller-context prompt: plain field, applied on every save so
+		// operators can clear it by submitting an empty string.
+		c.BluebubblesCallerContext = data.BluebubblesCallerContext
 	default:
 		if data.TelegramBotToken != "" {
 			c.TelegramBotToken = data.TelegramBotToken
