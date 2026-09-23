@@ -18,9 +18,10 @@ HAL giữ snapshot gần nhất trong RAM. Worker môi trường của OS đọc
 Skill `environment` diễn giải số đo, tham khảo `wellbeing` để đưa gợi ý phù hợp.
 Web và MQTT vẫn chỉ đọc, không kích hoạt lượt agent.
 Chưa có kho lịch sử môi trường, dịch vụ hẹn kiểm tra lại, tự điều khiển actuator
-hay cảnh báo y tế. Lamp khai báo capability `environment` tùy chọn và bật SEN63C trên OrangePi
-`orangepi_sun60`, bus `0`; SEN55/SCD41 vẫn tắt. Board khác thiếu entry tương ứng
-vẫn tắt. Worker yêu cầu capability được khai báo.
+hay cảnh báo y tế. Chỉ hardware profile `pro`, `pro-respeaker-lite` và `pro-xvf3800` của Lamp khai
+báo capability `environment` tùy chọn và bật SEN63C trên OrangePi
+`orangepi_sun60`, bus `0`. Standard tắt cả hai; SEN55/SCD41 và board thiếu
+entry tương ứng vẫn tắt trong cả bốn profile. Worker yêu cầu capability được khai báo.
 
 ## Đấu dây và lắp đặt
 
@@ -66,10 +67,18 @@ không thay đổi cấu hình trên device.
 
 ## Bật trong HAL
 
-`ROBOT.md` của Lamp khai báo `environment` tùy chọn với driver `composite`,
-`routes: [environment]` và `required: false`. HAL mount API và nạp cấu hình
-component. Thiếu SEN63C thì component báo `error` và thử lại; sensor tùy chọn
-này không phải điều kiện bắt buộc để khởi động.
+`ROBOT.md` gốc của Lamp giữ `environment` ở dạng comment; `sen63c.json` gốc
+giữ `orangepi_sun60` tắt trên bus `0`. Vì vậy Standard không thu nhận số đo
+môi trường, không ghi clock bus cho SEN63C, không đủ capability để chọn skill
+`environment`; UI không polling sensor.
+
+Các file `profile.json` trong `overrides/pro/`, `overrides/pro-respeaker-lite/`
+và `overrides/pro-xvf3800/` đặt
+`capabilities: {"environment": true}`. Renderer chung bật khai báo capability
+sẵn có (driver `composite`, `routes: [environment]`, `required: false`) và
+copy `device/sen63c.json` của override ra gốc package. HAL sau đó mount API
+và nạp các component đã bật. Thiếu SEN63C trên một trong ba profile Pro thì
+component báo `error` và thử lại; sensor tùy chọn không chặn khởi động.
 
 HAL duyệt driver component đã đăng ký và đọc JSON riêng theo device/board:
 `sen55.json`, `scd41.json`, `sen63c.json`. Cờ `enabled` điều khiển từng
@@ -77,7 +86,7 @@ component; entry tắt hoặc thiếu không truy cập hardware. Không có dan
 chọn component riêng; file `environment.json` cũ bị bỏ qua. Mỗi component bật
 có worker độc lập.
 
-SEN63C là component mặc định trên OrangePi. Để dùng SEN55 + SCD41 thay thế,
+SEN63C là component mặc định trên OrangePi trong cả ba profile Pro. Để dùng SEN55 + SCD41 thay thế,
 trước hết đặt SEN63C thành `"enabled": false`, rồi bật các entry thay thế với
 dây nối đã xác nhận và restart HAL.
 Hai component bật không được cùng sở hữu một chỉ số: SEN55 + SEN63C hoặc
@@ -89,9 +98,15 @@ vẫn dùng chung.
 (`start`, `read`, `close`), timing mặc định và các key chỉ số hỗ trợ.
 Setup và `build-orangepi` giải nén toàn bộ archive profile device, nên file
 JSON sensor mới không cần nhánh cài đặt riêng theo loại sensor.
-Device hiện có cần cập nhật cả gói HAL lẫn gói profile device: chỉ cập nhật HAL
-không đổi `sen63c.json` đang tắt hay `ROBOT.md` đang comment của bản cũ. Cập nhật
-device thay profile đã giải nén và restart HAL cùng os-server.
+Khi nâng cấp từ bản cũ, cần cập nhật cả gói HAL (gồm sửa clock) lẫn gói
+profile device. Setup, build image và OTA áp override phần cứng đã chọn lên
+package gốc mới giải nén. Cập nhật device thay profile và restart HAL cùng os-server.
+
+`/etc/autonomous/hardware-profile` thiếu, rỗng hoặc `standard` chọn Standard,
+kể cả máy từng được bật SEN63C bằng mặc định chung trước đây. Không tự chuyển
+máy sang Pro. Với phần cứng Pro, chọn rõ `pro`, `pro-respeaker-lite` hoặc `pro-xvf3800` rồi cài lại
+gói device; chỉ cập nhật HAL không đổi capability hay JSON sensor. Xem
+[override phần cứng](../../../../docs/vi/bootstrap-ota.md#override-phần-cứng-tùy-chọn).
 
 Cấu hình SEN55 thuộc device tại `robots/<device>/sen55.json`, dùng map `boards`
 như `mpr121.json`. Board mục tiêu là OrangePi (`orangepi_sun60`); Lamp có entry tắt
@@ -149,9 +164,10 @@ Chưa kiểm chứng dây nối hay số đo SCD41 trên hardware thật.
 
 ## Component kết hợp SEN63C
 
-`robots/lamp/sen63c.json` dùng cùng map `boards`, bật SEN63C cho
-`orangepi_sun60` trên bus `0`. `sda_pin`, `scl_pin` vẫn là null; board khác
-thiếu entry tương ứng vẫn tắt. Xác nhận dây cho từng máy; ghi chú chân SEN55
+`robots/lamp/sen63c.json` dùng cùng map `boards`, tắt SEN63C cho
+`orangepi_sun60` trên bus `0`. Cả ba override Pro cung cấp JSON thay thế bật
+entry này. `sda_pin`, `scl_pin` vẫn là null; board khác thiếu entry tương ứng
+(kể cả Raspberry Pi) vẫn tắt ngay cả với Pro. Xác nhận dây cho từng máy; ghi chú chân SEN55
 ở trên không xác nhận dây SEN63C. Driver dùng I2C `0x6B`, kiểm tra product type
 SEN63C, CRC từng word và đọc PM1/PM2.5/PM4/PM10, nhiệt độ, độ ẩm, `co2_ppm`
 đo thật. VOC/NOx giữ null trong sample chung. CO₂ có thể chưa có trong 22–24
@@ -284,9 +300,9 @@ component ở `status.components`; vẫn hỗ trợ snapshot một sensor kiểu
 chỉ đọc, không có ngưỡng tốt/xấu hay lưu lịch sử. Event OS → agent do worker
 độc lập bên dưới tạo, không do trình duyệt làm mới.
 
-Capability đã khai báo của Lamp cho phép card polling mặc định; số đo SEN63C
-trên OrangePi hiện khi còn mới. Thiếu phần cứng thì hiện lỗi và `N/A` trong khi
-worker thử lại. Tắt mọi component hoặc dùng board thiếu entry tương ứng sẽ
+Chỉ profile Pro khai báo capability, nên Standard hiện `N/A` mà không polling.
+Trên Pro, số đo SEN63C OrangePi hiện khi còn mới; thiếu phần cứng thì hiện lỗi
+và `N/A` trong khi worker thử lại. Tắt mọi component hoặc dùng board thiếu entry tương ứng sẽ
 hiện trạng thái đã tắt và `N/A`. Hiển thị UI không bật thu nhận hay event agent.
 
 ## Đọc qua MQTT
@@ -300,8 +316,9 @@ kiểm tra `state`, `stale`, `sample`, `last_error` trong `data`.
 
 Thiếu capability trả `status: "failure"`,
 `error: "environment capability not declared"`. Lỗi kết nối HAL, HTTP khác 200
-hoặc status JSON không hợp lệ cũng trả failure. Lamp khai báo capability mặc
-định nên thiếu phần cứng được báo trong snapshot. Đây là request/reply, không stream hay event tự
+hoặc status JSON không hợp lệ cũng trả failure. Chỉ profile Pro khai báo
+capability nên thiếu phần cứng trên Pro được báo trong snapshot; Standard trả
+failure do thiếu capability. Đây là request/reply, không stream hay event tự
 động, không gọi agent. Xem [giao thức MQTT](../../../../docs/vi/mqtt_vi.md)
 để biết payload và quy tắc phản hồi.
 

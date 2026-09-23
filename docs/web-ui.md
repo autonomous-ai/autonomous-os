@@ -766,11 +766,12 @@ generic sensor label. A `null` sample or sample timestamp displays a waiting sta
 never an epoch date. The gas-index explanation appears only when VOC or NOx has a
 declared source or a measured value.
 
-Lamp declares optional `environment` (`required: false`) in `ROBOT.md`, so
-the card polls by default. SEN63C is enabled only on `orangepi_sun60`, bus `0`;
-SEN55/SCD41 and boards without matching entries remain disabled. Missing SEN63C
-shows an error and `N/A` while HAL retries, without blocking startup. Disable
-SEN63C before enabling SEN55 + SCD41 instead. See [Lamp environmental sensing](../robots/lamp/docs/environment-sensing.md)
+Only Lamp hardware profiles `pro`, `pro-respeaker-lite` and `pro-xvf3800` declare optional
+`environment` (`required: false`) and enable SEN63C on `orangepi_sun60`,
+bus `0`. Standard shows `N/A` without polling because its capability is absent.
+SEN55/SCD41 and boards without matching entries remain disabled, even on Pro.
+On Pro, missing SEN63C shows an error and `N/A` while HAL retries, without
+blocking startup. Disable SEN63C before enabling SEN55 + SCD41 instead. See [Lamp environmental sensing](../robots/lamp/docs/environment-sensing.md)
 for wiring, enabling, and the HAL data contract.
 
 ## 6. LED Color API

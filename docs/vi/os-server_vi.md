@@ -107,10 +107,14 @@ cho phép tính thời gian thu nhận liên tục sẵn có vào warm-up khi ch
 vẫn loại component không hợp lệ/stale.
 Skill `environment` diễn giải
 số đo và tham khảo `wellbeing` để gợi ý phù hợp. Thu nhận phần cứng tách biệt
-chính sách thay đổi ở OS; policy không bật phần cứng. Lamp khai báo `environment`
-tùy chọn (`required: false`) và chỉ bật SEN63C trên `orangepi_sun60`, bus `0`;
-SEN55/SCD41 và board thiếu entry tương ứng vẫn tắt. Thiếu SEN63C thì báo lỗi và
-thử lại, không chặn khởi động. Tắt SEN63C trước khi bật SEN55 + SCD41 thay thế. Xem [cảm biến môi trường Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md#chính-sách-thay-đổi-của-os-và-api-cho-agent)
+chính sách thay đổi ở OS; policy không bật phần cứng. Chỉ hardware profile
+`pro`, `pro-respeaker-lite` và `pro-xvf3800` của Lamp khai báo `environment` tùy chọn
+(`required: false`) và bật SEN63C trên `orangepi_sun60`, bus `0`. Standard giữ
+capability ở dạng comment và tắt SEN63C: không thu nhận, ghi clock SEN63C,
+phát event môi trường hay đủ capability để chọn skill environment. SEN55/SCD41
+và board thiếu entry tương ứng vẫn tắt, kể cả Raspberry Pi trên Pro.
+Thiếu SEN63C trên Pro thì báo lỗi và thử lại, không chặn khởi động. Tắt
+SEN63C trước khi bật SEN55 + SCD41 thay thế. Xem [cảm biến môi trường Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md#chính-sách-thay-đổi-của-os-và-api-cho-agent)
 để biết mặc định, validation, payload và use case.
 
 ### Device Setup
