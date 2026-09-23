@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -37,9 +38,34 @@ func TestVoiceIntentWiresJevFlagKeyAndFallback(t *testing.T) {
 			if _, ok := req.Context().Deadline(); !ok {
 				t.Error("missing decision deadline")
 			}
-			body = `{"answers":{
-			"intent":{"type":"choice","choice":"dim","probabilities":{"led_on":0.01,"led_off":0.01,"dim":0.97,"none":0.01}},
-			"fit_led_on":{"type":"noul","noul":0.01},"fit_led_off":{"type":"noul","noul":0.01},"fit_dim":{"type":"noul","noul":0.99}}}`
+			var payload struct {
+				State struct {
+					Candidates []jev.Candidate `json:"candidates"`
+				} `json:"state"`
+			}
+			if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			probabilities := map[string]float64{"none": 0.01}
+			answers := map[string]any{}
+			for _, candidate := range payload.State.Candidates {
+				if candidate.ID == "servo_track" || candidate.ID == "music_stop" {
+					t.Fatalf("unavailable capability offered: %s", candidate.ID)
+				}
+				probabilities[candidate.ID] = 0
+				answers["fit_"+candidate.ID] = map[string]any{"type": "noul", "noul": 0.01}
+			}
+			if len(payload.State.Candidates) != 12 {
+				t.Fatalf("expected light commands and current time, got %d candidates", len(payload.State.Candidates))
+			}
+			probabilities["dim"] = 0.99
+			answers["intent"] = map[string]any{"type": "choice", "choice": "dim", "probabilities": probabilities}
+			answers["fit_dim"] = map[string]any{"type": "noul", "noul": 0.99}
+			encoded, err := json.Marshal(map[string]any{"answers": answers})
+			if err != nil {
+				t.Fatal(err)
+			}
+			body = string(encoded)
 		} else {
 			halCalls++
 			if req.URL.Path != "/led/solid" {
@@ -51,16 +77,16 @@ func TestVoiceIntentWiresJevFlagKeyAndFallback(t *testing.T) {
 	enabled := false
 	cfg := &config.Config{LLMBaseURL: "https://proxy.example.test/api/v1/ai/v1", LLMAPIKey: "test-jev-key", JevIntent: &config.JevIntentConfig{Enabled: &enabled}}
 	h := &SensingHandler{config: cfg, intentResolver: jev.NewResolver()}
-	if h.matchVoiceIntent(context.Background(), "ánh sáng chói quá") != nil || providerCalls != 0 || halCalls != 0 {
+	if h.matchVoiceIntent(context.Background(), "This lamp is too bright.") != nil || providerCalls != 0 || halCalls != 0 {
 		t.Fatal("disabled path contacted provider or executed")
 	}
 	enabled = true
-	got := h.matchVoiceIntent(context.Background(), "ánh sáng chói quá")
+	got := h.matchVoiceIntent(context.Background(), "This lamp is too bright.")
 	if got == nil || got.Source != "jev" || got.Rule != "dim" || providerCalls != 1 || halCalls != 1 {
 		t.Fatalf("enabled path failed: %+v, provider=%d HAL=%d", got, providerCalls, halCalls)
 	}
 	cfg.LLMAPIKey = ""
-	if h.matchVoiceIntent(context.Background(), "ánh sáng chói quá") != nil || providerCalls != 1 || halCalls != 1 {
+	if h.matchVoiceIntent(context.Background(), "This lamp is too bright.") != nil || providerCalls != 1 || halCalls != 1 {
 		t.Fatal("missing key did not fall through")
 	}
 }

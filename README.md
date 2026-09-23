@@ -12,7 +12,7 @@ Autonomous OS is a fully customizable operating system for robots. Every compone
 
 - **Delegate to Harness agents.** [`harness-use`](skills/harness-use/) sends coding and research tasks to agents already running in [Harness](https://github.com/autonomous-ai/openharness) on your paired computer. Ask a named agent to work, answer its follow-up questions, and receive its result through voice or chat. Pair from OS Monitor and Harness Desktop on the same LAN. **Harness-only voice** sends manual tap-to-record turns to the agent focused in Harness. [Get Harness](https://github.com/autonomous-ai/openharness) · [Integration and setup](docs/harness.md).
 - **Use Mac apps through Buddy.** [`computer-use`](skills/computer-use/) lets the device agent inspect an app, click or type, and verify the resulting UI through a paired Autonomous Buddy. Buddy bundles Cua Driver for Accessibility observations and actions, with screenshot support for visual tasks. The device agent owns the task; Buddy executes on the Mac. Harness and Buddy have separate connections and pairing. [Computer-use guide](integrations/companions/autonomous-buddy/docs/computer-use.md).
-- **Load the right skill with Jev.** The OS-managed Hermes plugin uses Jev to select and preload an installed skill before the first model call, falling back to normal skill discovery when selection or loading fails. Two separate integrations cover an opt-in voice-intent fallback and experimental Buddy UI-action suggestions. A Jev selection does not execute an action or grant permission. [Hermes preloading](docs/agentic/hermes.md#13-optional-jev-skill-preloading) · [Intent fallback](docs/os-server.md#jev-intent-fallback) · [Buddy suggestions](docs/os-server.md#buddy-computer-use-feedback).
+- **Load the right skill with Jev.** The OS-managed Hermes plugin uses Jev to select and preload an installed skill before the first model call, falling back to normal skill discovery when selection or loading fails. Two separate integrations cover a voice-intent fallback enabled by default and experimental Buddy UI-action suggestions. A Jev selection does not execute an action or grant permission. [Hermes preloading](docs/agentic/hermes.md#13-optional-jev-skill-preloading) · [Intent fallback](docs/os-server.md#jev-intent-fallback) · [Buddy suggestions](docs/os-server.md#buddy-computer-use-feedback).
 
 ## Quick start
 
@@ -92,7 +92,7 @@ The engine that thinks. Six of them — Hermes, OpenClaw, PicoClaw, Codex, Claud
 
 ### [System services](system/)
 
-The Go daemon `os-server` on :5000, one package per box in the figure. `intent` answers fixed commands from a local table with no model, with an optional Jev fallback (off by default); `harness` delegates work to paired computer agents; `buddy` carries Mac observations and actions; `server` strips `[HW:…]` markers out of a reply and POSTs them to HAL before the words are spoken; `agent` switches engines; `bootstrap` is OTA, its own binary.
+The Go daemon `os-server` on :5000, one package per box in the figure. `intent` answers fixed commands from a local table with no model, with an optional Jev fallback (on by default); `harness` delegates work to paired computer agents; `buddy` carries Mac observations and actions; `server` strips `[HW:…]` markers out of a reply and POSTs them to HAL before the words are spoken; `agent` switches engines; `bootstrap` is OTA, its own binary.
 
 ### [Realtime voice](hal/realtime/)
 

@@ -909,9 +909,9 @@ Chitchat is **off while the realtime voice agent is enabled** — the model rece
 
 ### Jev intent fallback
 
-Jev is **disabled by default**. For `voice_command`, `voice_followup`, and `voice`
+Jev is **enabled by default**. For `voice_command`, `voice_followup`, and `voice`
 events received by os-server with `local_intent` enabled, local rules still run
-first. Only an unmatched request may call the proposed BFF Decisions endpoint
+first. Only an unmatched request may call the BFF Decisions endpoint
 with `typesafe/jev-1.13`; typed chat and built-in Live routing are outside this
 path. Existing local-rule matching and its limitations remain unchanged.
 
@@ -919,27 +919,27 @@ The optional configuration in `config/config.json` is:
 
 ```json
 {
-  "jev_intent": {"enabled": false, "timeout_ms": 350}
+  "jev_intent": {"enabled": true, "timeout_ms": 3000}
 }
 ```
 
-Omitting `jev_intent` or its `enabled` field keeps Jev off. Set `enabled: true`
-only after the BFF contract below is implemented; set it back to `false` to
-remove this additional decision latency. `local_intent: false` is also a master
+Omitting `jev_intent` or its `enabled` field enables Jev. An explicit
+`enabled: false` remains off, including in existing configurations, and removes
+this additional decision latency. The default decision budget is 3,000 ms, matching the Hermes Jev plugin. `local_intent: false` is also a master
 switch. Apply configuration using the existing manual startup/restart procedure;
 there is no settings UI or Jev environment flag/key.
 
 The client uses `llm_base_url` plus the fixed `/jev/decisions` path and authenticates
 with `Authorization: Bearer <llm_api_key>`, using the existing device credential
-configuration shared by LLM/STT/TTS. It never falls back to a direct OpenRouter
-call. Disabled or missing-credential requests make no Jev HTTP call and retain
+configuration shared by LLM/STT/TTS. Requests identify the client with `User-Agent: AutonomousOS-Jev/0.1`, as in
+the Hermes plugin. It never falls back to a direct OpenRouter call. Disabled or missing-credential requests make no Jev HTTP call and retain
 the existing main-runtime fallback immediately.
 
 Core inference code lives in `system/intent/jev/` (`client`, `resolver`, and
 `catalog`). `system/intent/semantic.go` connects it to local rules and execution,
 keeping the model decision separate from HAL side effects.
 
-The decision budget defaults to **350 ms**, capped at **1,000 ms** (nonpositive
+The decision budget defaults to **3,000 ms**, capped at **3,000 ms** (nonpositive
 values use the default). Each decision makes one request without retries. A
 concurrent decision is skipped immediately, without queueing. Errors, timeout,
 non-2xx responses, or malformed responses trigger a **30-second cooldown**; those requests and
@@ -947,35 +947,112 @@ subsequent misses during cooldown continue to the main runtime. Provider
 abstention also continues to the main runtime. This adds latency on unmatched
 requests when enabled; there is no live latency benchmark or accuracy guarantee.
 
-Only positively declared device capabilities expose candidates. Missing or
-unknown capabilities disable semantic hardware actions. The fixed allowlist is
-`led_on`, `led_off`, `dim`, `volume_up`, and `volume_down`, plus `none` to defer.
-Jev supplies no executable arguments: accepted selections reuse existing HAL
-actions and safety limits. `dim` sets warm RGB `[80,60,40]`; volume actions set
-the configured safe maximum or **30% of that maximum**, not relative steps.
-Unsupported parameters, compound requests, or ambiguity should select `none`.
+The catalog covers all **20 local intents**, plus `none` to defer:
+
+- Light: `led_on`, `led_off`, `dim`, and `led_color`.
+- Scenes: `scene_off`, `scene_reading`, `scene_focus`, `scene_relax`,
+  `scene_movie`, `scene_night`, and `scene_energize`.
+- Audio/media: `volume_up`, `volume_down`, `mute_speaker`, `unmute_speaker`,
+  `music_stop`, and `stop_talking`.
+- Camera/servo: `servo_track` and `servo_track_stop`.
+- Device clock: `what_time` (current local time only).
+
+Hardware candidates require positively declared device capabilities, checked
+both before inference and immediately before execution. Missing or unknown body
+capabilities disable those candidates; hardware-free `what_time` remains available.
+Mute/unmute and music stop require `media`; volume and speech interruption require
+`audio`. Camera tracking requires `motion`; lights/scenes require `light`.
+
+`led_color` requires one `color` from 10 canonical values: `yellow`, `red`,
+`green`, `blue`, `cyan`, `purple`, `orange`, `pink`, `white`, `warm`.
+`servo_track` requires one `target` from 23 labels: `face`, `hand`, `person`,
+`dog`, `cat`, `bird`, `cup`, `bottle`, `cell phone`, `book`, `remote`, `laptop`,
+`keyboard`, `mouse`, `teddy bear`, `sports ball`, `backpack`, `chair`, `clock`,
+`scissors`, `banana`, `apple`, `orange`. Synonyms resolve to canonical values
+(for example violet → purple, mug → cup). Missing, unsupported or ambiguous
+parameters defer; multiple targets/actions are not supported.
+
+Jev returns a typed selection containing an intent and bounded parameters.
+Go validates the offered intent and exact parameter names/values, then converts
+accepted enum values into code-owned text for the existing rule executor.
+Neither raw user speech nor model-generated HAL payloads reach that executor.
+Existing HAL actions and safety limits remain authoritative: `dim` sets warm
+RGB `[80,60,40]`; volume actions set the configured safe maximum or **30% of that
+maximum**, not relative steps. Color stops the LED effect before setting a solid
+color. Night activates its scene and may add the sleepy expression. Stopping
+speech, stopping music and muting the speaker remain distinct actions.
+Candidate descriptions separate accepted user intent from fixed execution effects.
+Generic light requests accept the on/dim presets without naming RGB values;
+current complaints about excessive brightness, glare or harsh light can select
+`dim` when no external source is named. Politeness and a reason for the request
+do not add tasks. Explicit percentages, preserving an existing color, other
+rooms/devices, negation, quoted speech, future/conditional requests and multiple
+tasks still defer. Volume remains a fixed preset, not an incremental adjustment.
+The classifier does not replace the existing local-rule fast path.
+
 Acceptance requires a complete valid probability response, selected probability
 **≥0.90**, margin over the runner-up **≥0.40**, and independent action fit
-**≥0.95**. These are experimental routing thresholds, not calibrated accuracy
+**≥0.95**. Each required parameter of the selected intent must independently
+pass probability **≥0.90** and margin **≥0.40** with a supported non-`none` value.
+These are experimental routing thresholds, not calibrated accuracy
 claims or a guarantee against misclassification.
 
 When enabled, the selected `[voice-instruction]` text, otherwise the cleaned
 transcript, is sent through BFF to OpenRouter. The fields are never concatenated; no chat
 history is sent. Inputs over **2,000 bytes** are skipped, not truncated.
-Decision logs include `decision_ms` and `outcome`; Flow Monitor `intent_match`
+Decision logs include `decision_ms` and `outcome`, plus the validated `intent`
+ID and validated `parameters` when present on `selected` (for example
+`intent=led_color parameters=map[color:blue]`). A separate `intent Jev evaluation`
+line records the validated `candidate`, `probability`, `margin`, `fit` (except
+`none`) and `reason`: `accepted`, `no_match`, `low_probability`, `low_margin`,
+`low_fit`, `param_no_match`, `low_parameter_probability`, or
+`low_parameter_margin`. Accepted parameterized decisions also log validated
+`parameters`. Malformed required parameter responses are errors, not selections.
+It logs no transcript, credentials or raw provider response. This records selection, not
+proof of hardware execution. Flow Monitor `intent_match`
 marks accepted selections with `source=jev`. Existing local-handled/API response
 semantics remain unchanged, including returning an attempted action's failure
 without forwarding it for a potentially duplicate execution. If neither local
 rules nor Jev handles the request, the existing main-runtime path remains in use.
 
 
+#### Live classifier evaluation
+
+**Historical five-intent evaluation (before the 20-intent expansion):**
+On 2026-09-23, the English fixture comparison on `lamp-4ace` accepted 2/10
+positive requests with the previous prompt/catalog and 19/20 across two runs
+with the revised prompt/catalog. All 34 rejection-case runs deferred. One
+"Reduce the brightness of this lamp now" run deferred at fit 0.94 versus the
+unchanged 0.95 cutoff; the live suite therefore passed once and failed once.
+These are small-sample observations, not a calibrated accuracy estimate or
+results for the expanded catalog. The expanded live suite contains 65 English
+cases covering all intent families, required parameters and rejection cases;
+the final expanded run on 2026-09-23 passed 62/65 cases (29/32 positive
+requests and all 33 rejection cases). Warm-white lighting, following the speaker
+("Follow me with your camera"), and tracking a cup next to a named room deferred
+at fit 0.94, 0.91 and 0.89 respectively, below the unchanged 0.95 gate. The live
+suite therefore still reports failure for those three misses; it is not a clean
+pass or a guarantee for other phrasing. After deployment, API smoke tests on
+`lamp-4ace` selected and executed `led_color` with `color=purple` (1,149 ms
+decision), `scene_relax` (829 ms), and `what_time` (738 ms), with matching
+`source=jev` flow records and successful local responses. Tracking was evaluated
+without moving hardware; these tests do not cover microphone/STT behavior.
+
+
+`TestJevLiveNaturalLanguage` is skipped in ordinary unit runs. Opt in on a test
+device with `JEV_EVAL_CONFIG=/root/config/config.json` and run the compiled Go
+test with `-test.run TestJevLiveNaturalLanguage -test.v`. It reads only the proxy
+URL/key, evaluates English requests and rejection cases through the real client,
+and never invokes HAL. Live model output can vary; a passing fixture set is not
+proof of microphone/STT performance or universal classification accuracy.
+
 <a id="jev-bff-contract"></a>
 
-#### Proposed BFF Decisions contract — not yet implemented
+#### BFF Decisions contract
 
-This is a handoff proposal for the BFF team, **not an available BFF API**. The
-local change implements the OS client and mock tests only; live integration
-cannot be tested until BFF deploys this endpoint.
+The OS client uses the contract below. On 2026-09-23, classifier-only calls
+from `lamp-4ace` reached its configured BFF endpoint and returned valid Decisions
+responses. This verifies that device/proxy combination, not every deployment.
 
 - **Route:** `POST {llm_base_url}/jev/decisions`, for example
   `POST /api/v1/ai/v1/jev/decisions` when the base ends in `/api/v1/ai/v1`.
@@ -989,10 +1066,11 @@ cannot be tested until BFF deploys this endpoint.
   HTTP 200, **without** the OS `{status,data,message}` envelope.
 - **Failure:** return a non-2xx status for authentication/provider errors. The
   client falls back and enters its 30-second error cooldown. The caller's
-  350-ms default budget (maximum 1,000 ms) applies; the client does not retry.
+  3,000-ms default budget (maximum 3,000 ms) applies; the client does not retry.
 
 Minimal one-candidate request illustrating the wire shape (production includes
-all eligible candidates, a `fit_<id>` question for each, and full instruction
+all eligible candidates, a `fit_<id>` question for each, enum choice questions
+`arg_<id>_<name>` for declared parameters, and full instruction
 boundaries rejecting unsupported or ambiguous requests):
 
 ```json
@@ -1035,10 +1113,17 @@ Corresponding response shape:
 ```
 
 `type`, the complete `probabilities` map (including `none`), and a numeric `noul`
-for every offered candidate are mandatory. The OS validates the response and
-applies the probability/margin/fit thresholds above; BFF must not reduce it to
-just a selected label. Examples contain no real credentials, and local tests
-use mock responses rather than paid/provider requests.
+for every offered candidate are mandatory. Parameter schemas are sent in
+`state.candidates[].parameters` as descriptions and finite `options` arrays.
+In the same HTTP request, `arg_led_color_color` and `arg_servo_track_target`
+are `choice` questions with those enum values plus `none`. For example, the
+color question can return `choice: "blue"` with a complete probability map
+covering all 10 colors and `none`. Every parameter answer for the selected intent
+must be present and valid; answers for unselected intents are ignored. There is
+no second extraction call. The OS applies the intent/fit and parameter thresholds
+above; BFF must preserve these answer objects rather than return only a label.
+Examples contain no real credentials, and local tests use mock responses rather
+than paid/provider requests.
 
 
 ### USER.md enrollment reconcile

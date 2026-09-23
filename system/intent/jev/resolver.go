@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	DefaultTimeout   = 350 * time.Millisecond
-	MaxTimeout       = time.Second
+	// Match the Hermes Jev plugin diagnostic budget before latency tuning.
+	DefaultTimeout   = 3 * time.Second
+	MaxTimeout       = 3 * time.Second
 	jevErrorCooldown = 30 * time.Second
 	jevMaxInputBytes = 2000
 )
@@ -25,7 +26,7 @@ type Options struct {
 }
 
 type jevDecider interface {
-	decide(context.Context, string, string, string, []Candidate) (string, error)
+	decide(context.Context, string, string, string, []Candidate) (Selection, error)
 }
 
 // Resolver classifies a request without performing any hardware action.
@@ -39,21 +40,21 @@ type Resolver struct {
 
 func NewResolver() *Resolver { return &Resolver{client: &jevClient{}} }
 
-// Resolve returns a code-owned candidate ID or an empty string to defer to the
+// Resolve returns a code-owned selection or an empty Intent to defer to the
 // main agent. The caller owns capability checks and all hardware execution.
-func (r *Resolver) Resolve(ctx context.Context, text string, candidates []Candidate, options Options) string {
+func (r *Resolver) Resolve(ctx context.Context, text string, candidates []Candidate, options Options) Selection {
 	if ctx.Err() != nil {
-		return ""
+		return Selection{}
 	}
 	if r == nil || !options.Enabled || strings.TrimSpace(options.Endpoint) == "" || strings.TrimSpace(options.APIKey) == "" {
-		return ""
+		return Selection{}
 	}
 	text = jevText(text)
 	if text == "" || len(text) > jevMaxInputBytes {
-		return ""
+		return Selection{}
 	}
 	if len(candidates) == 0 || time.Now().UnixNano() < r.retryAfter.Load() || !r.busy.CompareAndSwap(false, true) {
-		return ""
+		return Selection{}
 	}
 	defer r.busy.Store(false)
 	budget := options.Timeout
@@ -70,21 +71,27 @@ func (r *Resolver) Resolve(ctx context.Context, text string, candidates []Candid
 	outcome := "abstain"
 	defer func() {
 		// Never log credentials, provider bodies or the utterance here.
-		slog.Info("intent Jev decision", "component", "intent", "outcome", outcome,
-			"decision_ms", elapsed)
+		attrs := []any{"component", "intent", "outcome", outcome, "decision_ms", elapsed}
+		if outcome == "selected" {
+			attrs = append(attrs, "intent", id.Intent)
+			if len(id.Parameters) > 0 {
+				attrs = append(attrs, "parameters", id.Parameters)
+			}
+		}
+		slog.Info("intent Jev decision", attrs...)
 	}()
 	if err != nil || deadline.Err() != nil {
 		outcome = "error"
 		if ctx.Err() == nil {
 			r.retryAfter.Store(time.Now().Add(jevErrorCooldown).UnixNano())
 		}
-		return ""
+		return Selection{}
 	}
 	for _, candidate := range candidates {
-		if id == candidate.ID {
+		if validJevSelection(id, candidate) {
 			outcome = "selected"
 			return id
 		}
 	}
-	return ""
+	return Selection{}
 }

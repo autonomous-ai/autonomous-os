@@ -893,9 +893,9 @@ Chitchat **tắt khi realtime voice agent đang bật** — model nhận mọi l
 
 ### Fallback intent Jev
 
-Jev **mặc định tắt**. Với event `voice_command`, `voice_followup` và `voice`
+Jev **mặc định bật**. Với event `voice_command`, `voice_followup` và `voice`
 os-server nhận được khi `local_intent` bật, rule local vẫn chạy trước. Chỉ yêu
-cầu không khớp mới có thể gọi endpoint Decisions BFF đang đề xuất với
+cầu không khớp mới có thể gọi endpoint Decisions BFF với
 `typesafe/jev-1.13`; chat gõ và routing bên trong Live không đi qua bước này.
 Cách khớp rule local và những giới hạn hiện có không thay đổi.
 
@@ -903,19 +903,20 @@ Cấu hình tùy chọn trong `config/config.json`:
 
 ```json
 {
-  "jev_intent": {"enabled": false, "timeout_ms": 350}
+  "jev_intent": {"enabled": true, "timeout_ms": 3000}
 }
 ```
 
-Thiếu `jev_intent` hoặc trường `enabled` thì Jev tắt. Chỉ đặt `enabled: true` sau
-khi BFF đã triển khai contract bên dưới; đặt lại `false` để bỏ latency của bước
-quyết định bổ sung này. `local_intent: false` cũng là công tắc tắt toàn bộ.
+Thiếu `jev_intent` hoặc trường `enabled` thì Jev bật. Giá trị tường minh
+`enabled: false` vẫn giữ trạng thái tắt, kể cả trong cấu hình đã có, và bỏ latency
+của bước quyết định bổ sung này. Ngân sách mặc định là 3.000 ms, đồng bộ với plugin Jev của Hermes. `local_intent: false` cũng là công tắc tắt toàn bộ.
 Áp dụng cấu hình theo quy trình khởi động/restart thủ công hiện có; chưa có UI
 cấu hình và không có flag/key môi trường riêng cho Jev.
 
 Client dùng `llm_base_url` cộng đường dẫn cố định `/jev/decisions`, xác thực bằng
 `Authorization: Bearer <llm_api_key>`, dùng cấu hình credential thiết bị hiện có
-chung với LLM/STT/TTS. Không fallback sang gọi OpenRouter trực tiếp. Khi tắt
+chung với LLM/STT/TTS. Request dùng `User-Agent: AutonomousOS-Jev/0.1` giống plugin Hermes.
+Không fallback sang gọi OpenRouter trực tiếp. Khi tắt
 hoặc thiếu credential, không gọi HTTP Jev và chuyển tiếp ngay theo đường main
 runtime hiện có.
 
@@ -923,7 +924,7 @@ Code suy luận cốt lõi nằm trong `system/intent/jev/` (`client`, `resolver
 `catalog`). `system/intent/semantic.go` nối phần này với rule local và thực thi,
 tách quyết định của model khỏi tác động lên HAL.
 
-Ngân sách quyết định mặc định **350 ms**, giới hạn **1.000 ms** (giá trị không
+Ngân sách quyết định mặc định **3.000 ms**, giới hạn **3.000 ms** (giá trị không
 dương dùng mặc định). Mỗi quyết định gọi một request, không retry. Nếu đang có
 quyết định khác thì bỏ qua ngay, không xếp hàng. Lỗi, timeout, status non-2xx hoặc response sai
 định dạng kích hoạt **cooldown 30 giây**; yêu cầu đó và các yêu cầu không khớp
@@ -931,35 +932,110 @@ trong cooldown tiếp tục xuống main runtime. Jev từ chối chọn cũng c
 main runtime. Khi bật, bước này tăng latency cho yêu cầu không khớp; chưa có
 benchmark latency thực tế hoặc bảo đảm độ chính xác.
 
-Chỉ capability đã được thiết bị khai báo rõ mới có candidate. Capability thiếu
-hoặc chưa biết sẽ không cho Jev thực thi phần cứng. Allowlist cố định gồm
-`led_on`, `led_off`, `dim`, `volume_up`, `volume_down`, cùng `none` để chuyển tiếp.
-Jev không cấp tham số thực thi: lựa chọn được chấp nhận dùng lại HAL action và
-giới hạn safety hiện có. `dim` đặt RGB ấm `[80,60,40]`; các action âm lượng đặt
-mức tối đa an toàn đã cấu hình hoặc **30% mức tối đa đó**, không tăng/giảm tương
-đối. Tham số không hỗ trợ, yêu cầu nhiều hành động hoặc mơ hồ cần chọn `none`.
+Catalog bao phủ toàn bộ **20 intent local**, cùng `none` để chuyển tiếp:
+
+- Đèn: `led_on`, `led_off`, `dim`, `led_color`.
+- Scene: `scene_off`, `scene_reading`, `scene_focus`, `scene_relax`,
+  `scene_movie`, `scene_night`, `scene_energize`.
+- Âm thanh/media: `volume_up`, `volume_down`, `mute_speaker`, `unmute_speaker`,
+  `music_stop`, `stop_talking`.
+- Camera/servo: `servo_track`, `servo_track_stop`.
+- Đồng hồ thiết bị: `what_time` (chỉ giờ địa phương hiện tại).
+
+Candidate phần cứng yêu cầu capability được khai báo rõ, kiểm tra trước suy luận
+và kiểm tra lại ngay trước thực thi. Thiếu hoặc chưa biết capability của body thì
+không đưa ra các candidate đó; `what_time` không cần phần cứng vẫn khả dụng.
+Mute/unmute và dừng nhạc cần `media`; âm lượng và ngắt lời nói cần `audio`.
+Tracking camera cần `motion`; đèn/scene cần `light`.
+
+`led_color` cần một `color` trong 10 giá trị chuẩn: `yellow`, `red`, `green`,
+`blue`, `cyan`, `purple`, `orange`, `pink`, `white`, `warm`.
+`servo_track` cần một `target` trong 23 nhãn: `face`, `hand`, `person`, `dog`,
+`cat`, `bird`, `cup`, `bottle`, `cell phone`, `book`, `remote`, `laptop`,
+`keyboard`, `mouse`, `teddy bear`, `sports ball`, `backpack`, `chair`, `clock`,
+`scissors`, `banana`, `apple`, `orange`. Từ đồng nghĩa được ánh xạ sang giá trị
+chuẩn (ví dụ violet → purple, mug → cup). Thiếu tham số, giá trị không hỗ trợ
+hoặc mơ hồ thì chuyển tiếp; không hỗ trợ nhiều mục tiêu/hành động.
+
+Jev trả lựa chọn có kiểu gồm intent và tham số giới hạn. Go kiểm tra intent đã
+đưa ra cùng đúng tên/giá trị tham số, rồi chuyển enum hợp lệ thành chuỗi do code
+quy định để gọi executor của rule hiện có. Không đưa câu nói thô hoặc HAL payload
+do model sinh vào executor. HAL action và giới hạn safety hiện có vẫn quyết định
+thực thi: `dim` đặt RGB ấm `[80,60,40]`; âm lượng đặt mức tối đa an toàn hoặc
+**30% mức tối đa đó**, không tăng/giảm tương đối. Đổi màu dừng LED effect trước
+khi đặt màu tĩnh. Night kích hoạt scene và có thể thêm biểu cảm sleepy. Ngắt lời
+nói, dừng nhạc và mute loa vẫn là các hành động riêng.
+Mô tả candidate tách ý định được chấp nhận khỏi hiệu ứng thực thi cố định.
+Yêu cầu đèn chung dùng preset bật/dịu mà không cần nêu RGB; lời than phiền
+hiện tại về ánh sáng quá mạnh, chói hoặc gắt có thể chọn `dim` khi không nêu
+nguồn sáng bên ngoài. Lời lịch sự và lý do không được coi là tác vụ bổ sung.
+Phần trăm cụ thể, giữ nguyên màu, phòng/thiết bị khác, phủ định, trích dẫn,
+yêu cầu tương lai/có điều kiện và nhiều tác vụ vẫn chuyển main agent. Âm lượng
+vẫn là preset cố định, không phải điều chỉnh tăng/giảm một nấc. Bộ phân loại
+không thay thế đường rule local hiện có.
+
 Chỉ chấp nhận response có đầy đủ xác suất hợp lệ, xác suất lựa chọn **≥0,90**,
 chênh lệch với lựa chọn đứng sau **≥0,40**, và điểm phù hợp độc lập của action
-**≥0,95**. Đây là ngưỡng routing thử nghiệm, không phải độ chính xác đã hiệu
+**≥0,95**. Mỗi tham số bắt buộc của intent được chọn phải đạt riêng xác suất
+**≥0,90**, chênh lệch **≥0,40** và giá trị được hỗ trợ khác `none`.
+Đây là ngưỡng routing thử nghiệm, không phải độ chính xác đã hiệu
 chuẩn hay bảo đảm không phân loại sai.
 
 Khi bật, nội dung `[voice-instruction]` được chọn, hoặc transcript đã làm sạch
 nếu không có instruction, được gửi qua BFF tới OpenRouter. Không nối hai trường và
 không gửi lịch sử hội thoại. Input quá **2.000 byte** bị bỏ qua, không cắt ngắn.
-Log quyết định có `decision_ms` và `outcome`; event `intent_match` trong Flow
+Log quyết định có `decision_ms` và `outcome`, thêm ID `intent` đã kiểm tra
+và `parameters` đã kiểm tra nếu có khi `selected` (ví dụ
+`intent=led_color parameters=map[color:blue]`). Dòng `intent Jev evaluation` riêng ghi
+`candidate`, `probability`, `margin`, `fit` (trừ `none`) và `reason`:
+`accepted`, `no_match`, `low_probability`, `low_margin`, `low_fit`,
+`param_no_match`, `low_parameter_probability`, `low_parameter_margin`. Quyết định
+có tham số được chấp nhận còn ghi `parameters` đã kiểm tra. Response tham số bắt
+buộc sai định dạng là lỗi, không phải lựa chọn. Không ghi transcript, credential
+hay response thô. Đây là kết quả chọn, chưa chứng minh
+thực thi phần cứng thành công. Event `intent_match` trong Flow
 Monitor đánh dấu lựa chọn được chấp nhận bằng `source=jev`. Ngữ nghĩa phản hồi
 API/xử lý local hiện có không đổi, kể cả trả lỗi của action đã thử thực thi mà
 không chuyển tiếp để tránh thực thi trùng. Nếu cả rule local và Jev không xử lý,
 yêu cầu tiếp tục theo đường main runtime hiện có.
 
 
+#### Đánh giá bộ phân loại qua endpoint thật
+
+**Đánh giá lịch sử với năm intent (trước khi mở rộng lên 20 intent):**
+Ngày 23/09/2026, so sánh bộ câu tiếng Anh trên `lamp-4ace`: prompt/catalog cũ
+nhận 2/10 yêu cầu hợp lệ; bản mới nhận 19/20 qua hai lượt chạy. Cả 34 lượt
+thuộc nhóm cần từ chối đều chuyển tiếp. Một lượt "Reduce the brightness of
+this lamp now" bị bỏ qua vì fit 0,94 dưới ngưỡng 0,95 giữ nguyên; do đó bộ test
+live pass một lần và fail một lần. Đây là quan sát trên mẫu nhỏ, không phải
+ước lượng độ chính xác đã hiệu chuẩn hay kết quả cho catalog mở rộng. Bộ test
+live mở rộng có 65 câu tiếng Anh bao phủ mọi nhóm intent, tham số bắt buộc và
+trường hợp từ chối. Lượt cuối ngày 23/09/2026 đạt 62/65 câu: 29/32 yêu cầu
+hợp lệ và cả 33 trường hợp cần từ chối. Yêu cầu màu warm white, theo dõi người
+nói ("Follow me with your camera") và theo dõi cốc cạnh cửa phòng bị bỏ qua
+vì fit lần lượt 0,94, 0,91 và 0,89, dưới ngưỡng 0,95 giữ nguyên. Vì ba ca bỏ
+sót này, bộ live test vẫn báo fail; không coi đây là pass toàn bộ hay bảo đảm
+cho các cách diễn đạt khác. Sau triển khai, smoke test API trên `lamp-4ace`
+chọn và thực thi `led_color` với `color=purple` (quyết định 1.149 ms),
+`scene_relax` (829 ms) và `what_time` (738 ms), có flow `source=jev` tương ứng
+và phản hồi local thành công. Tracking được đánh giá không di chuyển phần cứng;
+các test này không bao phủ mic/STT.
+
+
+`TestJevLiveNaturalLanguage` được bỏ qua trong unit test thông thường. Bật chủ
+động trên thiết bị thử bằng `JEV_EVAL_CONFIG=/root/config/config.json`, chạy
+binary Go test với `-test.run TestJevLiveNaturalLanguage -test.v`. Test chỉ đọc
+URL/key proxy, đánh giá câu tiếng Anh và trường hợp cần từ chối qua client thật,
+không gọi HAL. Kết quả model có thể thay đổi; pass bộ câu này không chứng minh
+hiệu năng mic/STT hay độ chính xác trên mọi cách diễn đạt.
+
 <a id="jev-bff-contract"></a>
 
-#### Contract Decisions BFF đề xuất — chưa triển khai
+#### Contract Decisions BFF
 
-Đây là đề xuất bàn giao cho đội BFF, **không phải API BFF đã có**. Thay đổi
-local chỉ triển khai client OS và mock test; chưa thể kiểm tra tích hợp thật
-trước khi BFF deploy endpoint này.
+Client OS dùng contract bên dưới. Ngày 23/09/2026, các lời gọi chỉ phân loại
+từ `lamp-4ace` tới endpoint BFF đã cấu hình trả response Decisions hợp lệ.
+Kết quả này xác minh tổ hợp thiết bị/proxy đó, không đại diện mọi triển khai.
 
 - **Route:** `POST {llm_base_url}/jev/decisions`, ví dụ
   `POST /api/v1/ai/v1/jev/decisions` nếu base kết thúc bằng `/api/v1/ai/v1`.
@@ -972,11 +1048,12 @@ trước khi BFF deploy endpoint này.
 - **Thành công:** trả thẳng JSON upstream `{ "answers": { ... } }` với HTTP 200,
   **không** bọc envelope OS `{status,data,message}`.
 - **Thất bại:** trả status non-2xx cho lỗi xác thực/provider. Client fallback và
-  cooldown lỗi 30 giây. Ngân sách của caller mặc định 350 ms (tối đa 1.000 ms);
+  cooldown lỗi 30 giây. Ngân sách của caller mặc định 3.000 ms (tối đa 3.000 ms);
   client không retry.
 
 Request tối thiểu với một candidate để minh họa wire format (production gửi
-mọi candidate đủ điều kiện, một câu hỏi `fit_<id>` cho mỗi candidate và đầy đủ
+mọi candidate đủ điều kiện, một câu hỏi `fit_<id>` cho mỗi candidate, câu hỏi
+choice enum `arg_<id>_<name>` cho tham số khai báo và đầy đủ
 instruction từ chối yêu cầu không hỗ trợ hoặc mơ hồ):
 
 ```json
@@ -1021,10 +1098,16 @@ Dạng response tương ứng:
 
 
 `type`, map `probabilities` đầy đủ (gồm `none`) và giá trị số `noul` cho mọi
-candidate được đưa ra là bắt buộc. OS kiểm tra response và áp dụng các ngưỡng
-xác suất/chênh lệch/độ phù hợp phía trên; BFF không được rút gọn thành chỉ một
-nhãn đã chọn. Ví dụ không chứa credential thật; test local dùng mock response,
-không gọi provider hoặc phát sinh request tính phí.
+candidate được đưa ra là bắt buộc. Schema tham số được gửi trong
+`state.candidates[].parameters` với mô tả và mảng `options` hữu hạn. Trong cùng
+request HTTP, `arg_led_color_color` và `arg_servo_track_target` là câu hỏi
+`choice` gồm các giá trị enum đó cùng `none`. Ví dụ câu hỏi màu có thể trả
+`choice: "blue"` kèm map xác suất đầy đủ cho cả 10 màu và `none`. Mọi câu trả lời
+tham số của intent được chọn phải có mặt và hợp lệ; bỏ qua tham số của intent
+không được chọn. Không có lời gọi thứ hai để trích xuất tham số. OS áp dụng
+ngưỡng intent/fit và tham số phía trên; BFF phải giữ nguyên các answer object,
+không rút gọn thành một nhãn. Ví dụ không chứa credential thật; test local dùng
+mock response, không gọi provider hoặc phát sinh request tính phí.
 
 
 ### Reconcile USER.md theo enrollment
