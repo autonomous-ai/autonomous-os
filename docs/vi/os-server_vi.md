@@ -893,11 +893,13 @@ Chitchat **tắt khi realtime voice agent đang bật** — model nhận mọi l
 
 ### Fallback intent Jev
 
-Jev **mặc định bật**. Với event `voice_command`, `voice_followup` và `voice`
-os-server nhận được khi `local_intent` bật, rule local vẫn chạy trước. Chỉ yêu
-cầu không khớp mới có thể gọi endpoint Decisions BFF với
-`typesafe/jev-1.13`; chat gõ và routing bên trong Live không đi qua bước này.
-Cách khớp rule local và những giới hạn hiện có không thay đổi.
+Jev **mặc định bật**. Khi `local_intent` bật, các event đủ điều kiện
+`voice_command`, `voice_followup`, `voice` và `web_chat` / `mqtt_chat` chỉ có text
+mà os-server nhận được sẽ thử rule local trước. Chỉ yêu cầu không khớp mới có
+thể gọi endpoint Decisions BFF với `typesafe/jev-1.13`. Follow-up phụ thuộc ngữ
+cảnh được chuyển tới main runtime trước cả hai bộ phân loại. Yêu cầu có
+attachments, Harness-only voice và lượt được realtime agent trả lời trực tiếp
+giữ các đường xử lý riêng.
 
 Cấu hình tùy chọn trong `config/config.json`:
 
