@@ -214,3 +214,9 @@ hết hạn và trạng thái kết thúc. Hiện main/`workflow-status` khôi p
 Mock OS chứng minh chuyển main mà không tự chạy hardware/gửi Harness; không chứng
 minh model thật tiếp tục đúng preparation. Session Harness cần kiểm tra tích hợp
 với journal và test idempotency hiện có.
+
+## Giữ đúng task qua các lượt
+
+Helper bắt buộc ID agent hoặc tên chính xác duy nhất cho `send`, `answer`, `stop`; không âm thầm sửa target mặc định đã lưu. Lệnh local `context` trả text task gốc, target và bằng chứng workflow qua các namespace, phân trang task tối đa 20 và lọc theo conversation/intent tùy chọn. Cần đối chiếu lịch sử với project người dùng yêu cầu và metadata agent hiện tại. Run ID của response không phải conversation ID ổn định: chặn tạo namespace bằng run ID đó, nhưng vẫn cho resume workflow legacy đã tồn tại.
+
+Context kết quả follow-up kèm `agentId` và `responseRunId` do transport xác định cùng text kết quả không đáng tin cậy. Khi người dùng sửa đích, main agent giữ yêu cầu gốc chưa hoàn thành và tìm đúng workspace; thiếu scene không cho phép tạo scene thay thế ở project khác. Helper chặn chắc chắn việc gửi thiếu target; chọn đúng về ngữ nghĩa giữa các target tường minh vẫn phụ thuộc model và cần kiểm chứng thực tế.

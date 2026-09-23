@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -266,13 +267,20 @@ func (s *Server) HarnessFollowupContext() string {
 	return s.harnessResult
 }
 
-func (s *Server) rememberHarnessResult(text string) {
+func (s *Server) rememberHarnessResult(agentID, runID, text string) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return
 	}
 	s.harnessResultMu.Lock()
-	s.harnessResult = text
+	// Preserve transport-owned provenance alongside untrusted result text. The
+	// next turn must not combine one agent's result with another saved target.
+	payload, _ := json.Marshal(struct {
+		AgentID       string `json:"agentId"`
+		ResponseRunID string `json:"responseRunId"`
+		Text          string `json:"text"`
+	}{agentID, runID, text})
+	s.harnessResult = string(payload)
 	s.harnessResultAt = time.Now()
 	s.harnessResultMu.Unlock()
 	s.harnessFollowup.Store(time.Now().Add(2 * time.Minute).UnixMilli())
@@ -427,7 +435,7 @@ func (s *Server) deliverHarnessFinal(agentID, runID, text string) {
 	if !s.takeHarnessReply(agentID, runID) {
 		return
 	}
-	s.rememberHarnessResult(text)
+	s.rememberHarnessResult(agentID, runID, text)
 	if !s.agentHandler.DeliverHarnessResponse(runID, text) {
 		slog.Warn("Harness result had no pending device turn", "component", "harness", "run_id", runID)
 	}

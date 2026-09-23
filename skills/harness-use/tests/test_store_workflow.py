@@ -60,6 +60,46 @@ class StoreWorkflowTests(unittest.TestCase):
     def record(self):
         return json.loads(self.path.read_text())['voice']['workflows']['user-turn-1']
 
+    def test_house_workflow_namespace_cannot_fall_back_to_airplane_for_followup(self):
+        # Simulate a legacy per-run namespace created before the stable-scope guard.
+        self.path.write_text(json.dumps({'voice': {'agentId': 'airplane', 'machineId': 'mac-example'},
+                                         'device-chat-house': {}}))
+        params = {**self.params, 'conversation_id': 'device-chat-house', 'text': 'Create a house',
+                  'workspace': {'kind': 'new', 'name': 'house'},
+                  'response': {'run_id': 'device-chat-house', 'channel': 'web'}}
+        dispatched = []
+        def rpc(kind, **fields):
+            if kind == 'agent.prepare':
+                return copy.deepcopy(self.accepted)
+            if kind == 'operation.get':
+                ready = copy.deepcopy(self.ready)
+                ready['operation']['agentId'] = 'house'
+                return ready
+            if kind == 'agents.list':
+                return {'machineId': 'mac-example', 'agents': [
+                    {'agentId': 'airplane', 'name': 'Blender'}, {'agentId': 'house', 'name': 'Blender'}]}
+            if kind == 'turn.send':
+                dispatched.append(fields)
+                return {'receipt': {'state': 'queued'}}
+            raise AssertionError(kind)
+        with patch.object(harness, 'request', side_effect=rpc):
+            self.run_action('prepare', params)
+            self.run_action('dispatch', {'conversation_id': 'device-chat-house', 'intent_id': params['intent_id']})
+            before = self.path.read_bytes()
+            with self.assertRaisesRegex(ValueError, 'EXPLICIT_TARGET_REQUIRED'):
+                self.run_action('send', {'text': 'Add trees to the garden'})
+            self.assertEqual(self.path.read_bytes(), before)
+            self.assertEqual(len(dispatched), 1)
+            evidence = self.run_action('context', {})
+            house = next(t for t in evidence['tasks'] if t.get('intent_id') == params['intent_id'])
+            self.assertEqual(house['agentId'], 'house')
+            self.assertEqual(house['text'], 'Create a house')
+            self.assertEqual(house['conversation_id'], 'device-chat-house')
+            self.run_action('send', {'conversation_id': house['conversation_id'],
+                                    'agentId': house['agentId'], 'text': 'Add trees to the garden'})
+        self.assertEqual([d['agentId'] for d in dispatched], ['house', 'house'])
+        self.assertEqual(json.loads(self.path.read_text())['voice']['agentId'], 'airplane')
+
     def test_wait_budget_survives_retries_and_preserves_intent(self):
         with patch.object(harness.time, 'time', return_value=1000):
             self.run_action('prepare', self.params)

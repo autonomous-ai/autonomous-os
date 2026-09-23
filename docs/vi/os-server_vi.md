@@ -1413,3 +1413,7 @@ không deploy robot hay chạy task Harness có phí; mic/STT và Store cần ac
 `POST /api/harness/request` chỉ dành loopback nay chuyển các thao tác Store v1 đã thương lượng (`store.list`, `store.inspect`, `agent.prepare`, `operation.get`) qua kết nối E2EE trực tiếp hiện có. Không mở endpoint public mới. Cần đủ bốn capability; `agent.prepare` nhắm máy đã pair mà chưa cần agent ID. `PreparationUnknownError` hướng dẫn retry cùng key/tham số hoặc poll operation đã lưu, khác delivery task chưa rõ và `receipt.get`. Progress preparation dùng response metadata local được bỏ trước khi truyền; không chiếm phản hồi cuối. Intent/task bền vững thuộc journal riêng của skill. Xem [Harness Store](harness-store_vi.md) về lệnh, nguồn schema, recovery và kiểm chứng mock so với thực.
 
 Preparation Harness Store có deadline OS 120 giây theo response run, ngoài budget poll 90 giây lưu bền của helper. Route hết hạn không được dispatch. Native Hermes chỉ dừng đúng owner hiện tại và báo lỗi kết thúc, tránh active vô hạn; runtime khác cần triển khai `RunExpirer` để có cùng bảo đảm dừng runtime. Xem [Harness Store](harness-store_vi.md) về recovery và giới hạn cleanup.
+
+## Nguồn kết quả Harness follow-up
+
+Context Harness follow-up lưu `agentId`, `responseRunId` và `text` kết quả gốc dưới dạng JSON trong cửa sổ follow-up hiện có. Chỉ dẫn routing phân biệt nguồn kết quả này với lựa chọn đã lưu của helper và giữ yêu cầu người dùng chưa hoàn thành khi sửa đích. Xem [tích hợp Harness](harness_vi.md) về target tường minh và context task local.
