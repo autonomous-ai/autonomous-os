@@ -307,9 +307,20 @@ The driver sets the falling baseline filter (`0x2F`–`0x32`) to
 [NXP AN3944 quick-start values](https://www.nxp.com/docs/en/application-note/AN3944.pdf).
 This slows downward baseline tracking so it does not quickly follow an
 approaching finger. Rising and touched baseline filters are unchanged.
-These registers are set by HAL, not exposed in `mpr121.json`; changing touch
-thresholds alone does not change baseline tracking. Verify idle stability,
-tap, hold and swipe on the installed pads when tuning thresholds.
+`CONFIG2` (`0x5D`) is `0x30`: 0.5 µs charge time, a 10-sample second-level
+filter (`SFI=2`) and a 1 ms sample interval, so electrode data updates every
+~10 ms, in step with the 10 ms poll. The 10-sample filter halves idle noise
+against the 4-sample default (2 → 1 count measured on `lamp-52e6`). Chip
+debounce (`0x5B`) stays 0: contact (30 ms) and swipe footprint (5 ms)
+debounce happen in software, and a chip-side debounce would delay every
+footprint by two samples. These registers are set by HAL, not exposed in
+`mpr121.json`; changing touch thresholds alone does not change filtering.
+Verify idle stability, tap, hold and swipe on the installed pads when tuning
+thresholds; `robots/lamp/hardware/touch-cap/mpr121_opi_test.py` programs the
+chip like HAL when run with `--debounce 0 --sfi 2 --esi 0` (`calibrate` for
+idle noise and a threshold recommendation, `test --verbose` for per-touch
+hold time, `trace` for filtered/baseline per sample). Stop HAL first; it owns
+the bus.
 
 A missing file or board entry, or `"enabled": false`, skips MPR121 and retains
 the existing GPIO/TTP223 handlers. There is no legacy MPR121 bus fallback.
