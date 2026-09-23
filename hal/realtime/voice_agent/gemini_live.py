@@ -321,10 +321,13 @@ class GeminiLiveAgent(VoiceAgentBase):
                 declarations.append(types.FunctionDeclaration(
                     name="complete_response",
                     description=(
-                        "Confirm that your spoken answer fully fulfills this user's request. "
-                        "Use ONLY for direct conversation, knowledge or a completed public lookup. "
-                        "Never use for an action, a promise/filler, an error or unresolved work: "
-                        "call delegate_to_main for those instead. Call after the direct answer."
+                        "Confirm a finished direct answer ONLY for a greeting, general knowledge, "
+                        "a completed public lookup, or a visual question answered from look. "
+                        "Never use for an action, music playback, stored memory or past conversations, "
+                        "account access, Harness/code work, a promise/filler, an error or unresolved work. "
+                        "Those require delegate_to_main, even if you already said you would help. "
+                        "Call only AFTER delivering the actual answer; a receipt such as "
+                        "'Let me check our conversation history' is NOT an answer."
                     ),
                     parameters={"type": "object", "properties": {}},
                     behavior=types.Behavior.NON_BLOCKING,
