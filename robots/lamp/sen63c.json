@@ -1,8 +1,8 @@
 {
   "boards": {
     "orangepi_sun60": {
-      "enabled": false,
-      "bus": null,
+      "enabled": true,
+      "bus": 0,
       "sda_pin": null,
       "scl_pin": null,
       "poll_interval_s": 1.0,
