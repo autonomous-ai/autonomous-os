@@ -12,13 +12,15 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
+// jevEnabled is the runtime build switch. Enable only after native validation.
+const jevEnabled = false
+
 const jevPluginID = "autonomous-jev"
 
 //go:embed plugins/jev/index.mjs plugins/jev/native.mjs plugins/jev/openclaw.plugin.json plugins/jev/package.json
 var jevPluginAssets embed.FS
 
-// ensureJevPlugin installs a native plugin without opting the operator into
-// selection. Its inner config.enabled flag defaults false and is never set here.
+// ensureJevPlugin installs and configures the native plugin using the build switch.
 func (s *OpenclawService) ensureJevPlugin() (bool, error) {
 	if s.config == nil || s.config.AgentRuntime == "remote" {
 		return false, nil
@@ -66,6 +68,60 @@ func syncJevPlugin(home, configPath string) (bool, error) {
 	}
 	if err := write("os-config-path.json", data); err != nil {
 		return changed, err
+	}
+	file := filepath.Join(home, "openclaw.json")
+	original, err := os.ReadFile(file)
+	if err != nil {
+		return changed, fmt.Errorf("read OpenClaw Jev config: %w", err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(original, &cfg); err != nil {
+		return changed, fmt.Errorf("parse OpenClaw Jev config: %w", err)
+	}
+	if cfg == nil {
+		return changed, fmt.Errorf("OpenClaw config must be an object")
+	}
+	ensureMap := func(parent map[string]any, key string) (map[string]any, error) {
+		if value, exists := parent[key]; exists {
+			if object, ok := value.(map[string]any); ok && object != nil {
+				return object, nil
+			}
+			return nil, fmt.Errorf("OpenClaw %s must be an object", key)
+		}
+		object := map[string]any{}
+		parent[key] = object
+		return object, nil
+	}
+	plugins, err := ensureMap(cfg, "plugins")
+	if err != nil {
+		return changed, err
+	}
+	entries, err := ensureMap(plugins, "entries")
+	if err != nil {
+		return changed, err
+	}
+	entry, err := ensureMap(entries, jevPluginID)
+	if err != nil {
+		return changed, err
+	}
+	pluginConfig, err := ensureMap(entry, "config")
+	if err != nil {
+		return changed, err
+	}
+	if entry["enabled"] != jevEnabled || pluginConfig["enabled"] != jevEnabled {
+		entry["enabled"] = jevEnabled
+		pluginConfig["enabled"] = jevEnabled
+		data, err := json.MarshalIndent(cfg, "", "  ")
+		if err != nil {
+			return changed, err
+		}
+		if err := atomicWriteFile(file, data, 0600); err != nil {
+			return changed, fmt.Errorf("write OpenClaw Jev config: %w", err)
+		}
+		changed = true
+		if err := chownRuntimeUserIfRoot(file, openclawRuntimeUser); err != nil {
+			return changed, err
+		}
 	}
 	return changed, nil
 }

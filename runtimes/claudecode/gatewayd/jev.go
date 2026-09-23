@@ -11,6 +11,9 @@ import (
 
 // newPreloader belongs to the runtime bridge, so all OS-managed chat channels
 // share the same bounded selector without an additional OS dispatch decision.
+// jevEnabled is the runtime build switch. Enable only after native validation.
+const jevEnabled = false
+
 func newPreloader(cfg Config) func(context.Context, string) string {
 	router := jev.New(jev.Options{Runtime: "claudecode", ConfigPath: cfg.JevConfigPath,
 		SkillsDir: filepath.Join(cfg.Home, ".claude", "skills"), Disabled: !cfg.JevEnabled,

@@ -81,7 +81,7 @@ func configFromEnv() Config {
 	home := envOr("CODEX_HOME", "/root/.codex")
 	return Config{
 		JevConfigPath: envOr("JEV_CONFIG_PATH", "/root/config/config.json"),
-		JevEnabled:    os.Getenv("JEV_SKILL_PRELOAD") == "1",
+		JevEnabled:    jevEnabled,
 		Token:         envOr("CODEX_WS_TOKEN", "autonomous_codex_token"),
 		Port:          envOr("CODEX_PORT", "18792"),
 		Workspace:     envOr("CODEX_WORKSPACE", home+"/workspace"),

@@ -471,14 +471,7 @@ runtime mặc định, giống cách OpenClaw/Hermes disable unit của chính m
 Onboarding OS cài hook stdio native `hooks.processes.jev`, với
 `intercept: ["before_llm"]`. Khi asset hoặc đăng ký thay đổi, dùng cơ chế restart
 gateway hiện có của onboarding; reconcile không đổi không restart.
-**Jev mặc định tắt** trong khi chờ kiểm chứng native. Để chủ động bật thử, đặt
-`hooks.processes.jev.enabled: true` và `hooks.enabled: true` trong `config.json`
-PicoClaw rồi restart gateway. Chỉ boolean true được khai báo rõ mới giữ bật;
-onboarding không tự bật Jev.
-Đăng ký observer hiện có quản lý global gate `hooks.enabled`; hành vi onboarding
-đó được giữ nguyên. Đặt `hooks.processes.jev.enabled: false` để giữ plugin tắt
-qua các lần onboarding. Bản thân bộ reconcile Jev không đổi global false
-được khai báo rõ thành true.
+**Jev mặc định tắt** bằng `const jevEnabled = false` trong `runtimes/picoclaw/jev_hook.go`. Go ghi cờ này vào `hooks.processes.jev.enabled` khi onboarding, kể cả khi config cũ đã bật. Muốn bật sau kiểm chứng, đổi cờ Go rồi build và restart qua luồng quản lý runtime. Observer vẫn quản lý global gate `hooks.enabled`; Jev không thay đổi gate đó.
 Sidecar chỉ chứa đường dẫn tuyệt đối tới config OS; credential được đọc khi dùng.
 
 Hook dùng chung selector Hermes: tối đa 32 ứng viên, ngân sách chọn/nạp tổng cộng

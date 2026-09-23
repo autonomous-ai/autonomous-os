@@ -46,3 +46,31 @@ func TestJevPreloadRunCorrelation(t *testing.T) {
 		}
 	}
 }
+
+func TestJevPluginBuildSwitchOverridesConfig(t *testing.T) {
+	for _, raw := range []string{`{"keep":true}`, `{"keep":true,"plugins":{"entries":{"autonomous-jev":{"enabled":true,"config":{"enabled":true,"keep":true}}}}}`} {
+		home := t.TempDir()
+		file := filepath.Join(home, "openclaw.json")
+		if err := os.WriteFile(file, []byte(raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := syncJevPlugin(home, "/private/config.json"); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cfg map[string]any
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			t.Fatal(err)
+		}
+		entry := cfg["plugins"].(map[string]any)["entries"].(map[string]any)[jevPluginID].(map[string]any)
+		if cfg["keep"] != true || entry["enabled"] != jevEnabled || entry["config"].(map[string]any)["enabled"] != jevEnabled {
+			t.Fatal(cfg)
+		}
+		if changed, err := syncJevPlugin(home, "/private/config.json"); err != nil || changed {
+			t.Fatalf("second changed=%v err=%v", changed, err)
+		}
+	}
+}

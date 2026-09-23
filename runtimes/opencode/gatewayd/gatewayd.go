@@ -77,7 +77,7 @@ func configFromEnv() Config {
 	}
 	return Config{
 		JevConfigPath: envOr("JEV_CONFIG_PATH", "/root/config/config.json"),
-		JevEnabled:    os.Getenv("JEV_SKILL_PRELOAD") == "1",
+		JevEnabled:    jevEnabled,
 		Token:         envOr("OPENCODE_WS_TOKEN", "autonomous_opencode_token"),
 		Port:          envOr("OPENCODE_PORT", "18793"),
 		Workspace:     envOr("OPENCODE_WORKSPACE", "/root/.opencode/workspace"),

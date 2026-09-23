@@ -3,21 +3,7 @@
 OS onboarding installs the native `autonomous-jev` plugin under
 `<OpenclawConfigDir>/extensions/autonomous-jev`. It registers
 `before_prompt_build`, covering both OS-dispatched requests and channels handled
-directly by OpenClaw. **Selection is off by default.** Onboarding preserves the
-operator's OpenClaw config and never opts in automatically.
-
-To opt in, merge this entry into `openclaw.json`, then restart the OpenClaw
-gateway through the normal runtime management flow:
-
-```json
-{
-  "plugins": {
-    "entries": {
-      "autonomous-jev": { "enabled": true, "config": { "enabled": true } }
-    }
-  }
-}
-```
+directly by OpenClaw. **Disabled by default** by `const jevEnabled = false` in `runtimes/openclaw/jev_plugin.go`. Go writes the switch to `plugins.entries.autonomous-jev.enabled` and `config.enabled` during onboarding, including previously enabled configs; unrelated settings are preserved. Enabling after validation requires changing the Go switch, rebuilding and restarting through runtime management.
 
 If `plugins.allow` is configured, include `autonomous-jev` in that list too.
 `plugins.deny`, plugin disables and `plugins.enabled: false` remain authoritative.

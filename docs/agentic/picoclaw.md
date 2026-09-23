@@ -490,14 +490,7 @@ in `ResetAgent`.
 OS onboarding installs a native `hooks.processes.jev` stdio hook, with
 `intercept: ["before_llm"]`. Asset or registration changes participate in the
 existing onboarding gateway restart; an unchanged reconcile is a no-op.
-**Jev is disabled by default** pending native validation. To opt in for testing,
-set `hooks.processes.jev.enabled: true` and `hooks.enabled: true` in PicoClaw
-`config.json`, then restart the gateway. Only an explicit boolean true is preserved
-as enabled; onboarding never enables Jev automatically.
-The existing observer registration manages the global `hooks.enabled` gate;
-its onboarding behavior is unchanged. Set `hooks.processes.jev.enabled: false`
-to keep this plugin disabled across onboarding. The Jev reconciler itself does not
-turn an explicit global false into true.
+**Jev is disabled by default** by `const jevEnabled = false` in `runtimes/picoclaw/jev_hook.go`. Go writes this switch to `hooks.processes.jev.enabled` during onboarding, including previously enabled configs. Enabling after validation requires changing the Go switch, rebuilding and restarting through runtime management. The observer still manages the global `hooks.enabled` gate; Jev leaves that gate unchanged.
 The sidecar stores only the absolute OS config path; credentials are read at use.
 
 The hook shares Hermes's selector implementation: at most 32 candidates, a

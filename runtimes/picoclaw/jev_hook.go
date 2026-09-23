@@ -12,10 +12,13 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
+// jevEnabled is the runtime build switch. Enable only after native validation.
+const jevEnabled = false
+
 //go:embed resources/hooks/jev/hook.py
 var jevHookScript []byte
 
-// ensureJevHook reconciles assets and registration. Existing explicit opt-outs win.
+// ensureJevHook reconciles assets and registration using the runtime build switch.
 func (s *PicoclawService) ensureJevHook() (bool, error) {
 	s.mcpMu.Lock()
 	defer s.mcpMu.Unlock()
@@ -61,12 +64,10 @@ func syncJevHook(cfgPath, osConfigPath, dir string) (bool, error) {
 	return changed, nil
 }
 
-// Install a disabled registration unless the operator explicitly opted in.
+// The runtime build switch owns the Jev registration.
 // The observer owns the global hook gate; Jev must never enable it itself.
 func applyJevHook(cfg map[string]any, path string) {
 	hooks := ensurePicoMap(cfg, "hooks")
 	processes := ensurePicoMap(hooks, "processes")
-	current, _ := processes["jev"].(map[string]any)
-	enabled := current["enabled"] == true
-	processes["jev"] = map[string]any{"enabled": enabled, "transport": "stdio", "command": []any{"python3", path}, "intercept": []any{"before_llm"}}
+	processes["jev"] = map[string]any{"enabled": jevEnabled, "transport": "stdio", "command": []any{"python3", path}, "intercept": []any{"before_llm"}}
 }

@@ -83,7 +83,7 @@ func configFromEnv() Config {
 	home := envOr("CLAUDECODE_HOME", "/root/.claudecode")
 	return Config{
 		JevConfigPath: envOr("JEV_CONFIG_PATH", "/root/config/config.json"),
-		JevEnabled:    os.Getenv("JEV_SKILL_PRELOAD") == "1",
+		JevEnabled:    jevEnabled,
 		// Token defaults to runtimes/claudecode/constants.go Token — the two
 		// sides of the socket MUST agree.
 		Token:          envOr("CLAUDECODE_WS_TOKEN", claudecode.Token),
