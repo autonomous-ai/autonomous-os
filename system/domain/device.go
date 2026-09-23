@@ -457,6 +457,16 @@ const (
 	KindSystemReboot   = "system.reboot"   // cue-aware OS reboot via HAL
 	KindSystemShutdown = "system.shutdown" // cue- and servo-aware OS shutdown via HAL
 
+	// KindSystemOTAVersions reports per-component current vs published versions
+	// plus what bootstrap is installing right now — the cloud twin of the web
+	// Versions card (GET /api/system/ota-versions + /ota-updating).
+	KindSystemOTAVersions = "system.ota_versions"
+	// KindSystemSoftwareUpdate force-updates one component. Data:
+	// MQTTSoftwareUpdateData. The cloud twin of
+	// POST /api/system/software-update/:target; replies "success" (started)
+	// immediately, then publishes an unsolicited completion report.
+	KindSystemSoftwareUpdate = "system.software_update"
+
 	// KindSkillsInstall installs a role's skill bundle. Data: {"role":"<role>"}.
 	KindSkillsInstall = "skills.install"
 
@@ -998,6 +1008,13 @@ type ConnectorsFile struct {
 // <role>/skills.zip on demand.
 type MQTTSkillsInstallData struct {
 	Role string `json:"role"`
+}
+
+// MQTTSoftwareUpdateData is the data block of system.software_update. Target is
+// one of os-server | bootstrap | web | hal | device | <agent CLI key> | agent
+// ("agent" resolves to the configured runtime's CLI).
+type MQTTSoftwareUpdateData struct {
+	Target string `json:"target"`
 }
 
 // MQTTSkillsSaveData is the Data payload for kind:"skills.save" — an authored
