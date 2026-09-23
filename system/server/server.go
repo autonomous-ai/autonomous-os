@@ -50,10 +50,12 @@ import (
 type Server struct {
 	externalHistory *externalhistory.Store
 
-	harnessService   *harness.Service
-	harnessVoice     *harness.VoiceController
-	harnessVoiceCtx  context.Context
-	harnessRepliesMu sync.Mutex
+	harnessPreparationMu    sync.Mutex
+	harnessPreparationWaits map[string]*harnessPreparationWait
+	harnessService          *harness.Service
+	harnessVoice            *harness.VoiceController
+	harnessVoiceCtx         context.Context
+	harnessRepliesMu        sync.Mutex
 	// harnessReplies is keyed by the local device run ID. A single Harness
 	// agent can work on more than one user request at once, so it cannot be
 	// keyed by agent ID.

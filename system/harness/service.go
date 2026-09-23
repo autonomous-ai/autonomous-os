@@ -66,7 +66,8 @@ type connection struct {
 	pending      map[string]chan response
 }
 
-// DeliveryUnknownError means a mutation may have reached the computer. Never retry it automatically.
+// DeliveryUnknownError means a task/focus mutation may have reached the computer.
+// Never retry it automatically; preparation has separate durable recovery semantics.
 type DeliveryUnknownError struct {
 	RequestID string
 	Cause     error
@@ -116,7 +117,7 @@ type Service struct {
 	statusChanges chan struct{}
 }
 
-var capabilities = []string{"focus.ensure", "focus.get", "focus.step", "agents.list", "turn.send", "turn.stop", "status", "recap", "question.answer", "receipt.get"}
+var capabilities = []string{"focus.ensure", "focus.get", "focus.step", "agents.list", "turn.send", "turn.stop", "status", "recap", "question.answer", "receipt.get", "store.list", "store.inspect", "agent.prepare", "operation.get"}
 
 func NewService(dataDir string, callbacks Callbacks) (*Service, error) {
 	s := &Service{path: filepath.Join(dataDir, "harness", "trust.json"), callbacks: callbacks, ctx: context.Background(), sockets: make(map[*DirectChannel]bool), events: make(chan Frame, 128), statusChanges: make(chan struct{}, 1), status: Status{State: "unpaired", Capabilities: []string{}}}
@@ -332,7 +333,7 @@ func (s *Service) CancelPair() error {
 }
 
 func mutation(kind string) bool {
-	return kind == "turn.send" || kind == "turn.stop" || kind == "question.answer" || kind == "focus.step"
+	return kind == "turn.send" || kind == "turn.stop" || kind == "question.answer" || kind == "focus.step" || kind == "agent.prepare"
 }
 
 // Request sends exactly once. The caller owns stable idempotency keys for mutations.
@@ -358,7 +359,16 @@ func (s *Service) Request(ctx context.Context, frame Frame) (Frame, error) {
 	for k, v := range frame {
 		f[k] = v
 	}
-	if kind != "focus.ensure" && kind != "focus.get" && kind != "focus.step" && kind != "agents.list" && kind != "receipt.get" {
+	if isStoreOperation(kind) {
+		for _, capability := range storeCapabilities {
+			if !c.capabilities[capability] {
+				return nil, errors.New("UNSUPPORTED_CAPABILITY: update Harness CLI for Store preparation")
+			}
+		}
+		if kind == "agent.prepare" && stringField(f, "machineId") != machine {
+			return nil, errors.New("MACHINE_MISMATCH")
+		}
+	} else if kind != "focus.ensure" && kind != "focus.get" && kind != "focus.step" && kind != "agents.list" && kind != "receipt.get" {
 		if stringField(f, "machineId") != machine {
 			return nil, errors.New("MACHINE_MISMATCH")
 		}
@@ -375,6 +385,14 @@ func (s *Service) Request(ctx context.Context, frame Frame) (Frame, error) {
 			return nil, errors.New("PAYLOAD_TOO_LARGE")
 		}
 	}
+	if isStoreOperation(kind) {
+		if value, exists := f["requestId"]; exists {
+			id, ok := value.(string)
+			if !ok || !storeUUID.MatchString(id) {
+				return nil, errors.New("INVALID_REQUEST: invalid Store requestId")
+			}
+		}
+	}
 	if stringField(f, "requestId") == "" {
 		raw, err := randomBytes(16)
 		if err != nil {
@@ -384,6 +402,11 @@ func (s *Service) Request(ctx context.Context, frame Frame) (Frame, error) {
 		raw[8] = (raw[8] & 63) | 128
 		h := hex.EncodeToString(raw)
 		f["requestId"] = h[:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:]
+	}
+	if isStoreOperation(kind) {
+		if err := validateStoreRequest(f); err != nil {
+			return nil, err
+		}
 	}
 	id := stringField(f, "requestId")
 	ch := make(chan response, 1)
@@ -400,6 +423,9 @@ func (s *Service) Request(ctx context.Context, frame Frame) (Frame, error) {
 	c.mu.Unlock()
 	defer func() { c.mu.Lock(); delete(c.pending, id); c.mu.Unlock() }()
 	unknown := func(err error) (Frame, error) {
+		if kind == "agent.prepare" {
+			return nil, &PreparationUnknownError{RequestID: id, Cause: err}
+		}
 		if mutation(kind) {
 			return nil, &DeliveryUnknownError{RequestID: id, Cause: err}
 		}

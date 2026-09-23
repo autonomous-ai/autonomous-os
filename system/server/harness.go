@@ -30,6 +30,7 @@ type harnessReplyRequest struct {
 // registerHarnessRoutes exposes management to the owner and commands only to the device runtime.
 func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context) {
 	s.initializeHarnessVoice(ctx)
+	go s.watchHarnessPreparationWaits(ctx)
 	group := api.Group("harness")
 	group.Use(func(c *gin.Context) {
 		if s.harnessService == nil {
@@ -98,6 +99,10 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 			reply.RunID = canonicalHarnessReplyRunID(reply.RunID)
 		}
 		kind, _ := frame["type"].(string)
+		if err := s.guardHarnessPreparationWait(kind, reply, time.Now()); err != nil {
+			c.JSON(http.StatusConflict, serializers.ResponseError(err.Error()))
+			return
+		}
 		agentID, _ := frame["agentId"].(string)
 		tracksReply := (kind == "turn.send" || kind == "question.answer") && reply != nil
 		// A local Harness agent can complete before Request returns its receipt.
@@ -109,9 +114,18 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 		defer cancel()
 		result, err := s.harnessService.Request(requestCtx, frame)
 		if err != nil {
+			var uncertainDispatch *harness.DeliveryUnknownError
+			if tracksReply && !errors.As(err, &uncertainDispatch) {
+				s.releaseHarnessPreparationDispatch(reply)
+			}
 			if tracksReply {
 				reportHarnessDispatchError(reply.RunID, "", err)
 				s.forgetHarnessReply(agentID, reply.RunID)
+			}
+			var preparationUnknown *harness.PreparationUnknownError
+			if errors.As(err, &preparationUnknown) {
+				c.JSON(http.StatusBadGateway, serializers.ResponseError("Harness preparation is unknown; retry the same preparation key and parameters or poll operation.get; do not use receipt.get or create a new key"))
+				return
 			}
 			var uncertain *harness.DeliveryUnknownError
 			if errors.As(err, &uncertain) {
@@ -122,8 +136,12 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 			return
 		}
 		if tracksReply {
+			if result["error"] != nil {
+				s.releaseHarnessPreparationDispatch(reply)
+			}
 			reportHarnessReceipt(reply.RunID, result)
 		}
+		s.observeHarnessPreparation(kind, reply, result)
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(result))
 	})
 }
