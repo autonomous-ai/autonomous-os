@@ -41,6 +41,28 @@ CLAUSE_ENDS = (",", ";", ":", "—", "，", "；", "：", "、")
 FIRST_CHUNK_MIN_CHARS = 8
 
 
+# Suppress only this known provider apology, not arbitrary mentions of errors.
+_SYSTEM_ERROR_TEXT = "i'm sorry, there was a system error"
+_SYSTEM_ERROR_SENTENCE = re.compile(
+    r"(?<!\S)I['’]m sorry,\s+there was a system error(?:[.!?]+|$)", re.IGNORECASE,
+)
+
+
+def _filter_system_error_tts(text: str, *, log: bool = True) -> str:
+    def suppress(match):
+        if log:
+            logger.info("[realtime] Provider error suppressed from TTS: %r", match.group(0))
+        return ""
+
+    return _SYSTEM_ERROR_SENTENCE.sub(suppress, text).strip()
+
+
+def _pending_system_error_tts(text: str) -> bool:
+    # Hold a matching prefix so streaming cannot speak "I'm sorry," first.
+    normalized = " ".join(text.lower().replace("’", "'").split())
+    return bool(normalized) and _SYSTEM_ERROR_TEXT.startswith(normalized)
+
+
 def split_first_chunk(buf: str) -> tuple[str, str]:
     """Split the turn's FIRST utterance into (speak_now, keep_buffering).
 
@@ -728,6 +750,12 @@ def run_realtime_turn(
                         if foreign_suppressed:
                             sentence_buf = ""
                             continue
+                        visible_text = strip_markers(sentence_buf)
+                        if _pending_system_error_tts(visible_text):
+                            continue
+                        filtered_text = _filter_system_error_tts(visible_text)
+                        if filtered_text != visible_text.strip():
+                            sentence_buf = filtered_text
                         # Nothing spoken yet: cut the opening at a clause
                         # boundary rather than making the user wait out a whole
                         # sentence. Only ever once per turn (see split_first_chunk).
@@ -826,7 +854,9 @@ def run_realtime_turn(
             # turn from the top): this is what gets forwarded as [REPLY], saved to
             # realtime memory, and shown in web chat — a leak here re-enters the
             # model's context next turn and self-reinforces.
-            transcript = clean_transcript(strip_markers("".join(text_parts)), reply_lang)
+            transcript = _filter_system_error_tts(
+                clean_transcript(strip_markers("".join(text_parts)), reply_lang), log=False,
+            ) if not native else clean_transcript(strip_markers("".join(text_parts)), reply_lang)
 
             # Native playback owns the speaker for the whole turn — release it
             # once all frames are in (records transcript for STT echo cancel).
@@ -869,7 +899,9 @@ def run_realtime_turn(
             else:
                 # Flush any remaining text that didn't end with a sentence boundary
                 # (ElevenLabs path only — native mode never fills sentence_buf).
-                remaining: str = leak_filter.filter_text(strip_markers(sentence_buf))
+                remaining: str = _filter_system_error_tts(
+                    leak_filter.filter_text(strip_markers(sentence_buf)),
+                )
                 if not native and remaining and tts is not None:
                     if not first_sentence_sent:
                         logger.info(
