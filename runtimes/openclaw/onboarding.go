@@ -139,6 +139,11 @@ func (s *OpenclawService) EnsureOnboarding() error {
 	}
 
 	needRestart := false
+	if changed, err := s.ensureJevPlugin(); err != nil {
+		slog.Warn("ensure Jev plugin failed", "component", "onboarding", "error", err)
+	} else if changed {
+		needRestart = true
+	}
 
 	// Inject SOUL.md core block (owner-editable content stays below the block)
 	if modified, err := s.ensureSoulMDBlock(); err != nil {
