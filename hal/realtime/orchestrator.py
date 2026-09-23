@@ -487,6 +487,11 @@ class RealtimeOrchestrator:
         # rebuild the session AFTER that turn so the next turn drops the context
         # the provider re-bills on a long-lived session. See _maybe_idle_reset.
         self._last_turn_monotonic: float = 0.0  # end-of-turn timestamp; 0 = none yet
+        # When the CURRENT session connected; 0 = none yet. Idle checks measure
+        # from the later of this and the last turn: a session that connected a
+        # second ago (privacy-switch unmute, reconnect) is not idle, however
+        # long ago the last turn ended.
+        self._session_connected_monotonic: float = 0.0
         self._idle_reset_pending: bool = False
         # Set when Gemini proactively rebuilt before the current turn after a
         # long idle. That session is already fresh, so the generic post-turn
@@ -663,6 +668,7 @@ class RealtimeOrchestrator:
             self._idle_parked = False
             self._park_resume_failed = False
             self._last_activity_monotonic = time.monotonic()
+            self._session_connected_monotonic = self._last_activity_monotonic
             self._consecutive_silent = 0
             self._idle_reset_pending = False
             self._turns_since_recycle = 0
@@ -821,6 +827,13 @@ class RealtimeOrchestrator:
             return False
         return self._rebuild_in_background("idle-park-prewarm", "rt-prewarm")
 
+    def _idle_since_monotonic(self) -> float:
+        """Start of the current session's idle gap: last turn end or connect."""
+        return max(
+            self._last_turn_monotonic,
+            getattr(self, "_session_connected_monotonic", 0.0),
+        )
+
     def prepare_turn(self) -> None:
         """Prepare the realtime session before the caller streams turn audio."""
         # A new capture starts a new logical turn. Clear any marker left by a
@@ -887,7 +900,10 @@ class RealtimeOrchestrator:
         threshold = config.REALTIME_GEMINI_PRE_TURN_RECYCLE_S
         if threshold <= 0 or self._last_turn_monotonic <= 0.0:
             return
-        idle = time.monotonic() - self._last_turn_monotonic
+        # Session idle, not user idle: after an unmute the session is seconds
+        # old even when the last turn is minutes old. Rebuilding it anyway cost
+        # a ~10s reconnect the turn fell back through (device 2026-09-23).
+        idle = time.monotonic() - self._idle_since_monotonic()
         if idle < threshold:
             return
         logger.info(
@@ -1084,6 +1100,7 @@ class RealtimeOrchestrator:
 
         try:
             self._agent.connect()
+            self._session_connected_monotonic = time.monotonic()
             logger.info(
                 "[realtime] Realtime orchestrator started (provider=%s)", provider
             )
@@ -1204,7 +1221,9 @@ class RealtimeOrchestrator:
         reset_s = config.REALTIME_SESSION_IDLE_RESET_S
         if reset_s <= 0 or self._last_turn_monotonic <= 0.0:
             return
-        idle = time.monotonic() - self._last_turn_monotonic
+        # A session connected after the last turn holds no accumulated
+        # context to drop, so it is measured from its connect too.
+        idle = time.monotonic() - self._idle_since_monotonic()
         if idle >= reset_s:
             logger.info(
                 "[realtime] %.0fs idle (>= %.0fs) — will recycle session after this "
