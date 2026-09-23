@@ -3,10 +3,16 @@
 Robots have been around for years but have never been autonomous — someone has to drive them with a remote, and they've stopped at scripted demos. Autonomous OS brings autonomy to robots: install it on your robot and it comes alive.
 
 - **Your robot thinks.** Everything it sees and hears goes to an agentic reasoning engine running on the robot itself — [Hermes](runtimes/hermes/), [Claude Code](runtimes/claudecode/), or [whichever you choose](runtimes/) — that decides what to do next.
-- **Your robot acts.** It [guards the house](skills/guard/), [knows your face](skills/face-enroll/), [follows you as you move](skills/servo-tracking/), [reads the mood on your face](skills/user-emotion-detection/), [sets the light](skills/scene/) — and does the desk work too: [Gmail, GitHub](skills/connectors/), [your Mac](skills/computer-use/). Each one is a [skill](skills/) — install more from the Skill Store, or write your own.
+- **Your robot acts.** It [guards the house](skills/guard/), [knows your face](skills/face-enroll/), [follows you as you move](skills/servo-tracking/), [reads the mood on your face](skills/user-emotion-detection/), [sets the light](skills/scene/) — and does the desk work too: [Gmail, GitHub](skills/connectors/), [your Mac](skills/computer-use/), [agents on your computer](skills/harness-use/). Each one is a [skill](skills/) — install more from the Skill Store, or write your own.
 - **Your robot grows.** It has a built-in learning loop. It creates skills from experience, sharpens them as it uses them, keeps what it learns, searches its own past conversations, and builds a deeper picture of you with every session.
 
 Autonomous OS is a fully customizable operating system for robots. Every component is swappable — [engine](runtimes/), [model](docs/hosted.md), [voice](hal/drivers/voice/), [skills](skills/), [board](hal/board/boards.json). Your robot declares what it has in a `ROBOT.md`, and the OS mounts exactly that. When a better one ships, your robot gets it the same day — and gets better without new hardware.
+
+## Work across your robot and computer
+
+- **Delegate to Harness agents.** [`harness-use`](skills/harness-use/) sends coding and research tasks to agents already running in [Harness](https://github.com/autonomous-ai/openharness) on your paired computer. Ask a named agent to work, answer its follow-up questions, and receive its result through voice or chat. Pair from OS Monitor and Harness Desktop on the same LAN. **Harness-only voice** sends manual tap-to-record turns to the agent focused in Harness. [Get Harness](https://github.com/autonomous-ai/openharness) · [Integration and setup](docs/harness.md).
+- **Use Mac apps through Buddy.** [`computer-use`](skills/computer-use/) lets the device agent inspect an app, click or type, and verify the resulting UI through a paired Autonomous Buddy. Buddy bundles Cua Driver for Accessibility observations and actions, with screenshot support for visual tasks. The device agent owns the task; Buddy executes on the Mac. Harness and Buddy have separate connections and pairing. [Computer-use guide](integrations/companions/autonomous-buddy/docs/computer-use.md).
+- **Load the right skill with Jev.** The OS-managed Hermes plugin uses Jev to select and preload an installed skill before the first model call, falling back to normal skill discovery when selection or loading fails. Two separate integrations cover an opt-in voice-intent fallback and experimental Buddy UI-action suggestions. A Jev selection does not execute an action or grant permission. [Hermes preloading](docs/agentic/hermes.md#13-optional-jev-skill-preloading) · [Intent fallback](docs/os-server.md#jev-intent-fallback) · [Buddy suggestions](docs/os-server.md#buddy-computer-use-feedback).
 
 ## Quick start
 
@@ -78,7 +84,7 @@ What a person touches. The Autonomous app adds a robot, sets up Wi-Fi, installs 
 
 ### [Skills](skills/)
 
-One folder per behavior, one `SKILL.md` inside: markdown the agent reads. A skill acts by writing `[HW:/path:{json}]` markers in its reply, so it never touches a servo bus or a GPIO pin. Each skill declares the capabilities it needs and installs on every robot that has them.
+One folder per behavior, one `SKILL.md` inside: markdown the agent reads. Hardware skills emit `[HW:/path:{json}]` markers for OS dispatch instead of touching a servo bus or GPIO pin. Computer and agent skills use helpers that call OS APIs and return observations or task results. Skills declare required capabilities so they install on compatible robots.
 
 ### [Agentic runtime](runtimes/)
 
@@ -86,11 +92,15 @@ The engine that thinks. Six of them — Hermes, OpenClaw, PicoClaw, Codex, Claud
 
 ### [System services](system/)
 
-The Go daemon `os-server` on :5000, one package per box in the figure. `intent` answers fixed commands from a local table with no model; `server` strips `[HW:…]` markers out of a reply and POSTs them to HAL before the words are spoken; `agent` switches engines; `bootstrap` is OTA, its own binary.
+The Go daemon `os-server` on :5000, one package per box in the figure. `intent` answers fixed commands from a local table with no model, with an optional Jev fallback (off by default); `harness` delegates work to paired computer agents; `buddy` carries Mac observations and actions; `server` strips `[HW:…]` markers out of a reply and POSTs them to HAL before the words are spoken; `agent` switches engines; `bootstrap` is OTA, its own binary.
 
 ### [Realtime voice](hal/realtime/)
 
-Gemini Live, OpenAI Realtime or GPT-Live (`gpt-live-1`), hosted inside HAL and running beside the main path. A spoken turn lands here first: it answers directly, or hands the turn up to the engine.
+HAL supports Gemini Live (default model: `gemini-3.8-live`), OpenAI Realtime, GPT-Live (`gpt-live-1`), and **Pipecat v1** (`pipecat_v1`). In normal voice mode, the realtime agent answers directly or delegates tasks to the main runtime; Harness-only voice routes manual captures directly to Harness.
+
+Pipecat runs the pipeline inside HAL: speech recognition → an OpenAI-compatible LLM (default: `qwen/qwen3.6-35b-a3b`) → text spoken by HAL's TTS. Pipeline orchestration runs on the robot; model calls still use remote services. It supports both committed turns and continuous Live input.
+
+**Smart Turn** runs a local ONNX model to help decide when a person has finished speaking. It supplements silence detection in the shared non-Live capture path and works with Silero VAD in Pipecat Live. Bounded silence fallbacks handle unavailable inference; manual Harness recording still ends on the user's tap. Pipecat and Smart Turn require HAL's optional `pipecat` extra, included in Lamp/Pi/OrangePi setup but excluded from Reachy because of conflicting ONNX dependencies. [Voice architecture, configuration and limits](docs/realtime-voice.md).
 
 ### [Capabilities](robots/contract/capabilities.md)
 
