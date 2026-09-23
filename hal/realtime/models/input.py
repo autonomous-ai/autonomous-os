@@ -33,6 +33,8 @@ class FunctionCallResultInput(InputBase):
     type: InputTypeEnum = InputTypeEnum.FUNCTION_CALL_RESULT
     call_id: str
     output: str  # JSON string
+    # Optional captured frame for providers that accept a multimodal tool result.
+    image: cv2t.MatLike | None = None
     # When False, the result is recorded in conversation history WITHOUT
     # triggering a new model response. Used for fire-and-forget tools (e.g.
     # express_emotion) so acknowledging the call doesn't spawn a second spoken

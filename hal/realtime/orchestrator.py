@@ -1825,7 +1825,7 @@ class RealtimeOrchestrator:
             )
             return False
 
-        # Resolve the tool call BEFORE the frame goes out. Both the image and
+        # Legacy providers resolve the tool call BEFORE the frame goes out. Both the image and
         # the replayed audio below travel on `send_realtime_input`, which Gemini
         # refuses while a call it emitted is unanswered — so leaving this call
         # pending does not merely risk a 1008, it means the gate in
@@ -1842,7 +1842,8 @@ class RealtimeOrchestrator:
         # fire-and-forget path, which deliberately tells Gemini nothing and
         # therefore leaves the session quarantined. The response it triggers is
         # cancelled by replay only on the legacy path. Status-aware async
-        # sessions instead continue the tool interaction with the fresh frame.
+        # sessions instead attach the frame to the tool result itself so it is
+        # available to the current interaction, not a later audio turn.
         # Tell the model whether the aim actually found the user, not just that
         # a frame is coming. Without it the model cannot tell a well-framed shot
         # from "wherever the camera happened to be pointing after failing to
@@ -1857,7 +1858,10 @@ class RealtimeOrchestrator:
         # the question in the pose people actually hold things in.
         found_user = bool(res is None or getattr(res, "aimed", False)
                           or getattr(res, "reason", "") != "subject not found")
+        continue_interaction = getattr(self._agent, "supports_look_continuation", False) is True
         ack: dict[str, Any] = {"result": "frame incoming; wait for the image"}
+        if continue_interaction:
+            ack["result"] = "Captured image attached; answer using this image."
         if not found_user:
             ack["found_user"] = False
             ack["note"] = (
@@ -1872,11 +1876,13 @@ class RealtimeOrchestrator:
                         call_id=output.call_id,
                         output=json.dumps(ack),
                         trigger_response=True,
+                        image=frame if continue_interaction else None,
                     )
                 ]
             )
-        with look_debug.stage("send_image"):
-            self._agent.send([ImageInput(image=frame)])
+        if not continue_interaction:
+            with look_debug.stage("send_image"):
+                self._agent.send([ImageInput(image=frame)])
         self._looked_this_turn = True
         # Stamp the SEND, not the call entry. `now` is taken before the aim, so
         # a 3s aim made the guard below expire 3s early — the replay landed at
@@ -1906,7 +1912,6 @@ class RealtimeOrchestrator:
                 state.realtime_look_monitor_path = persist_for_monitor(saved_path)
             except Exception as e:
                 logger.debug("[realtime] look: monitor copy skipped: %s", e)
-        continue_interaction = getattr(self._agent, "supports_look_continuation", False) is True
         logger.info(
             "[realtime] look: captured frame %s in %.0fms → %s — %s",
             getattr(frame, "shape", "?"),
