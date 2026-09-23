@@ -338,7 +338,7 @@ root; dynamic templates, custom frontmatter controls, conflicting project skill
 roots and unsupported native policy settings defer to native discovery. They
 recheck eligibility and content after inference. System/slash/attachment turns
 keep their existing route. All new non-Hermes integrations are **disabled by
-default** pending native validation; Hermes is unchanged. Each new runtime owns a Go build switch `const jevEnabled = false`: bridges use `gatewayd/jev.go`, PicoClaw uses `jev_hook.go`, and OpenClaw uses `jev_plugin.go`. Go reconciles native plugin/hook registration from that switch during onboarding. Enabling requires changing the switch, rebuilding and restarting through runtime management; env/config is not a replacement for the build switch. `JEV_CONFIG_PATH` selects the bridge OS config file.
+default** pending native validation; Hermes is unchanged. Each new runtime owns a Go build switch `const jevEnabled = false`: bridges use `gatewayd/jev.go`, PicoClaw uses `jev_hook.go`, and OpenClaw uses `jev_plugin.go`. When disabled, bridges construct no selector; native onboarding installs no assets and creates no Jev registration. If an older Jev registration exists, Go only disables that registration and preserves unrelated settings. Disabled integrations do not read skills, call the provider, or add Jev content to requests. Enabling requires changing the switch, rebuilding and restarting through runtime management; env/config is not a replacement for the build switch. `JEV_CONFIG_PATH` selects the bridge OS config file.
 
 Bind a result to the originating request, preserve source/session identity, and
 reuse it only for a retry of that same request. Never persist a selected skill

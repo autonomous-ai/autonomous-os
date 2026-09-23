@@ -29,6 +29,9 @@ func (s *OpenclawService) ensureJevPlugin() (bool, error) {
 }
 
 func syncJevPlugin(home, configPath string) (bool, error) {
+	if !jevEnabled {
+		return disableExistingJevPlugin(home)
+	}
 	if !filepath.IsAbs(configPath) {
 		return false, fmt.Errorf("Jev OS config path must be absolute")
 	}
@@ -149,4 +152,44 @@ func stripJevPreload(message string) string {
 		return message
 	}
 	return message[len(start)+i+len(end):]
+}
+
+// Disabled builds install nothing. Only retire a registration from an older build.
+func disableExistingJevPlugin(home string) (bool, error) {
+	file := filepath.Join(home, "openclaw.json")
+	raw, err := os.ReadFile(file)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read existing Jev registration: %w", err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return false, fmt.Errorf("parse existing Jev registration: %w", err)
+	}
+	plugins, _ := cfg["plugins"].(map[string]any)
+	entries, _ := plugins["entries"].(map[string]any)
+	entry, _ := entries[jevPluginID].(map[string]any)
+	if entry == nil {
+		return false, nil
+	}
+	pluginConfig, _ := entry["config"].(map[string]any)
+	changed := entry["enabled"] != false
+	entry["enabled"] = false
+	if pluginConfig != nil && pluginConfig["enabled"] != false {
+		pluginConfig["enabled"] = false
+		changed = true
+	}
+	if !changed {
+		return false, nil
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return false, fmt.Errorf("marshal disabled Jev registration: %w", err)
+	}
+	if err := atomicWriteFile(file, data, 0600); err != nil {
+		return false, fmt.Errorf("disable existing Jev registration: %w", err)
+	}
+	return true, chownRuntimeUserIfRoot(file, openclawRuntimeUser)
 }

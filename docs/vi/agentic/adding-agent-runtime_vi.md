@@ -328,7 +328,7 @@ Adapter Go chỉ nạp skill tĩnh đơn giản từ thư mục cài đặt củ
 native chưa hỗ trợ đều chuyển về tìm skill native. Sau inference, adapter kiểm
 tra lại điều kiện và nội dung skill. Lượt system/slash/attachments giữ đường cũ.
 Các tích hợp mới ngoài Hermes đều **mặc định tắt** trong khi chờ kiểm chứng native;
-Hermes giữ nguyên. Mỗi runtime mới có cờ build Go `const jevEnabled = false`: bridge dùng `gatewayd/jev.go`, PicoClaw dùng `jev_hook.go`, OpenClaw dùng `jev_plugin.go`. Go ghi cờ vào đăng ký plugin/hook native khi onboarding. Muốn bật phải đổi cờ, build và restart qua luồng quản lý runtime; env/config không thay thế cờ build. `JEV_CONFIG_PATH` chọn file cấu hình OS của bridge.
+Hermes giữ nguyên. Mỗi runtime mới có cờ build Go `const jevEnabled = false`: bridge dùng `gatewayd/jev.go`, PicoClaw dùng `jev_hook.go`, OpenClaw dùng `jev_plugin.go`. Khi tắt, bridge không tạo selector; onboarding native không cài asset hay tạo đăng ký Jev mới. Nếu có đăng ký Jev cũ, Go chỉ tắt đăng ký đó; các cấu hình khác được giữ nguyên. Không đọc skill, gọi provider hay thêm nội dung Jev vào yêu cầu khi tắt. Muốn bật phải đổi cờ, build và restart qua luồng quản lý runtime; env/config không thay thế cờ build. `JEV_CONFIG_PATH` chọn file cấu hình OS của bridge.
 
 Gắn kết quả với đúng yêu cầu, giữ source/session và chỉ tái sử dụng khi retry
 chính yêu cầu đó. Không ghi skill đã chọn vào AGENTS.md hay persona. Lịch sử

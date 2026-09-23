@@ -1,9 +1,9 @@
 # Nạp trước skill bằng Jev trong OpenClaw
 
-Onboarding của OS cài plugin native `autonomous-jev` tại
+Khi bật, onboarding của OS cài plugin native `autonomous-jev` tại
 `<OpenclawConfigDir>/extensions/autonomous-jev`. Plugin đăng ký hook
 `before_prompt_build`, dùng cho cả yêu cầu qua OS và các kênh do OpenClaw xử lý
-trực tiếp. **Mặc định tắt** bằng `const jevEnabled = false` trong `runtimes/openclaw/jev_plugin.go`. Go ghi cờ này vào `plugins.entries.autonomous-jev.enabled` và `config.enabled` khi onboarding, kể cả config cũ đã bật; các cấu hình khác được giữ nguyên. Muốn bật sau kiểm chứng, đổi cờ Go, build và restart qua luồng quản lý runtime.
+trực tiếp. **Mặc định tắt** bằng `const jevEnabled = false` trong `runtimes/openclaw/jev_plugin.go`. Khi tắt, bridge không tạo selector; onboarding native không cài asset hay tạo đăng ký Jev mới. Nếu có đăng ký Jev cũ, Go chỉ tắt đăng ký đó; các cấu hình khác được giữ nguyên. Không đọc skill, gọi provider hay thêm nội dung Jev vào yêu cầu khi tắt. Muốn bật sau kiểm chứng, đổi cờ Go, build và restart qua luồng quản lý runtime.
 
 Nếu đã cấu hình `plugins.allow`, thêm `autonomous-jev` vào danh sách đó.
 `plugins.deny`, trạng thái tắt plugin và `plugins.enabled: false` vẫn được tôn trọng.

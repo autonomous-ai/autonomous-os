@@ -16,6 +16,9 @@ import (
 const jevEnabled = false
 
 func newPreloader(cfg Config) func(context.Context, string) string {
+	if !cfg.JevEnabled {
+		return nil
+	}
 	router := jev.New(jev.Options{Runtime: "opencode", ConfigPath: cfg.JevConfigPath,
 		SkillsDir: filepath.Join(cfg.Home, ".config", "opencode", "skills"), Disabled: !cfg.JevEnabled,
 		Eligible: func(_ string, _ map[string]any) bool { return nativePreloadAllowed(cfg) }})
@@ -25,7 +28,7 @@ func newPreloader(cfg Config) func(context.Context, string) string {
 // prepareSkill makes a turn-local copy. Retries reuse the prepared payload;
 // neither the original request nor a persistent system prompt is rewritten.
 func (s *Server) prepareSkill(ctx context.Context, p turnPayload) turnPayload {
-	if p.preloadChecked {
+	if s.preloadContext == nil || p.preloadChecked {
 		return p
 	}
 	p.preloadChecked = true

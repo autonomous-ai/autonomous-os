@@ -16,7 +16,7 @@ func TestJevPluginSyncPreservesOptOutAndIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	changed, err := syncJevPlugin(home, "/private/config.json")
-	if err != nil || !changed {
+	if err != nil || changed {
 		t.Fatalf("changed=%v err=%v", changed, err)
 	}
 	if changed, err = syncJevPlugin(home, "/private/config.json"); err != nil || changed {
@@ -26,9 +26,8 @@ func TestJevPluginSyncPreservesOptOutAndIsIdempotent(t *testing.T) {
 	if string(got) != string(original) {
 		t.Fatal("operator config changed")
 	}
-	pointer, _ := os.ReadFile(filepath.Join(home, "extensions", jevPluginID, "os-config-path.json"))
-	if string(pointer) != `{"config_path":"/private/config.json"}` {
-		t.Fatalf("pointer=%s", pointer)
+	if _, err := os.Stat(filepath.Join(home, "extensions")); !os.IsNotExist(err) {
+		t.Fatal("disabled build installed plugin assets", err)
 	}
 }
 
@@ -48,7 +47,7 @@ func TestJevPreloadRunCorrelation(t *testing.T) {
 }
 
 func TestJevPluginBuildSwitchOverridesConfig(t *testing.T) {
-	for _, raw := range []string{`{"keep":true}`, `{"keep":true,"plugins":{"entries":{"autonomous-jev":{"enabled":true,"config":{"enabled":true,"keep":true}}}}}`} {
+	for _, raw := range []string{`{"keep":true,"plugins":{"entries":{"autonomous-jev":{"enabled":true,"config":{"enabled":true,"keep":true}}}}}`} {
 		home := t.TempDir()
 		file := filepath.Join(home, "openclaw.json")
 		if err := os.WriteFile(file, []byte(raw), 0600); err != nil {
@@ -71,6 +70,39 @@ func TestJevPluginBuildSwitchOverridesConfig(t *testing.T) {
 		}
 		if changed, err := syncJevPlugin(home, "/private/config.json"); err != nil || changed {
 			t.Fatalf("second changed=%v err=%v", changed, err)
+		}
+	}
+}
+
+func TestJevDisabledFreshInstallIsNoop(t *testing.T) {
+	for _, raw := range []string{"", `{"keep":true}`, `{"plugins":{"entries":{"other":{"enabled":true}}}}`} {
+		home := t.TempDir()
+		file := filepath.Join(home, "openclaw.json")
+		if raw != "" {
+			if err := os.WriteFile(file, []byte(raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// An invalid provider path must not matter while disabled.
+		if changed, err := syncJevPlugin(home, "relative-invalid"); err != nil || changed {
+			t.Fatalf("changed=%v err=%v", changed, err)
+		}
+		entries, err := os.ReadDir(home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := 0
+		if raw != "" {
+			want = 1
+		}
+		if len(entries) != want {
+			t.Fatal("disabled build created assets", entries)
+		}
+		if raw != "" {
+			data, _ := os.ReadFile(file)
+			if string(data) != raw {
+				t.Fatal("disabled build changed fresh config")
+			}
 		}
 	}
 }

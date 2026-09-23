@@ -1,9 +1,9 @@
 # OpenClaw Jev skill preloading
 
-OS onboarding installs the native `autonomous-jev` plugin under
+When enabled, OS onboarding installs the native `autonomous-jev` plugin under
 `<OpenclawConfigDir>/extensions/autonomous-jev`. It registers
 `before_prompt_build`, covering both OS-dispatched requests and channels handled
-directly by OpenClaw. **Disabled by default** by `const jevEnabled = false` in `runtimes/openclaw/jev_plugin.go`. Go writes the switch to `plugins.entries.autonomous-jev.enabled` and `config.enabled` during onboarding, including previously enabled configs; unrelated settings are preserved. Enabling after validation requires changing the Go switch, rebuilding and restarting through runtime management.
+directly by OpenClaw. **Disabled by default** by `const jevEnabled = false` in `runtimes/openclaw/jev_plugin.go`. When disabled, bridges construct no selector; native onboarding installs no assets and creates no Jev registration. If an older Jev registration exists, Go only disables that registration and preserves unrelated settings. Disabled integrations do not read skills, call the provider, or add Jev content to requests. Enabling after validation requires changing the Go switch, rebuilding and restarting through runtime management.
 
 If `plugins.allow` is configured, include `autonomous-jev` in that list too.
 `plugins.deny`, plugin disables and `plugins.enabled: false` remain authoritative.

@@ -158,3 +158,24 @@ func TestJevBuildSwitchIgnoresEnvironment(t *testing.T) {
 		})
 	}
 }
+
+// A disabled build must not construct a selector or even alter turn bookkeeping.
+func TestJevDisabledIsNoop(t *testing.T) {
+	t.Setenv("JEV_SKILL_PRELOAD", "1")
+	cfg := configFromEnv()
+	if cfg.JevEnabled {
+		t.Fatal("unvalidated runtime is enabled")
+	}
+	cfg.JevConfigPath = "/nonexistent/jev-config.json"
+	s := New(cfg, nil)
+	if s.preloadContext != nil {
+		t.Fatal("disabled runtime constructed a selector")
+	}
+	for _, content := range []string{"read my calendar", "[voice-instruction] read my calendar [transcript] read my calendar", "brighter"} {
+		original := turnPayload{Content: content, Source: "user"}
+		got := s.prepareSkill(nil, original)
+		if got.Content != original.Content || got.Source != original.Source || got.preload != "" || got.preloadChecked || got.promptWithSkill() != original.Content {
+			t.Fatalf("disabled turn changed: %#v", got)
+		}
+	}
+}

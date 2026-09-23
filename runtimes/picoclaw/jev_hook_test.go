@@ -7,29 +7,63 @@ import (
 	"testing"
 )
 
-func TestJevHookReconcile(t *testing.T) {
+func TestJevDisabledFreshInstallIsNoop(t *testing.T) {
+	for _, raw := range []string{"", `{"unrelated":true}`, `{"hooks":{"enabled":true,"processes":{"observer":{"enabled":true}}}}`} {
+		dir := t.TempDir()
+		file := filepath.Join(dir, "config.json")
+		if raw != "" {
+			if err := os.WriteFile(file, []byte(raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if changed, err := syncJevHook(file, "relative-invalid", filepath.Join(dir, "hooks", "jev")); err != nil || changed {
+			t.Fatalf("changed=%v err=%v", changed, err)
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := 0
+		if raw != "" {
+			want = 1
+		}
+		if len(entries) != want {
+			t.Fatal("disabled build created assets", entries)
+		}
+		if raw != "" {
+			data, _ := os.ReadFile(file)
+			if string(data) != raw {
+				t.Fatal("disabled build changed fresh config")
+			}
+		}
+	}
+}
+
+func TestJevDisabledRetiresExistingHook(t *testing.T) {
 	dir := t.TempDir()
-	cfg := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(cfg, []byte(`{"unrelated":true}`), 0600); err != nil {
+	file := filepath.Join(dir, "config.json")
+	raw := `{"hooks":{"enabled":true,"processes":{"observer":{"enabled":true},"jev":{"enabled":true,"command":["python3","hook.py"]}}}}`
+	if err := os.WriteFile(file, []byte(raw), 0600); err != nil {
 		t.Fatal(err)
 	}
 	hookDir := filepath.Join(dir, "hooks", "jev")
-	changed, err := syncJevHook(cfg, filepath.Join(dir, "os.json"), hookDir)
-	if err != nil || !changed {
-		t.Fatalf("first: %v %v", changed, err)
+	if changed, err := syncJevHook(file, "relative-invalid", hookDir); err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
 	}
-	changed, err = syncJevHook(cfg, filepath.Join(dir, "os.json"), hookDir)
-	if err != nil || changed {
-		t.Fatalf("second: %v %v", changed, err)
-	}
-	raw, err := os.ReadFile(filepath.Join(hookDir, "os-config-path.json"))
+	cfg, err := readPicoclawConfig(file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var pointer map[string]string
-	json.Unmarshal(raw, &pointer)
-	if len(pointer) != 1 || pointer["config_path"] != filepath.Join(dir, "os.json") {
-		t.Fatal(pointer)
+	hooks := cfg["hooks"].(map[string]any)
+	processes := hooks["processes"].(map[string]any)
+	if hooks["enabled"] != true || processes["observer"].(map[string]any)["enabled"] != true || processes["jev"].(map[string]any)["enabled"] != false {
+		t.Fatal(cfg)
+	}
+	if changed, err := syncJevHook(file, "relative-invalid", hookDir); err != nil || changed {
+		t.Fatalf("second changed=%v err=%v", changed, err)
+	}
+	if _, err := os.Stat(hookDir); !os.IsNotExist(err) {
+		t.Fatal("disabled build installed hook", err)
 	}
 }
 
