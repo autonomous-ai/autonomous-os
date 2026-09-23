@@ -1274,3 +1274,7 @@ Khi nhận history realtime, sensing trả ID hội thoại gốc (`device-realt
 Metadata reply-routing Harness trên request sensing voice/chat chỉ được chèn khi transport Harness đã pair và đang kết nối. Request lúc ngắt kết nối bỏ cả reply marker lẫn hint routing/follow-up riêng của Harness; routing voice và follow-up thông thường giữ nguyên.
 
 Payload sensing HAL nhận trường tùy chọn `voice_turn_type` (`voice`, `voice_command`, `voice_followup`) cho debug voice. OS chỉ ghi giá trị hợp lệ vào Flow Monitor; `type` vẫn quyết định authorization, routing, queue, đồng bộ history và cancel loa.
+
+## Chuẩn bị agent Harness Store
+
+`POST /api/harness/request` chỉ dành loopback nay chuyển các thao tác Store v1 đã thương lượng (`store.list`, `store.inspect`, `agent.prepare`, `operation.get`) qua kết nối E2EE trực tiếp hiện có. Không mở endpoint public mới. Cần đủ bốn capability; `agent.prepare` nhắm máy đã pair mà chưa cần agent ID. `PreparationUnknownError` hướng dẫn retry cùng key/tham số hoặc poll operation đã lưu, khác delivery task chưa rõ và `receipt.get`. Progress preparation dùng response metadata local được bỏ trước khi truyền; không chiếm phản hồi cuối. Intent/task bền vững thuộc journal riêng của skill. Xem [Harness Store](harness-store_vi.md) về lệnh, nguồn schema, recovery và kiểm chứng mock so với thực.

@@ -113,6 +113,11 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 				reportHarnessDispatchError(reply.RunID, "", err)
 				s.forgetHarnessReply(agentID, reply.RunID)
 			}
+			var preparationUnknown *harness.PreparationUnknownError
+			if errors.As(err, &preparationUnknown) {
+				c.JSON(http.StatusBadGateway, serializers.ResponseError("Harness preparation is unknown; retry the same preparation key and parameters or poll operation.get; do not use receipt.get or create a new key"))
+				return
+			}
 			var uncertain *harness.DeliveryUnknownError
 			if errors.As(err, &uncertain) {
 				c.JSON(http.StatusBadGateway, serializers.ResponseError("Harness delivery is unknown; inspect receipt before sending again"))
@@ -124,6 +129,7 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 		if tracksReply {
 			reportHarnessReceipt(reply.RunID, result)
 		}
+		s.observeHarnessPreparation(kind, reply, result)
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(result))
 	})
 }

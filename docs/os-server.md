@@ -1290,3 +1290,7 @@ For accepted realtime history, the sensing response returns the original exchang
 Harness reply-routing metadata on sensing voice/chat requests is conditional on the current paired Harness transport being connected. Disconnected requests omit both the reply marker and Harness-specific routing/follow-up hints; ordinary voice and follow-up routing remains unchanged.
 
 The HAL sensing payload accepts optional `voice_turn_type` (`voice`, `voice_command`, `voice_followup`) for voice diagnostics. OS copies validated values into Flow Monitor evidence only; `type` remains the authority for authorization, routing, queueing, history synchronization and speaker cancellation.
+
+## Harness Store preparation
+
+The loopback-only `POST /api/harness/request` now forwards negotiated Store v1 operations (`store.list`, `store.inspect`, `agent.prepare`, `operation.get`) over the existing direct E2EE connection. No new public endpoint is exposed. All four capabilities are required; `agent.prepare` addresses the paired machine without a pre-existing agent ID. A `PreparationUnknownError` explains same-key/parameter retry or retained-operation polling, distinct from uncertain task delivery and `receipt.get`. Preparation progress uses local response metadata stripped before transport; it does not claim the final reply. Durable intent/task state belongs to the skill's private journal. See [Harness Store](harness-store.md) for commands, schema provenance, recovery and mock-versus-live validation.
