@@ -107,8 +107,14 @@ cho phép tính thời gian thu nhận liên tục sẵn có vào warm-up khi ch
 vẫn loại component không hợp lệ/stale.
 Skill `environment` diễn giải
 số đo và tham khảo `wellbeing` để gợi ý phù hợp. Thu nhận phần cứng tách biệt
-chính sách thay đổi ở OS; tính năng không bật capability đang comment hay SEN55/SCD41/SEN63C
-đang tắt của Lamp. Xem [cảm biến môi trường Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md#chính-sách-thay-đổi-của-os-và-api-cho-agent)
+chính sách thay đổi ở OS; policy không bật phần cứng. Chỉ hardware profile
+`pro`, `pro-respeaker-lite` và `pro-xvf3800` của Lamp khai báo `environment` tùy chọn
+(`required: false`) và bật SEN63C trên `orangepi_sun60`, bus `0`. Standard giữ
+capability ở dạng comment và tắt SEN63C: không thu nhận, ghi clock SEN63C,
+phát event môi trường hay đủ capability để chọn skill environment. SEN55/SCD41
+và board thiếu entry tương ứng vẫn tắt, kể cả Raspberry Pi trên Pro.
+Thiếu SEN63C trên Pro thì báo lỗi và thử lại, không chặn khởi động. Tắt
+SEN63C trước khi bật SEN55 + SCD41 thay thế. Xem [cảm biến môi trường Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md#chính-sách-thay-đổi-của-os-và-api-cho-agent)
 để biết mặc định, validation, payload và use case.
 
 ### Device Setup
@@ -893,11 +899,13 @@ Chitchat **tắt khi realtime voice agent đang bật** — model nhận mọi l
 
 ### Fallback intent Jev
 
-Jev **mặc định bật**. Với event `voice_command`, `voice_followup` và `voice`
-os-server nhận được khi `local_intent` bật, rule local vẫn chạy trước. Chỉ yêu
-cầu không khớp mới có thể gọi endpoint Decisions BFF với
-`typesafe/jev-1.13`; chat gõ và routing bên trong Live không đi qua bước này.
-Cách khớp rule local và những giới hạn hiện có không thay đổi.
+Jev **mặc định bật**. Khi `local_intent` bật, các event đủ điều kiện
+`voice_command`, `voice_followup`, `voice` và `web_chat` / `mqtt_chat` chỉ có text
+mà os-server nhận được sẽ thử rule local trước. Chỉ yêu cầu không khớp mới có
+thể gọi endpoint Decisions BFF với `typesafe/jev-1.13`. Follow-up phụ thuộc ngữ
+cảnh được chuyển tới main runtime trước cả hai bộ phân loại. Yêu cầu có
+attachments, Harness-only voice và lượt được realtime agent trả lời trực tiếp
+giữ các đường xử lý riêng.
 
 Cấu hình tùy chọn trong `config/config.json`:
 

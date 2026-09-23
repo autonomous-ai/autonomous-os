@@ -1,6 +1,7 @@
 """Gemini Live voice agent implementation — queue-based threading."""
 
 import asyncio
+import base64
 import json
 import logging
 import queue
@@ -147,6 +148,7 @@ class GeminiLiveAgent(VoiceAgentBase):
         # replaced before another turn rather than locally clearing the call.
         self._pending_tool_calls: set[str] = set()
         self._pending_tool_names: dict[str, str] = {}
+        self._cancelled_look_calls: set[str] = set()
         self.supports_look_continuation = False
         self._pending_image = None
         self._requires_fresh_session: bool = False
@@ -434,9 +436,17 @@ class GeminiLiveAgent(VoiceAgentBase):
         """True while Gemini is waiting on a tool result and rejects input."""
         return bool(self._pending_tool_calls)
 
+    def _invalidate_look_images(self, call_ids) -> None:
+        """Prevent an in-flight capture from answering a cancelled question."""
+        if not hasattr(self, "_cancelled_look_calls"):
+            self._cancelled_look_calls = set()
+        names = getattr(self, "_pending_tool_names", {})
+        self._cancelled_look_calls.update(cid for cid in call_ids if names.get(cid) == "look")
+
     def _clear_pending_tool_calls(self) -> None:
         self._pending_tool_calls.clear()
         getattr(self, "_pending_tool_names", {}).clear()
+        getattr(self, "_cancelled_look_calls", set()).clear()
         self._pending_image = None
         if self._gated_audio_frames:
             logger.debug(
@@ -544,6 +554,38 @@ class GeminiLiveAgent(VoiceAgentBase):
                 parsed = {"result": _input.output}
             if not isinstance(parsed, dict):
                 parsed = {"result": parsed}
+            if _input.image is not None:
+                # Keep a captured frame attached to its original async look.
+                # A separate realtime video frame after activityEnd may only
+                # enter the next user turn, leaving this tool without an image.
+                if (not self.supports_look_continuation
+                        or _input.call_id not in self._pending_tool_calls
+                        or getattr(self, "_pending_tool_names", {}).get(_input.call_id) != "look"
+                        or _input.call_id in getattr(self, "_cancelled_look_calls", set())):
+                    logger.info("[realtime] Ignoring stale or unsupported look image result")
+                    return
+                ok, encoded = cv2.imencode(".jpg", _input.image)
+                if not ok:
+                    raise ValueError("Could not encode look image")
+                # google-genai 2.12.1 send_tool_response leaves bytes in parts
+                # unencoded and raises TypeError. Use the documented wire shape
+                # only for this multimodal result; other ACKs retain the SDK.
+                response = {
+                    "id": _input.call_id, "name": "look", "response": parsed,
+                    "parts": [{"inlineData": {
+                        "mimeType": "image/jpeg",
+                        "data": base64.b64encode(encoded.tobytes()).decode("ascii"),
+                    }}],
+                }
+                target_session = self._session
+                await target_session._ws.send(json.dumps({
+                    "toolResponse": {"functionResponses": [response]},
+                }))
+                logger.info("[realtime] Sent look image in tool response (call_id=%s bytes=%d)",
+                            _input.call_id, len(encoded))
+                if self._session is target_session:
+                    await self._finish_tool_ack(_input.call_id)
+                return
             # NON_BLOCKING declarations do not imply scheduling support. The
             # deployed 3.8 extended-thinking backend closes with 1007 when a
             # FunctionResponse includes scheduling (device-observed 2026-09-21).
@@ -562,6 +604,7 @@ class GeminiLiveAgent(VoiceAgentBase):
     async def _finish_tool_ack(self, call_id: str) -> None:
         self._pending_tool_calls.discard(call_id)
         getattr(self, "_pending_tool_names", {}).pop(call_id, None)
+        getattr(self, "_cancelled_look_calls", set()).discard(call_id)
         if not self._pending_tool_calls:
             pending_image = getattr(self, "_pending_image", None)
             self._clear_pending_tool_calls()
@@ -1031,6 +1074,9 @@ class GeminiLiveAgent(VoiceAgentBase):
             # is indistinguishable from one the model abandoned. See
             # RealtimeVoiceAgent.note_server_activity.
             self.note_server_activity()
+            cancellation = getattr(message, "tool_call_cancellation", None)
+            if cancellation is not None:
+                self._invalidate_look_images(getattr(cancellation, "ids", ()) or ())
             activity = getattr(message, "voice_activity", None)
             activity_type = getattr(activity, "voice_activity_type", None)
             if activity_type == "ACTIVITY_START":
@@ -1375,6 +1421,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                     )
 
                 if content.interrupted:
+                    self._invalidate_look_images(self._pending_tool_calls)
                     # A late sibling ACK must not flush the old frame into the
                     # new user's interaction. Tool ids still need normal ACKs.
                     self._pending_image = None

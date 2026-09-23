@@ -1181,3 +1181,19 @@ def test_first_status_preserves_already_buffered_answer_prefix(monkeypatch):
              if isinstance(e, OutputEvent) and isinstance(e.output, TextOutput)]
     assert texts == ["Let me see.", "Your shirt ", "is yellow."]
     assert not events[-1].fallback_to_main
+
+
+@pytest.mark.parametrize("interrupt", [False, True])
+def test_receiver_invalidates_cancelled_look_image(interrupt):
+    cancelled = _terminal()
+    cancelled.server_content.turn_complete = False
+    if interrupt:
+        cancelled.server_content.interrupted = True
+    else:
+        cancelled.tool_call_cancellation = SimpleNamespace(ids=["look-1"])
+    agent = _agent([_status("IN_PROGRESS"), cancelled, _status("IDLE")])
+    agent._pending_tool_calls = {"look-1", "emotion-1"}
+    agent._pending_tool_names = {"look-1": "look", "emotion-1": "express_emotion"}
+    _receive(agent)
+    assert agent._cancelled_look_calls == {"look-1"}
+    assert agent.requires_fresh_session

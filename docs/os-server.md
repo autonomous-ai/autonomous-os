@@ -110,7 +110,14 @@ startup paths while retaining change detection. HAL's optional per-component
 warm-up after an OS-only restart; invalid/stale components remain excluded.
 The `environment` skill interprets measurements and consults `wellbeing` for
 proportionate advice. Hardware acquisition and OS change policy are separate;
-this feature does not enable Lamp's commented capability or disabled SEN55/SCD41/SEN63C.
+the policy does not enable hardware. Only Lamp hardware profiles `pro`, `pro-respeaker-lite` and
+`pro-xvf3800` declare optional `environment` (`required: false`) and enable
+SEN63C on `orangepi_sun60`, bus `0`. Standard keeps the capability commented
+and SEN63C disabled: no acquisition, SEN63C clock writes, environment events
+or capability-based eligibility for the environment skill. SEN55/SCD41 and
+boards without matching entries remain disabled, including Raspberry Pi on Pro.
+Missing SEN63C on Pro reports an error and retries without blocking startup.
+Disable SEN63C before enabling the alternative SEN55 + SCD41 components.
 See [Lamp environment sensing](../robots/lamp/docs/environment-sensing.md#os-change-policy-and-agent-access)
 for defaults, validation, payloads and use cases.
 
@@ -909,11 +916,13 @@ Chitchat is **off while the realtime voice agent is enabled** — the model rece
 
 ### Jev intent fallback
 
-Jev is **enabled by default**. For `voice_command`, `voice_followup`, and `voice`
-events received by os-server with `local_intent` enabled, local rules still run
-first. Only an unmatched request may call the BFF Decisions endpoint
-with `typesafe/jev-1.13`; typed chat and built-in Live routing are outside this
-path. Existing local-rule matching and its limitations remain unchanged.
+Jev is **enabled by default**. With `local_intent` enabled, eligible
+`voice_command`, `voice_followup`, `voice`, and text-only `web_chat` / `mqtt_chat`
+events received by os-server try local rules first. Only an unmatched request may
+call the BFF Decisions endpoint with `typesafe/jev-1.13`. Context-dependent
+follow-ups defer to the main runtime before either classifier. Requests with
+attachments, Harness-only voice, and turns answered directly inside the realtime
+agent retain their separate paths.
 
 The optional configuration in `config/config.json` is:
 
