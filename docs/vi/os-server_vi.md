@@ -1376,3 +1376,10 @@ RGB `[48,39,30] → [24,19,15] → [12,9,7]` qua chat rồi `[6,4,3]` qua voice;
 âm lượng `50 → 25 → 12` qua chat rồi `6` qua voice. Cả hai nguồn chọn reading
 cho “need focus to read book”. TTS tới HAL nhưng bị chặn vì loa mute; chưa
 kiểm chứng mic/STT hay âm thanh nghe được. Phản hồi/session MQTT qua test tự động.
+
+Fast path chuẩn cũng nhận wrapper bắt đầu bằng `[voice-instruction]`
+(có thể có `[user]`/`[ambient]` phía trước). Chỉ xét instruction có thẩm quyền;
+instruction phủ định, có điều kiện, rỗng hoặc sai cấu trúc không lấy lệnh từ
+`[transcript]` để chạy thay. Alias trọn câu “turn off/on the lights” và
+“lights off/on” ánh xạ tới lệnh đèn hiện có. Prefix lạ và điều kiện của
+instruction được giữ nguyên để chuyển semantic/agent.

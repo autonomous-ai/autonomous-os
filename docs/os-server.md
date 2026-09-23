@@ -1400,3 +1400,10 @@ through voice; volume `50 → 25 → 12` in chat, then `6` through voice.
 Both sources selected reading for “need focus to read book”. Voice TTS reached
 HAL but was suppressed by speaker mute; microphone/STT and audible playback
 were not verified. MQTT reply/session handling passed automated tests.
+
+The canonical fast path also accepts anchored `[voice-instruction]` envelopes
+(with optional leading `[user]`/`[ambient]`). Only the authoritative instruction
+is matched; a negated, contextual, empty or malformed instruction never falls
+back to a command in `[transcript]`. Complete plural aliases “turn off/on the
+lights” and “lights off/on” map to the existing light commands. Unknown prefixes
+and instruction constraints remain intact and defer to semantic/agent handling.

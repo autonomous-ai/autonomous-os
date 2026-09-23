@@ -52,3 +52,48 @@ func TestCanonicalCommandsStayLocal(t *testing.T) {
 		})
 	}
 }
+
+func TestVoiceEnvelopeCanonicalInstruction(t *testing.T) {
+	for _, text := range []string{
+		"[voice-instruction] Turn off the lights.\n[transcript] Turn off the lights.",
+		"[user] [voice-instruction] Turn off the lights. [transcript] Turn off the lights. [harness-reply run_id=device-chat-7-1790130821196 channel=voice]",
+		"[voice-instruction] Turn off the lights. [transcript] Turn on the light.",
+		"Turn off the lights.",
+	} {
+		t.Run(text, func(t *testing.T) {
+			calls := 0
+			routeIntentHAL(t, func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if r.Method != "POST" || r.URL.Path != "/led/off" {
+					t.Errorf("unexpected HAL action %s %s", r.Method, r.URL.Path)
+				}
+			})
+			resolver := fakeJevSelectionResolver(func([]jev.Candidate) jev.Selection {
+				t.Fatal("canonical instruction contacted Jev")
+				return jev.Selection{}
+			})
+			got := MatchWithFallback(context.Background(), text, resolver, jev.Options{Enabled: true, APIKey: "test", Endpoint: "https://example.test"})
+			if got == nil || got.Rule != "led_off" || got.Source != "" || got.ExecutionFailed || calls != 1 {
+				t.Fatalf("got %+v calls=%d", got, calls)
+			}
+		})
+	}
+}
+
+func TestVoiceEnvelopeCannotDiscardInstructionConstraints(t *testing.T) {
+	for _, text := range []string{
+		"[user] [voice-instruction] Do not turn off the lights. [transcript] Turn off the lights.",
+		"[voice-instruction] Turn off the lights tomorrow. [transcript] Turn off the lights.",
+		"[voice-instruction] Turn off the lights in the bedroom. [transcript] Turn off the lights.",
+		"[voice-instruction] [transcript] Turn off the lights.",
+		"Do not execute: [voice-instruction] Turn off the lights. [transcript] Turn off the lights.",
+		"[voice-instruction] Do not execute [voice-instruction] Turn off the lights. [transcript] Turn off the lights.",
+	} {
+		t.Run(text, func(t *testing.T) {
+			routeIntentHAL(t, func(w http.ResponseWriter, r *http.Request) { t.Errorf("unexpected HAL call %s", r.URL.Path) })
+			if got := matchCanonical(text); got != nil {
+				t.Fatalf("unsafe local match: %+v", got)
+			}
+		})
+	}
+}
