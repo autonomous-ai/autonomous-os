@@ -218,7 +218,7 @@ func ProvideSensingHandler(gw domain.AgentGateway, bus *monitor.Bus, cfg *config
 }
 
 // PostEvent receives a sensing event and sends it to the agent as a chat message.
-// Voice events are first checked against local intent rules for instant response.
+// Voice and text-only chat events first try local intent rules and Jev.
 func (h *SensingHandler) PostEvent(c *gin.Context) {
 	var req SensingEventRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -342,12 +342,14 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		return
 	}
 
-	// Voice commands: try local intent matching first for instant response
-	if (req.Type == "voice" || req.Type == "voice_command" || req.Type == "voice_followup") && h.config.LocalIntentEnabled() {
+	// Keep attachments on the agent path so intent matching cannot discard them.
+	isVoice := req.Type == "voice" || req.Type == "voice_command" || req.Type == "voice_followup"
+	isChat := sensingmsg.IsChat(req.Type)
+	if (isVoice || isChat) && len(req.Images) == 0 && len(req.Files) == 0 && h.config.LocalIntentEnabled() {
 		if result := h.matchVoiceIntent(c.Request.Context(), req.Message); result != nil {
 			// Generate a dedicated local-intent trace ID so this turn doesn't
 			// share the global trace of an in-flight agent turn.
-			localRunID := fmt.Sprintf("local-intent-%d", time.Now().UnixMilli())
+			localRunID := fmt.Sprintf("local-intent-%d", time.Now().UnixNano())
 			telemetry.ReportTaskStarted(req.Type, req.InteractionID, localRunID)
 			turnStart := flow.Start("sensing_input", startPayload, localRunID)
 			source := "local"
@@ -355,7 +357,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 				source = result.Source
 			}
 			flow.Log("intent_match", map[string]any{"message": req.Message, "tts": result.TTSText, "rule": result.Rule, "actions": result.Actions, "source": source}, localRunID)
-			if result.TTSText != "" {
+			if result.TTSText != "" && isVoice {
 				owner := req.InteractionID
 				go func() {
 					// Cached path: fixed phrases like "Volume up!" hit the
@@ -389,12 +391,14 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 			} else {
 				telemetry.ReportTaskExecution(localRunID, req.InteractionID, "completed", "local_intent_returned")
 			}
+			slog.Info("intent handled", "component", "sensing", "type", req.Type, "source", source, "intent", result.Rule, "run_id", localRunID)
+			flow.Log("agent_response", map[string]any{"text": result.TTSText, "source": source}, localRunID)
 			c.JSON(http.StatusOK, serializers.ResponseSuccess(map[string]string{
-				"handler":  "local",
-				"response": result.TTSText,
-				// No runId exists for a locally-handled command — say so
-				// explicitly, so HAL records "served here" instead of
-				// mistaking a missing run id for a failed dispatch.
+				"localRunId": localRunID,
+				"handler":    "local",
+				"response":   result.TTSText,
+				// Keep runId absent: web chat renders the immediate response,
+				// while MQTT correlates its final event using localRunId.
 				"handledLocally": "true",
 			}))
 			return
@@ -410,9 +414,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// suppressed) but does NOT trigger physical wake. It counts as passive for
 	// the busy-gate so it queues on agent busy instead of racing the in-flight
 	// turn (agent merges same-session messages).
-	isVoice := req.Type == "voice" || req.Type == "voice_command" || req.Type == "voice_followup"
 	isVoiceCommand := req.Type == "voice_command" || req.Type == "voice_followup"
-	isChat := sensingmsg.IsChat(req.Type)
 	// A realtime-handled turn is user-initiated by definition: the user spoke and
 	// the realtime agent ALREADY replied out loud. That exchange happens entirely
 	// in HAL and never consults this sleep flag, so the device can be "asleep"

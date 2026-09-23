@@ -241,7 +241,7 @@ Config field: `guard_mode` in `config/config.json` (bool, default `false`). The 
 | `motion.activity` | MotionPerception (while PRESENT) | No | Activity detected while user is present — emotional actions logged via Mood skill |
 
 **Processing flow:**
-1. `voice_command`, `voice_followup`, or `voice` + local intent enabled → match local rules → execute directly (~50ms); unmatched requests may use the Jev fallback described below before reaching the main runtime. `voice_followup` has the same user priority as `voice_command`; `web_chat` / `mqtt_chat` skip local intent (typed text ≠ wake-word voice).
+1. `voice_command`, `voice_followup`, or `voice` + local intent enabled → match local rules → execute directly (~50ms); unmatched requests may use the Jev fallback described below before reaching the main runtime. `voice_followup` has the same user priority as `voice_command`; Text-only `web_chat` / `mqtt_chat` also try local rules and Jev, without TTS. Requests with images or files retain the agent path. Local replies return `handler: "local"`, `response`, `handledLocally: "true"`, and `localRunId` (no agent `runId`); web chat renders the immediate reply, while MQTT uses `localRunId` for its acknowledgement and final `chat.event`.
 2. Ambient turn floor: `motion.activity`, `emotion.detected`, `speech_emotion.detected`, `sound`, `presence.away`, `light.level` are dropped when the last agent turn created by this handler (any type) was less than `sensing_turn_floor_s` seconds ago (config key, default `120`, `0` disables; guard mode bypasses). One cross-type floor on top of HAL's independent per-type gates — a burst of different event types costs at most one agent turn per window. Dropped events surface as `sensing_drop` (reason `ambient_floor`) in the Flow Monitor.
 3. No match → forward to OpenClaw via WebSocket `chat.send`
 4. If event has `images` → call `SendChatMessageWithImages` → send every attached photo with the text for AI vision analysis. A LIST, not a single field: a chat client can attach several at once and every wire format behind the gateway already carries `attachments[]`; a camera event simply sends one entry. For chat types (`web_chat` / `mqtt_chat`), each image is saved to `/tmp/web-chat-<ms>-<i>.jpg` (indexed so photos attached to the SAME turn cannot collide) and tagged `[image: <path>]` so the agent can reference it (e.g. for face enrollment). When the main model is text-only, the describe-first gate runs once PER image, **concurrently** (`safego`), and the descriptions are numbered `(image N of M)`. Concurrency is not an optimisation here: the gate runs inside the HTTP handler, so the caller's POST does not return until every describe finishes — a single describe measured 8-38 s, so two photos in series left the web chat silent for ~53 s, long enough that reloading the page (which cancels the request and loses the turn) is the natural move. Fanning out makes the wait the slowest image instead of their sum.
@@ -854,7 +854,7 @@ records for up to five seconds before cancelling any remaining delivery.
 
 ## Local Intent Matching
 
-When receiving a `voice_command`, `voice_followup`, or `voice` event, the OS server checks local intent first (~50ms):
+When receiving a text-only `voice_command`, `voice_followup`, `voice`, `web_chat`, or `mqtt_chat` event, the OS server checks local intent first (~50ms):
 
 | Command | Action |
 |---------|--------|
@@ -976,18 +976,29 @@ Jev returns a typed selection containing an intent and bounded parameters.
 Go validates the offered intent and exact parameter names/values, then converts
 accepted enum values into code-owned text for the existing rule executor.
 Neither raw user speech nor model-generated HAL payloads reach that executor.
-Existing HAL actions and safety limits remain authoritative: `dim` sets warm
-RGB `[80,60,40]`; volume actions set the configured safe maximum or **30% of that
-maximum**, not relative steps. Color stops the LED effect before setting a solid
-color. Night activates its scene and may add the sleepy expression. Stopping
-speech, stopping music and muting the speaker remain distinct actions.
-Candidate descriptions separate accepted user intent from fixed execution effects.
-Generic light requests accept the on/dim presets without naming RGB values;
+HAL safety limits remain authoritative. `dim` reads `/led/color`, halves each RGB
+channel (integer rounding), and writes `/led/solid`, then verifies the readback.
+Repeating the request dims again, and an already-dark light stays off. Effects
+and scenes become a solid color based on the reported effect base or brightest
+pixel; animation/pattern preservation is not supported. `volume_down` halves
+current speaker volume; `volume_up` adds 10% of the safe range (at least one
+point), capped by the safe maximum. Read/write/verification failures return an
+honest failure, not a success acknowledgement. Color stops the LED effect before
+setting a solid color. Night activates its scene and may add the sleepy expression.
+Stopping speech, stopping music and muting the speaker remain distinct actions.
+Candidate descriptions separate accepted user intent from execution effects.
+Reading/work needs may select a lighting scene: “need focus to read book” selects
+reading because the specific activity takes precedence over generic focus; an
+explicit focus-mode request still selects focus. Book recommendations defer.
+The production local fast path accepts only complete canonical commands; longer
+or qualified text goes to Jev (or the agent when Jev is unavailable), preventing
+substring matches from executing negated, quoted, numeric or multi-action requests.
+Generic light requests accept the on preset or relative dimming without naming RGB values;
 current complaints about excessive brightness, glare or harsh light can select
 `dim` when no external source is named. Politeness and a reason for the request
-do not add tasks. Explicit percentages, preserving an existing color, other
+do not add tasks. Explicit percentages, preserving an animation or pattern, other
 rooms/devices, negation, quoted speech, future/conditional requests and multiple
-tasks still defer. Volume remains a fixed preset, not an incremental adjustment.
+tasks still defer. Complaints such as “lamp speak too loud” select relative volume reduction; repeated requests reduce it again.
 The classifier does not replace the existing local-rule fast path.
 
 Acceptance requires a complete valid probability response, selected probability
@@ -1375,3 +1386,17 @@ For accepted realtime history, the sensing response returns the original exchang
 Harness reply-routing metadata on sensing voice/chat requests is conditional on the current paired Harness transport being connected. Disconnected requests omit both the reply marker and Harness-specific routing/follow-up hints; ordinary voice and follow-up routing remains unchanged.
 
 The HAL sensing payload accepts optional `voice_turn_type` (`voice`, `voice_command`, `voice_followup`) for voice diagnostics. OS copies validated values into Flow Monitor evidence only; `type` remains the authority for authorization, routing, queueing, history synchronization and speaker cancellation.
+
+#### Chat intent validation (2026-09-23)
+
+The revised classifier scored **72/74** in the opt-in live suite. All added
+brightness/volume complaints, reading/focus goals and negative controls passed.
+Two camera-tracking requests conservatively deferred on fit confidence (0.92
+and 0.90 versus the unchanged 0.95 threshold); the suite remains red.
+
+Device smoke checks covered web chat and injected `voice_command` requests:
+LED RGB `[48,39,30] → [24,19,15] → [12,9,7]` in chat, then `[6,4,3]`
+through voice; volume `50 → 25 → 12` in chat, then `6` through voice.
+Both sources selected reading for “need focus to read book”. Voice TTS reached
+HAL but was suppressed by speaker mute; microphone/STT and audible playback
+were not verified. MQTT reply/session handling passed automated tests.

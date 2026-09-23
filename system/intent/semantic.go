@@ -13,14 +13,14 @@ type SemanticResolver interface {
 	Resolve(context.Context, string, []jev.Candidate, jev.Options) jev.Selection
 }
 
-// MatchWithFallback keeps the local fast path intact. Only an unmatched turn
-// reaches the optional resolver. Once execution is attempted its result stays
+// MatchWithFallback executes complete canonical commands locally. Contextual
+// requests reach the optional resolver before any hardware action. Once execution is attempted its result stays
 // handled, including failure, so the main agent cannot repeat a partial action.
 func MatchWithFallback(ctx context.Context, text string, resolver SemanticResolver, options jev.Options) *Result {
 	if ctx.Err() != nil {
 		return nil
 	}
-	if result := Match(text); result != nil {
+	if result := matchCanonical(text); result != nil {
 		return result
 	}
 	if resolver == nil || !options.Enabled || strings.TrimSpace(options.Endpoint) == "" || strings.TrimSpace(options.APIKey) == "" {

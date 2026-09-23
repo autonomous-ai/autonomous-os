@@ -328,3 +328,10 @@ theo lượt, gồm hành vi LED, màn hình và thân hiện có. Không có l�
 cho LIVE. Emotion cần transcript có chữ và cùng điều kiện hướng tới device;
 tiếng ồn hay mở mic không tự bật emotion. Thinking cần bằng chứng kết thúc
 từ provider, không dùng ước lượng im lặng local. Xem [realtime voice](../../../../docs/vi/realtime-voice_vi.md#phản-hồi-hw-emotion-trong-chế-độ-live) để biết thời điểm gọi và dọn trạng thái.
+
+### Intent giảm sáng tương đối
+
+Action `dim` local/Jev đọc `/led/color`, chia đôi từng kênh RGB, ghi
+`/led/solid` rồi đọc lại kiểm chứng. Gọi tiếp giảm tiếp; đèn tắt giữ nguyên.
+Làm tròn xuống có thể đưa về tắt. Effect/scene chuyển thành màu tĩnh từ màu nền
+hoặc pixel sáng nhất được báo; không giữ pattern.

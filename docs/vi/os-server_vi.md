@@ -238,7 +238,7 @@ Config field: `guard_mode` trong `config/config.json` (bool, mặc định `fals
 | `motion.activity` | MotionPerception (khi PRESENT) | Không | Phát hiện hoạt động khi user có mặt — emotional actions được ghi qua Mood skill |
 
 **Flow xử lý:**
-1. `voice_command`, `voice_followup` hoặc `voice` + local intent enabled → khớp rule local → thực thi trực tiếp (~50ms); yêu cầu không khớp có thể qua fallback Jev bên dưới trước khi tới main runtime. `voice_followup` có cùng độ ưu tiên người dùng như `voice_command`; `web_chat` / `mqtt_chat` skip local intent (text gõ ≠ wake-word voice).
+1. `voice_command`, `voice_followup` hoặc `voice` + local intent enabled → khớp rule local → thực thi trực tiếp (~50ms); yêu cầu không khớp có thể qua fallback Jev bên dưới trước khi tới main runtime. `voice_followup` có cùng độ ưu tiên người dùng như `voice_command`; `web_chat` / `mqtt_chat` chỉ có text cũng thử rule local và Jev, không phát TTS. Yêu cầu kèm ảnh hoặc file giữ luồng agent. Phản hồi local trả `handler: "local"`, `response`, `handledLocally: "true"` và `localRunId` (không có `runId` của agent); web chat hiển thị ngay, MQTT dùng `localRunId` để xác nhận và gửi `chat.event` cuối.
 2. Ambient turn floor: `motion.activity`, `emotion.detected`, `speech_emotion.detected`, `sound`, `presence.away`, `light.level` bị drop khi agent turn gần nhất mà handler này tạo (bất kể type) cách đây chưa tới `sensing_turn_floor_s` giây (key config, mặc định `120`, `0` = tắt; guard mode bypass). Một floor xuyên-type đè trên các gate per-type độc lập của HAL — một loạt event khác type chỉ tốn tối đa 1 agent turn mỗi window. Event bị drop hiện thành `sensing_drop` (reason `ambient_floor`) trong Flow Monitor.
 3. Không match → forward OpenClaw qua WebSocket `chat.send`
 4. Nếu event có `images` → gọi `SendChatMessageWithImages` → gửi mọi ảnh đính kèm cùng text cho AI vision phân tích. Là một DANH SÁCH chứ không phải một trường đơn: client chat có thể đính nhiều ảnh cùng lúc và mọi wire format phía sau gateway vốn đã mang `attachments[]`; event camera thì chỉ gửi một phần tử. Với type chat (`web_chat` / `mqtt_chat`), mỗi ảnh được lưu vào `/tmp/web-chat-<ms>-<i>.jpg` (có index nên các ảnh trong CÙNG một lượt không đè tên nhau) và gắn tag `[image: <path>]` để agent reference (vd: face enrollment). Khi model chính không đọc được ảnh, describe-first gate chạy một lần CHO MỖI ảnh, **song song** (`safego`), và mô tả được đánh số `(image N of M)`. Song song ở đây không phải để tối ưu: gate chạy ngay trong HTTP handler nên POST của client không trả về cho tới khi describe xong hết — một lần describe đo được 8-38 giây, nên 2 ảnh chạy tuần tự làm web chat im lặng ~53 giây, đủ lâu để người dùng reload trang (mà reload thì huỷ request và mất luôn lượt đó). Chạy song song biến thời gian chờ thành ảnh CHẬM NHẤT thay vì tổng của chúng.
@@ -837,7 +837,7 @@ queue tối đa năm giây trước khi hủy delivery còn lại.
 
 ## Local Intent Matching
 
-Khi nhận event `voice_command`, `voice_followup` hoặc `voice`, OS server check local intent trước (~50ms):
+Khi nhận event chỉ có text `voice_command`, `voice_followup`, `voice`, `web_chat` hoặc `mqtt_chat`, OS server check local intent trước (~50ms):
 
 | Lệnh | Hành động |
 |-------|-----------|
@@ -960,19 +960,25 @@ hoặc mơ hồ thì chuyển tiếp; không hỗ trợ nhiều mục tiêu/hàn
 Jev trả lựa chọn có kiểu gồm intent và tham số giới hạn. Go kiểm tra intent đã
 đưa ra cùng đúng tên/giá trị tham số, rồi chuyển enum hợp lệ thành chuỗi do code
 quy định để gọi executor của rule hiện có. Không đưa câu nói thô hoặc HAL payload
-do model sinh vào executor. HAL action và giới hạn safety hiện có vẫn quyết định
-thực thi: `dim` đặt RGB ấm `[80,60,40]`; âm lượng đặt mức tối đa an toàn hoặc
-**30% mức tối đa đó**, không tăng/giảm tương đối. Đổi màu dừng LED effect trước
-khi đặt màu tĩnh. Night kích hoạt scene và có thể thêm biểu cảm sleepy. Ngắt lời
-nói, dừng nhạc và mute loa vẫn là các hành động riêng.
-Mô tả candidate tách ý định được chấp nhận khỏi hiệu ứng thực thi cố định.
-Yêu cầu đèn chung dùng preset bật/dịu mà không cần nêu RGB; lời than phiền
+do model sinh vào executor. Giới hạn safety của HAL vẫn có hiệu lực. `dim` đọc
+`/led/color`, chia đôi từng kênh RGB (làm tròn xuống), ghi `/led/solid` rồi đọc lại
+để kiểm tra. Gọi tiếp giảm tiếp; đèn đang tắt giữ nguyên. Effect/scene chuyển thành
+màu tĩnh từ màu nền effect hoặc pixel sáng nhất; không giữ animation/pattern.
+`volume_down` chia đôi âm lượng hiện tại; `volume_up` tăng 10% dải âm lượng an toàn
+(tối thiểu một điểm), không vượt trần. Lỗi đọc/ghi/kiểm chứng trả lời thất bại,
+không báo thành công. Đổi màu dừng effect trước khi đặt màu tĩnh. Night kích hoạt
+scene và có thể thêm biểu cảm sleepy. Ngắt lời nói, dừng nhạc và mute loa riêng biệt.
+Mô tả candidate tách ý định khỏi hiệu ứng thực thi.
+Nhu cầu đọc/làm việc có thể chọn scene: “need focus to read book” chọn reading
+vì hoạt động cụ thể ưu tiên hơn focus chung; yêu cầu rõ focus mode vẫn chọn focus.
+Yêu cầu gợi ý sách chuyển agent. Fast path production chỉ nhận lệnh chuẩn trọn câu;
+câu dài hoặc có điều kiện chuyển Jev (hoặc agent khi Jev không khả dụng), tránh
+khớp chuỗi con rồi chạy câu phủ định, trích dẫn, tham số số hoặc nhiều hành động.
+Yêu cầu đèn chung dùng preset bật hoặc giảm sáng tương đối mà không cần nêu RGB; lời than phiền
 hiện tại về ánh sáng quá mạnh, chói hoặc gắt có thể chọn `dim` khi không nêu
 nguồn sáng bên ngoài. Lời lịch sự và lý do không được coi là tác vụ bổ sung.
-Phần trăm cụ thể, giữ nguyên màu, phòng/thiết bị khác, phủ định, trích dẫn,
-yêu cầu tương lai/có điều kiện và nhiều tác vụ vẫn chuyển main agent. Âm lượng
-vẫn là preset cố định, không phải điều chỉnh tăng/giảm một nấc. Bộ phân loại
-không thay thế đường rule local hiện có.
+Phần trăm cụ thể, giữ animation/pattern, phòng/thiết bị khác, phủ định, trích dẫn,
+yêu cầu tương lai/có điều kiện và nhiều tác vụ vẫn chuyển main agent. Lời than phiền như “lamp speak too loud” chọn giảm âm lượng tương đối; gọi tiếp giảm tiếp. Hàm legacy `Match` giữ hành vi cũ; sensing dùng đường `MatchWithFallback` có kiểm tra fast path.
 
 Chỉ chấp nhận response có đầy đủ xác suất hợp lệ, xác suất lựa chọn **≥0,90**,
 chênh lệch với lựa chọn đứng sau **≥0,40**, và điểm phù hợp độc lập của action
@@ -1357,3 +1363,16 @@ Khi nhận history realtime, sensing trả ID hội thoại gốc (`device-realt
 Metadata reply-routing Harness trên request sensing voice/chat chỉ được chèn khi transport Harness đã pair và đang kết nối. Request lúc ngắt kết nối bỏ cả reply marker lẫn hint routing/follow-up riêng của Harness; routing voice và follow-up thông thường giữ nguyên.
 
 Payload sensing HAL nhận trường tùy chọn `voice_turn_type` (`voice`, `voice_command`, `voice_followup`) cho debug voice. OS chỉ ghi giá trị hợp lệ vào Flow Monitor; `type` vẫn quyết định authorization, routing, queue, đồng bộ history và cancel loa.
+
+#### Kiểm chứng chat intent (2026-09-23)
+
+Bộ phân loại sửa đổi đạt **72/74** trong live suite opt-in. Các câu mới về
+độ sáng/âm lượng, nhu cầu đọc/tập trung và mẫu phủ định đều đạt. Hai yêu cầu
+tracking camera chuyển agent vì điểm fit 0,92 và 0,90 thấp hơn ngưỡng 0,95
+không đổi; live suite vẫn chưa xanh hoàn toàn.
+
+Smoke test trên device dùng web chat và request `voice_command` trực tiếp:
+RGB `[48,39,30] → [24,19,15] → [12,9,7]` qua chat rồi `[6,4,3]` qua voice;
+âm lượng `50 → 25 → 12` qua chat rồi `6` qua voice. Cả hai nguồn chọn reading
+cho “need focus to read book”. TTS tới HAL nhưng bị chặn vì loa mute; chưa
+kiểm chứng mic/STT hay âm thanh nghe được. Phản hồi/session MQTT qua test tự động.

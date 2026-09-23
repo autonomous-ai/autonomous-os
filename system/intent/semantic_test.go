@@ -2,6 +2,7 @@ package intent
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"reflect"
@@ -178,7 +179,19 @@ func TestJevParameterizedSelectionsRecheckCapabilities(t *testing.T) {
 func configureJevTest(t *testing.T) *atomic.Int32 {
 	t.Helper()
 	calls := &atomic.Int32{}
-	routeIntentHAL(t, func(w http.ResponseWriter, r *http.Request) { calls.Add(1) })
+	color := [3]int{160, 120, 80}
+	routeIntentHAL(t, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.URL.Path == "/led/color" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"color": color})
+		} else if r.URL.Path == "/led/solid" {
+			var body struct {
+				Color [3]int `json:"color"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			color = body.Color
+		}
+	})
 	Configure(map[string]bool{device.CapLight: true, device.CapAudio: true})
 	return calls
 }
@@ -225,10 +238,10 @@ func TestJevRecognitionHasNoEffectsAndExecutionUsesExistingRule(t *testing.T) {
 		return "dim", nil
 	})
 	got := MatchWithFallback(context.Background(), "This lamp is too bright.", r, jev.Options{Endpoint: "https://proxy.example.test/jev/decisions", Enabled: true, APIKey: "test"})
-	if got == nil || got.Rule != "dim" || got.Source != "jev" || calls.Load() != 1 || !got.LEDChanged {
+	if got == nil || got.Rule != "dim" || got.Source != "jev" || calls.Load() != 3 || !got.LEDChanged {
 		t.Fatalf("semantic result = %+v, HAL calls=%d", got, calls.Load())
 	}
-	if !reflect.DeepEqual(got.Actions, []string{`POST /led/solid {"color":[80,60,40]}`}) {
+	if !reflect.DeepEqual(got.Actions, []string{"GET /led/color", `POST /led/solid {"color":[80,60,40]}`, "GET /led/color"}) {
 		t.Fatalf("unexpected hardware payload: %v", got.Actions)
 	}
 }
