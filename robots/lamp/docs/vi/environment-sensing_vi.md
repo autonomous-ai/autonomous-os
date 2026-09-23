@@ -155,7 +155,30 @@ Mặc định `poll_interval_s: 1`, `retry_interval_s: 5`, `stale_after_s: 5`,
 true/false tường minh cấu hình ASC CO₂. Đây là phần riêng với warm-up và ngưỡng
 thay đổi của OS. Không gửi lệnh forced recalibration hay lưu bền vững. Xem
 [tài liệu driver SEN63C của Sensirion](https://sensirion.github.io/python-i2c-sen63c/api.html).
-Chưa kiểm chứng dây nối và số đo SEN63C trên hardware thật.
+Bus I2C phía host phải chạy ở **100 kHz hoặc thấp hơn**, theo
+[datasheet SEN6x của Sensirion, mục 4.4](https://sensirion.com/resource/datasheet/SEN6x).
+Bus OrangePi Sun60 có thể mặc định ở 400 kHz: trên device đã kiểm tra, tốc độ
+này gây lỗi CRC khi đọc product type; chuyển bus 0 về 100 kHz đã khôi phục
+phản hồi nhận dạng và số đo hợp lệ. Không bỏ kiểm tra CRC để nhận gói dữ liệu
+hỏng. Kết quả này xác nhận bus của device đó, không xác nhận dây của các máy khác.
+
+Với máy đã xác nhận dùng Sunxi bus 0 và có thuộc tính sysfs `freq` cho phép ghi,
+drop-in systemd riêng trên device
+`/etc/systemd/system/hal.service.d/20-sen63c-i2c.conf` có thể đặt tốc độ trước
+khi HAL mở bus:
+
+```ini
+[Service]
+ExecStartPre=/bin/sh -c 'printf "100000\\n" > /sys/class/i2c-adapter/i2c-0/device/freq'
+```
+
+Sau khi cài drop-in, chạy `systemctl daemon-reload` và restart HAL.
+Kiểm tra `/sys/class/i2c-adapter/i2c-0/device/info` và `/environment/status`:
+controller phải báo `100000`, sample mới và không có lỗi CRC.
+Drop-in đặt lại tốc độ mỗi lần HAL khởi động, kể cả khi boot; chỉ ghi sysfs
+một lần sẽ không giữ được sau reboot. Thay đổi này tác động mọi ngoại vi trên
+cùng bus. Board/kernel khác phải dùng cách cấu hình clock bus được hỗ trợ;
+trường `bus` trong JSON sensor chọn adapter, không đặt tốc độ.
 
 Log vòng đời HAL dùng key `[sen55]`, `[scd41]` và `[sen63c]`: tắt/khởi động, mẫu hợp lệ
 đầu tiên, bắt đầu đo, lỗi thử lại và dừng hiển thị ở INFO (lỗi có thể dùng

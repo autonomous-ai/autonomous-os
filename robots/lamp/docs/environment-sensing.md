@@ -161,7 +161,30 @@ and `no_data_timeout_s: 30`. `automatic_self_calibration: null` preserves the
 sensor setting; explicit true/false configures CO₂ ASC. This is separate from
 OS warm-up and change thresholds. No forced recalibration or persistence command
 is sent. See [Sensirion's SEN63C driver reference](https://sensirion.github.io/python-i2c-sen63c/api.html).
-SEN63C wiring and readings have not been verified on hardware.
+The host I2C bus must run at **100 kHz or less**, as specified in
+[Sensirion's SEN6x datasheet, section 4.4](https://sensirion.com/resource/datasheet/SEN6x).
+The OrangePi Sun60 bus can default to 400 kHz: on the tested device this
+caused product-type CRC failures; switching bus 0 to 100 kHz restored valid
+identity and measurement responses. Do not bypass CRC checks to accept these
+corrupted packets. This verifies that device's bus, not other installations' wiring.
+
+For a confirmed Sunxi bus 0 installation exposing the writable `freq` sysfs
+attribute, the device-local systemd drop-in
+`/etc/systemd/system/hal.service.d/20-sen63c-i2c.conf` can set the bus speed before
+HAL opens it:
+
+```ini
+[Service]
+ExecStartPre=/bin/sh -c 'printf "100000\\n" > /sys/class/i2c-adapter/i2c-0/device/freq'
+```
+
+After installing the drop-in, run `systemctl daemon-reload` and restart HAL.
+Check `/sys/class/i2c-adapter/i2c-0/device/info` and `/environment/status`:
+the controller should report `100000`, with fresh samples and no CRC errors.
+The drop-in reapplies the speed on HAL starts, including boot; a one-time sysfs
+write alone does not survive reboot. This affects every peripheral on the same
+bus. Other boards/kernels require their supported bus-clock configuration;
+the sensor JSON's `bus` field selects the adapter, not its speed.
 
 HAL lifecycle logs use component keys `[sen55]`, `[scd41]`, and `[sen63c]`: disabled/start,
 measurement start, retry failures and stop are visible at INFO (failures may
