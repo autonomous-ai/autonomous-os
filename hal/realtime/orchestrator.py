@@ -42,6 +42,7 @@ from hal.realtime.context_manager import (
     OpenClawContextManager,
 )
 from hal.realtime.enums import AgentGateway
+from hal.realtime.find_intent import is_find_request
 from hal.realtime.models import (
     FunctionCallOutput,
     FunctionCallResultInput,
@@ -486,6 +487,11 @@ class RealtimeOrchestrator:
         # rebuild the session AFTER that turn so the next turn drops the context
         # the provider re-bills on a long-lived session. See _maybe_idle_reset.
         self._last_turn_monotonic: float = 0.0  # end-of-turn timestamp; 0 = none yet
+        # When the CURRENT session connected; 0 = none yet. Idle checks measure
+        # from the later of this and the last turn: a session that connected a
+        # second ago (privacy-switch unmute, reconnect) is not idle, however
+        # long ago the last turn ended.
+        self._session_connected_monotonic: float = 0.0
         self._idle_reset_pending: bool = False
         # Set when Gemini proactively rebuilt before the current turn after a
         # long idle. That session is already fresh, so the generic post-turn
@@ -662,6 +668,7 @@ class RealtimeOrchestrator:
             self._idle_parked = False
             self._park_resume_failed = False
             self._last_activity_monotonic = time.monotonic()
+            self._session_connected_monotonic = self._last_activity_monotonic
             self._consecutive_silent = 0
             self._idle_reset_pending = False
             self._turns_since_recycle = 0
@@ -820,6 +827,13 @@ class RealtimeOrchestrator:
             return False
         return self._rebuild_in_background("idle-park-prewarm", "rt-prewarm")
 
+    def _idle_since_monotonic(self) -> float:
+        """Start of the current session's idle gap: last turn end or connect."""
+        return max(
+            self._last_turn_monotonic,
+            getattr(self, "_session_connected_monotonic", 0.0),
+        )
+
     def prepare_turn(self) -> None:
         """Prepare the realtime session before the caller streams turn audio."""
         # A new capture starts a new logical turn. Clear any marker left by a
@@ -886,7 +900,10 @@ class RealtimeOrchestrator:
         threshold = config.REALTIME_GEMINI_PRE_TURN_RECYCLE_S
         if threshold <= 0 or self._last_turn_monotonic <= 0.0:
             return
-        idle = time.monotonic() - self._last_turn_monotonic
+        # Session idle, not user idle: after an unmute the session is seconds
+        # old even when the last turn is minutes old. Rebuilding it anyway cost
+        # a ~10s reconnect the turn fell back through (device 2026-09-23).
+        idle = time.monotonic() - self._idle_since_monotonic()
         if idle < threshold:
             return
         logger.info(
@@ -1083,6 +1100,7 @@ class RealtimeOrchestrator:
 
         try:
             self._agent.connect()
+            self._session_connected_monotonic = time.monotonic()
             logger.info(
                 "[realtime] Realtime orchestrator started (provider=%s)", provider
             )
@@ -1203,7 +1221,9 @@ class RealtimeOrchestrator:
         reset_s = config.REALTIME_SESSION_IDLE_RESET_S
         if reset_s <= 0 or self._last_turn_monotonic <= 0.0:
             return
-        idle = time.monotonic() - self._last_turn_monotonic
+        # A session connected after the last turn holds no accumulated
+        # context to drop, so it is measured from its connect too.
+        idle = time.monotonic() - self._idle_since_monotonic()
         if idle >= reset_s:
             logger.info(
                 "[realtime] %.0fs idle (>= %.0fs) — will recycle session after this "
@@ -1285,6 +1305,13 @@ class RealtimeOrchestrator:
                 isinstance(output, FunctionCallOutput)
                 and output.name == LOOK_TOOL_NAME
             ):
+                # A find is a servo search, never a look — delegate it before
+                # any aim or capture (see _redirect_find_look).
+                redirect = self._redirect_find_look(output)
+                if redirect is not None:
+                    produced = True
+                    yield redirect
+                    break
                 # Fresh frame sent → the turn must be REPLAYED so the frame
                 # (queued by the Live API for the next turn) joins the answer —
                 # see _handle_look_call. Mirror the delegate flow: end_turn so
@@ -1702,6 +1729,47 @@ class RealtimeOrchestrator:
             logger.warning(
                 "[realtime] emotion expression failed (emotion=%s): %s", emotion, e
             )
+
+    def _redirect_find_look(self, output: FunctionCallOutput) -> DelegateSignal | None:
+        """Hand a find/search request that reached `look` to the main agent.
+
+        The prompt already says a find is a servo search, not a look, but the
+        model can ignore it: "Find my mouse" went through `look` on 3.8
+        extended-thinking, the frame was persisted, and the main agent then got
+        the request with an unrelated pre-search [vision-image] (#481). Decided
+        here, before aim and capture, so no frame is taken or attached. Mirrors
+        the delegate_to_main branch: ack the call, end the turn, delegate.
+        Returns None (normal look) when the transcript is empty or not a find.
+        """
+        transcript: str = (output.user_transcript or "").strip()
+        if not transcript:
+            logger.info("[realtime] look: no transcript at call time — find guard skipped")
+            return None
+        if not is_find_request(transcript):
+            return None
+        logger.info(
+            "[realtime] look: find request %r — delegating without capture",
+            transcript[:100],
+        )
+        import hal.app_state as state
+
+        # No frame belongs to this request; drop any earlier one so the handoff
+        # cannot carry a stale [vision-image].
+        state.realtime_look_frame_path = None
+        state.realtime_look_frame_ts = 0.0
+        self._agent.send(
+            [
+                FunctionCallResultInput(
+                    call_id=output.call_id,
+                    output='{"result": "delegated"}',
+                )
+            ]
+        )
+        self._agent.end_turn()
+        return DelegateSignal(
+            message=transcript, transcript=transcript,
+            user_turn_id=output.user_turn_id,
+        )
 
     def _handle_look_call(self, output: FunctionCallOutput) -> bool:
         """Handle the model's `look` call. Returns True when a FRESH frame was

@@ -1059,8 +1059,18 @@ action ("turn to the right, hold it there, and tell me what you see"), the promp
 requires a single `delegate_to_main` covering both halves — no `look` — so the
 movement is never silently dropped. The tool description and the Gemini prompt
 both exclude finding a specific object ("where is my pen", "do you see my keys") —
-that is a delegated search, not a look. The orchestrator registers a `look` tool
-(`orchestrator.py`, `LOOK_TOOL`) and handles the call in `_handle_look_call`:
+that is a delegated search, not a look. The model can still ignore that advice
+("Find my mouse" reached `look` on 3.8 extended-thinking, #481), so the
+orchestrator enforces it: when `look` is called and the turn's provider transcript
+matches `hal/realtime/find_intent.py` (English: find / locate / search / look for /
+look around / where is / do or can you see my; Vietnamese: tìm / ở đâu / đâu rồi),
+`_redirect_find_look` does **no** aim or capture. It acks the call with
+`{"result": "delegated"}`, clears `realtime_look_frame_path`, ends the turn and
+delegates the transcript, so the main agent runs `/servo/search` with no
+`[vision-image]`. An empty transcript at call time skips the guard (log line
+`look: no transcript at call time — find guard skipped`). The orchestrator
+registers a `look` tool (`orchestrator.py`, `LOOK_TOOL`) and handles the call in
+`_handle_look_call`:
 
 1. **Aim the head at the subject first**, on devices that can move — otherwise a
    confident answer gets given about whatever the head happened to face. See
@@ -1077,14 +1087,32 @@ that is a delegated search, not a look. The orchestrator registers a `look` tool
    300ms; zero added latency when the servos are already still or the device has
    none), downscaled to `HAL_GEMINI_VISION_MAX_WIDTH`
    (default 768px) to bound image tokens.
-3. Enqueue it as realtime **video input** (`ImageInput` → `send_realtime_input(video=…)`),
+3. **Extended-thinking sessions** (the session has reported `interaction_status`,
+   so `supports_look_continuation` is true — 3.8 extended-thinking): the JPEG goes
+   **inside the `look` tool response** (`FunctionCallResultInput.image` →
+   `FunctionResponse.parts`, log line `Sent look image in tool response
+   (call_id=… bytes=…)`), and there is no replay. The ack triggers the next
+   generation, so a frame sent separately after it could still be processing
+   when that generation began, and the model answered "I can't see" (#481).
+   `send_realtime_input` gives no ordering guarantee. One message removes the
+   race without any wait. google-genai 2.12.1 does not serialize the nested image
+   bytes in `send_tool_response`, so only this result goes out as an explicit
+   base64 WebSocket payload, and it is discarded if its look call was cancelled,
+   resolved or cleared by a session reset (see the interaction-status section).
+   Proxy check 2026-09-23 with the same mechanism: 3.8 extended-thinking answered
+   from the in-response image twice out of two, and plain 3.8-live three out of
+   three with a neutral prompt. Plain 3.8-live does not report interaction status,
+   so it still takes the path below.
+
+   **Other sessions** (3.1, plain 3.8-live) take the original path: enqueue the
+   frame as realtime **video input** (`ImageInput` → `send_realtime_input(video=…)`),
    then **replay the turn**: the Live API queues a frame sent mid-turn for the
    NEXT turn (device-proven: the tool-ack → continue-turn flow answered every
    look from the *previous* look's image — a one-image lag no ack delay fixes),
    so instead of acking the tool call, the orchestrator yields `LookReplaySignal`
    and `run_realtime_turn` re-appends the turn's audio and commits again on the
    SAME session. The queued frame joins the replayed turn.
-4. The replayed turn re-triggers `look`, which hits the reuse guard
+4. (Replay path only.) The replayed turn re-triggers `look`, which hits the reuse guard
    (`VISION_MIN_INTERVAL_S`) and is acked with `trigger_response=True` — the
    model answers from the frame that is now genuinely in context.
 
@@ -1182,8 +1210,12 @@ This prevents a stalled receive from surviving a session rebuild. For the
 native-audio family, HAL sends a 20 s websocket ping but sets no ping timeout:
 outbound traffic keeps the proxy path alive without treating its missing pong as
 a client-side failure. HAL also recycles Gemini synchronously before streaming audio when
-the previous turn ended more than `HAL_GEMINI_PRE_TURN_RECYCLE_S` seconds ago, so
-post-idle speech does not land on a proxy-dropped session.
+the current session has been idle for more than `HAL_GEMINI_PRE_TURN_RECYCLE_S`
+seconds, so post-idle speech does not land on a proxy-dropped session. Idle is
+measured from the later of the last turn's end and the session's connect
+(`_idle_since_monotonic`). Measuring from the last turn alone recycled a session
+that had just connected after a privacy-switch unmute, and the turn fell back to
+the main agent during the ~10 s reconnect (device 2026-09-23).
 
 **Idle parking.** A Gemini session nobody is talking to is closed by the server
 with WS `1008` "The operation was aborted" (measured idle lifetimes: 86-198 s).
@@ -2772,10 +2804,10 @@ is a top-level `config.json` flag:
 | `HAL_REALTIME_FIRST_CHUNK_MAX_CHARS` | `0` | Default: speak the first complete sentence immediately and pre-synthesize later sentences in the queue, without waiting for the whole reply. Positive values opt into first-clause splitting, with a word-break fallback beyond this limit; complete sentences bypass the splitter. Keeps bracketed voice tags intact (also at whitespace fallback), skips numeric commas/colons and URL colons, and requires 8 visible characters outside tags. Early splitting may leave gaps between synthesis requests. |
 | `HAL_REALTIME_MIN_COMMIT_DURATION_S` | `0.8` | Sessions shorter than this with no STT transcript are treated as VAD noise and not committed to the model. Only consulted when `HAL_REALTIME_REQUIRE_TRANSCRIPT=false`. |
 | `HAL_REALTIME_NOISE_GUARD_MAX_WORDS` | `3` | Extends the Silero voiced-ratio guard to turns that DO have a transcript, up to this many words. STT invents a short filler out of room noise and reports full confidence for it, so such a turn used to bypass every guard (they all only ran on an empty transcript) and commit pure noise to the model. A transcript of at most this many words is re-checked against `HAL_REALTIME_NOISE_SPEECH_RATIO` and dropped when the audio was never voiced; a real short command is voiced and still commits. The ratio is measured over the voiced SPAN — first to last voiced chunk — not the whole buffer, because a capture carries VAD pre-roll at the front and a 200ms tail at the back, and that fixed padding dilutes a short utterance far more than a long one. Measuring the whole buffer dropped a real `Yes, that's right.` at 0.500 (`peak=1.000`), inverting the guard's purpose against the very turns it screens. Sustained noise still fails, since its voiced chunks are sparse within the span too. Longer transcripts are never re-checked, so the floor can't silence a real utterance. `0` disables. |
-| `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Cost control: when a turn arrives after this many seconds of silence, recycle (rebuild) the session **after** that turn so the next turn drops the per-turn context the provider re-bills on a long-lived session. A post-pause turn is effectively a new conversation; long-term continuity survives via the reloaded `summary.md`. For native-audio Gemini, this is skipped when a successful pre-turn recycle already made the same idle gap fresh. `0` disables. Reuses the zombie-recovery rebuild path. |
+| `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Cost control: when a turn arrives after this many seconds of silence (measured from the later of the last turn and the current session's connect), recycle (rebuild) the session **after** that turn so the next turn drops the per-turn context the provider re-bills on a long-lived session. A post-pause turn is effectively a new conversation; long-term continuity survives via the reloaded `summary.md`. For native-audio Gemini, this is skipped when a successful pre-turn recycle already made the same idle gap fresh. `0` disables. Reuses the zombie-recovery rebuild path. |
 | `HAL_GEMINI_SESSION_RESUMPTION` | `false` | Resume the same Gemini session across reconnects. OFF by default — the `campaign-api` proxy doesn't forward the resumption handshake, so resuming through it yields a zombie session (cold reconnects work). Enable only against an endpoint that supports it. |
 | `HAL_GEMINI_IDLE_PARK_S` | `45` | Gemini idle parking: close the session's transport after this many seconds without turn activity, so the server never closes it with WS `1008` (which the backend logs as an error and alerts on). The orchestrator stays `available` while parked; the next turn's `prepare_turn()` reconnects synchronously before streaming audio. Must stay below the shortest observed idle death (86 s). `0` disables. |
-| `HAL_GEMINI_PRE_TURN_RECYCLE_S` | `60` | Gemini transport guard: when a new spoken turn starts after this much idle time, rebuild the Gemini session **before** streaming pre-roll/audio so the turn does not hit a proxy/SDK idle-dead socket. `0` disables. A successful pre-turn recycle suppresses the generic post-turn idle recycle for that same turn, so one idle gap creates at most one cost/transport rebuild. |
+| `HAL_GEMINI_PRE_TURN_RECYCLE_S` | `60` | Gemini transport guard: when a new spoken turn starts after this much session idle time (from the later of the last turn and the session's connect), rebuild the Gemini session **before** streaming pre-roll/audio so the turn does not hit a proxy/SDK idle-dead socket. `0` disables. A successful pre-turn recycle suppresses the generic post-turn idle recycle for that same turn, so one idle gap creates at most one cost/transport rebuild. |
 | `HAL_AGENT_GATEWAY` | `openclaw` | Selects the context manager (also from `agent_runtime` in config.json) |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | — | Gemini key; falls back to `llm_api_key` |
 | `HAL_GEMINI_LIVE_MODEL` | `gemini-2.5-flash-native-audio-preview-12-2025` | |
