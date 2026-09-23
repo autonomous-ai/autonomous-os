@@ -382,8 +382,11 @@ def announce_listening_cue(*, source):
 
 
 def triple_click_action(*, source):
-    from hal.drivers.button_actions import triple_click_action as action
-    action(source=source)
+    # Disabled for MPR121: accidental triple taps must not reboot the device.
+    # Keep the shared action wiring here so it can be restored deliberately.
+    # from hal.drivers.button_actions import triple_click_action as action
+    # action(source=source)
+    return
 
 
 def hold_release_action(held_s, *, source):
