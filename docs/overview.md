@@ -142,8 +142,8 @@ startup. Restart HAL after changing wiring configuration. The shared
 `hal/drivers/mpr121.py` driver groups selected electrodes into one debounced
 contact. It shares GPIO gesture thresholds in `hal/drivers/button_gestures.py`:
 the first resolved short release calls single-click with `announce=False`;
-a 0.4 s quiet window produces the listening cue for 1/2/4+ clicks or reboot
-for exactly 3. Holds commit only on release: 2–<5 s sleepy, 5–<10 s shutdown,
+a 0.4 s quiet window produces the listening cue for 1/2/4+ clicks. Exactly
+3 clicks produce no additional action or cue: reboot is disabled in the MPR121 wrapper. Holds commit only on release: 2–<5 s sleepy, 5–<10 s shutdown,
 ≥10 s factory reset. While held, debounced hold-tier events use the same
 `HoldLEDFeedback` in `hal/drivers/button_actions.py` and `BUTTON_LED_PRESETS`
 as GPIO: purple blinking at 2 Hz for 2–<5 s, red blinking

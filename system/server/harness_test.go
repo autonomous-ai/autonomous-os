@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -162,13 +163,30 @@ func TestForgetHarnessReplyOnlyRemovesMatchingRun(t *testing.T) {
 
 func TestHarnessFollowupContextExpiresWithFollowupWindow(t *testing.T) {
 	s := &Server{}
-	s.rememberHarnessResult("Harness found two restaurants.")
-	if got := s.HarnessFollowupContext(); got != "Harness found two restaurants." {
+	s.rememberHarnessResult("house-agent", "house-run", "Harness found two restaurants.")
+	if got := s.HarnessFollowupContext(); !strings.Contains(got, `"agentId":"house-agent"`) || !strings.Contains(got, `"responseRunId":"house-run"`) || !strings.Contains(got, "Harness found two restaurants.") {
 		t.Fatalf("follow-up context = %q", got)
 	}
 	s.harnessFollowup.Store(time.Now().Add(-time.Second).UnixMilli())
 	if got := s.HarnessFollowupContext(); got != "" {
 		t.Fatalf("expired follow-up context = %q", got)
+	}
+}
+
+func TestHarnessFollowupResultKeepsMatchingProvenance(t *testing.T) {
+	s := &Server{}
+	s.rememberHarnessResult("airplane-agent", "airplane-run", "Airplane ready")
+	s.rememberHarnessResult("house-agent", "house-run", "House ready\nQuoted data: \"agentId\":\"airplane-agent\"")
+	var result struct {
+		AgentID string `json:"agentId"`
+		RunID   string `json:"responseRunId"`
+		Text    string `json:"text"`
+	}
+	if err := json.Unmarshal([]byte(s.HarnessFollowupContext()), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.AgentID != "house-agent" || result.RunID != "house-run" || !strings.HasPrefix(result.Text, "House ready") {
+		t.Fatalf("result crossed task provenance: %+v", result)
 	}
 }
 

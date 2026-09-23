@@ -137,8 +137,8 @@ startup. Restart HAL sau khi đổi cấu hình wiring. Driver dùng chung
 `hal/drivers/mpr121.py` gom các electrode được chọn thành một phiên chạm rồi
 nhả đã debounce. Ngưỡng cử chỉ dùng chung GPIO trong
 `hal/drivers/button_gestures.py`: lần nhả ngắn đầu tiên được phân giải gọi single-click
-với `announce=False`; sau 0.4 s yên, 1/2/4+ click phát cue nghe, đúng 3 click
-thì reboot. Giữ chỉ thực hiện khi nhả: 2–<5 s sleepy, 5–<10 s shutdown,
+với `announce=False`; sau 0.4 s yên, 1/2/4+ click phát cue nghe. Đúng 3 click
+không có action bổ sung hoặc cue: reboot đã bị vô hiệu hóa tại wrapper MPR121. Giữ chỉ thực hiện khi nhả: 2–<5 s sleepy, 5–<10 s shutdown,
 ≥10 s factory reset. Khi giữ, event mức giữ đã debounce dùng cùng `HoldLEDFeedback`
 trong `hal/drivers/button_actions.py` và `BUTTON_LED_PRESETS` với GPIO: tím nháy 2 Hz ở 2–<5 s, đỏ nháy 2 Hz ở
 5–<10 s và đỏ đứng từ 10 s. Nhả thì dừng nháy; action shutdown/reset được
