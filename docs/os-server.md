@@ -1454,3 +1454,24 @@ Harness Store preparation now has a 120-second OS deadline per response run, in 
 ## Harness follow-up provenance
 
 Harness follow-up context retains `agentId`, `responseRunId`, and the original result `text` as JSON during the existing follow-up window. Routing instructions keep that provenance separate from the helper's retained selection and preserve the unfinished user request when correcting its destination. See [Harness integration](harness.md) for explicit-target and local task-context rules.
+
+## JEV Harness shadow selection
+
+`config.json` accepts `"jev_harness":{"enabled":true,"timeout_ms":3000}`.
+The section and `enabled` default to enabled independently of `local_intent` and
+`jev_intent`, using the existing `llm_base_url` / `llm_api_key` JEV proxy settings.
+Missing credentials skip evaluation; enabled evaluations can incur model usage.
+
+OS observes existing successful `agents.list` responses in a RAM cache of at most
+32 candidates, valid for 30 seconds for the same machine/server instance. On
+`turn.send`, a separate asynchronous comparison logs whether JEV agrees with the
+chosen target or abstains. Missing, stale or oversized evidence skips evaluation.
+There is one in-flight evaluation, no queue, a maximum three-second timeout and
+shutdown cancellation. It does not block or alter dispatch, select a new target,
+or rewrite the task. No skill prompt or Harness contract changes are required.
+
+The proxy receives delegated task text and bounded candidate metadata, not full
+conversation history. Logs contain IDs, outcomes/skip reasons and latency, never
+task text, recaps or credentials. Local/mock tests do not establish live-provider
+accuracy. See [Harness shadow comparison](harness.md#jev-shadow-comparison-of-agent-selection)
+for scope and interpretation.

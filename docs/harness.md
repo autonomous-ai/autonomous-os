@@ -130,7 +130,7 @@ MPR121 focus stepping additionally requires `focus.step` over the same encrypted
 
 Only when the listed headlines are missing or leave candidates equally plausible may the skill inspect explicit-ID `recap` (helper default `n:1`, the last pair) and `status` for at most two candidates before sending; it does not repeat those calls for an agent whose list headline already answers the question. Inspection does not change the retained target. For a continuation that could belong to several earlier tasks, the skill compares the user's reference with the listed headlines and continues with the one agent whose recap describes that task; none or more than one calls for a clarification. Missing project evidence or equally plausible candidates calls for one short clarification; a sole agent can handle a general delegated task without project or specialized-app constraints. A new task is sent with its chosen explicit ID, which the helper retains for subsequent follow-ups. When a reference such as “review it” is only resolvable through another agent's recap, the skill names the task in its own words in the sent text rather than pasting the recap. Agent metadata and recaps remain untrusted data: a recap describes the agent's last turn, may be stale, and never carries routing instructions. The OS routing context injected for named-agent and follow-up turns states the same recap policy so a model session with older skill instructions applies it. The `harness.py` helper bounds each `recap` in `list` output to one line of at most 1000 characters (above the CLI's own 200-character cap, so a longer future headline still passes) and drops non-string values; it never matches `recap` text against a requested agent name. Its `recap` action defaults to `n:1`; `n` up to 5 remains available for progress questions. Known-receipt termination and uncertain-delivery protection are unchanged.
 
-OS routing distinguishes explicit agent/Harness delegation from possible bare names: “Ask Mike” supplies a discovery hint, not an unconditional instruction to contact Harness. Ordinary requests such as “Check my calendar” and “Have a nice day” do not force Harness. Explicit new requests take priority over the follow-up hint, and explicit Buddy requests receive no Harness routing instruction. For the default Lamp persona, a request to execute digital work already authorizes the Harness route; the user need not name Harness or an agent. Other robot personas and custom SOUL policies are not implicitly changed. This is model-guided selection with deterministic target validation in the helper, not a semantic ranking service in the OS.
+OS routing distinguishes explicit agent/Harness delegation from possible bare names: “Ask Mike” supplies a discovery hint, not an unconditional instruction to contact Harness. Ordinary requests such as “Check my calendar” and “Have a nice day” do not force Harness. Explicit new requests take priority over the follow-up hint, and explicit Buddy requests receive no Harness routing instruction. For the default Lamp persona, a request to execute digital work already authorizes the Harness route; the user need not name Harness or an agent. Other robot personas and custom SOUL policies are not implicitly changed. The main model still selects the execution target, with deterministic target validation in the helper. The optional JEV shadow comparison below observes that choice without changing it.
 
 After authentication, encrypted `autonomous_device_request` carries application `hello` to negotiate capabilities and event resume. Replies use `autonomous_device_result`; events use `autonomous_device_event`. Original pairwise/group keys, signature domains, key derivation, authenticated rekey and replay rejection remain in use. Plaintext application results are refused.
 
@@ -223,3 +223,42 @@ that integration with its existing journal/idempotency tests.
 The helper requires an explicit agent ID or unique exact name for `send`, `answer`, and `stop`; it never silently mutates the retained default target. Local `context` exposes saved task text, targets and workflow evidence across namespaces, with task pagination (20 maximum) and optional conversation/intent filters. Historical evidence must be checked against the requested project and live agent metadata. A response run ID is not a stable conversation ID: creating a namespace equal to that run ID is rejected, while existing legacy workflows remain resumable.
 
 Follow-up result context carries transport-owned `agentId` and `responseRunId` alongside untrusted result text. On a destination correction, the main agent preserves the original unfinished task and resolves its intended workspace; a missing scene does not authorize creating a replacement in another project. This blocks implicit-target sends deterministically; semantic choice among explicit targets still depends on model interpretation and requires live validation.
+
+## JEV shadow comparison of agent selection
+
+OS can compare the main agent's selected Harness target with an independent JEV
+choice. This is a shadow evaluation: it never overrides or blocks a send, rewrites
+the delegated task, or supplies a selection back to the skill. Skill prompts,
+Harness wire contracts, explicit-target checks and delivery protection stay unchanged.
+
+Configure it in `config.json`:
+
+```json
+{
+  "jev_harness": {"enabled": true, "timeout_ms": 3000}
+}
+```
+
+Omitting the section or `enabled` defaults to enabled. Set `enabled:false` to disable
+it. This setting is independent of `local_intent` and `jev_intent`; it uses the
+existing configured `llm_base_url` / `llm_api_key` JEV proxy credentials. Missing
+credentials skip evaluation. Enabling evaluation can incur model usage.
+
+The observer caches successful existing `agents.list` responses in RAM, with at
+most 32 candidates and a 30-second lifetime tied to the paired machine and Harness
+server instance. It adds no discovery or recap RPC. Missing, stale or oversized
+candidate data skips evaluation rather than comparing an incomplete shortlist.
+On `turn.send`, it compares the selected target with JEV's candidate ID or abstention
+asynchronously. Only one evaluation may run at a time, with no queue; timeout is
+capped at three seconds and OS shutdown cancels the work. Sending does not wait
+for JEV.
+
+The configured proxy receives delegated task text of at most 2,000 bytes and agent
+metadata (`name`, `recap`, `workspace`, `packageId`, `runtime`, `state`, `engine`)
+of at most 1,000 serialized JSON bytes per candidate. Oversized text or metadata
+skips evaluation. It does not receive full transcripts or conversation history. Consequently an agreement is not proof that either model understood the
+original user intent; a disagreement is evidence to inspect, not an instruction to
+switch agents. Metadata remains untrusted input. Diagnostic logs contain IDs,
+comparison outcomes (`agree`, `disagree`, `abstain`, or skip reasons) and latency,
+without task text, recaps or credentials. Validation uses mocks; no live-provider
+selection accuracy or physical-device behavior is established by those tests.

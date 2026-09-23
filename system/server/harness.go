@@ -31,6 +31,7 @@ type harnessReplyRequest struct {
 // registerHarnessRoutes exposes management to the owner and commands only to the device runtime.
 func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context) {
 	s.initializeHarnessVoice(ctx)
+	s.harnessShadow = newHarnessShadow()
 	go s.watchHarnessPreparationWaits(ctx)
 	group := api.Group("harness")
 	group.Use(func(c *gin.Context) {
@@ -113,7 +114,21 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 		}
 		requestCtx, cancel := context.WithTimeout(c.Request.Context(), 35*time.Second)
 		defer cancel()
+		// Observation has its own bounded worker; it never delays the receipt path.
+		if kind == "turn.send" && s.config != nil {
+			s.harnessShadow.compare(ctx, frame, s.harnessService.Status(), s.config.JevHarnessSettings())
+		}
+		requestStatus := s.harnessService.Status()
 		result, err := s.harnessService.Request(requestCtx, frame)
+		if kind == "agents.list" {
+			currentStatus := s.harnessService.Status()
+			if currentStatus.MachineID != requestStatus.MachineID || currentStatus.ServerInstanceID != requestStatus.ServerInstanceID {
+				errSnapshot := errors.New("Harness identity changed during discovery")
+				s.harnessShadow.remember(nil, errSnapshot, currentStatus)
+			} else {
+				s.harnessShadow.remember(result, err, currentStatus)
+			}
+		}
 		if err != nil {
 			var uncertainDispatch *harness.DeliveryUnknownError
 			if tracksReply && !errors.As(err, &uncertainDispatch) {

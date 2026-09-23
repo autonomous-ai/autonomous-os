@@ -53,6 +53,7 @@ type Server struct {
 	harnessPreparationMu    sync.Mutex
 	harnessPreparationWaits map[string]*harnessPreparationWait
 	harnessService          *harness.Service
+	harnessShadow           *harnessShadow
 	harnessVoice            *harness.VoiceController
 	harnessVoiceCtx         context.Context
 	harnessRepliesMu        sync.Mutex

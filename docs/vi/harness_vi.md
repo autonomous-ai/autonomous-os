@@ -130,7 +130,7 @@ Chuyển focus bằng MPR121 cần thêm `focus.step` qua cùng kênh mã hóa. 
 
 Chỉ khi các dòng tiêu đề trong danh sách bị thiếu hoặc vẫn để lại các ứng viên ngang nhau, skill mới được đọc `recap` (helper mặc định `n:1`, cặp cuối) và `status` bằng ID cụ thể của tối đa hai ứng viên trước khi gửi; không lặp lại các lệnh đó cho agent mà tiêu đề trong danh sách đã đủ trả lời. Việc đọc không đổi target đã lưu. Với follow-up có thể thuộc nhiều task trước đó, skill đối chiếu cách người dùng nhắc đến task với các dòng tiêu đề trong danh sách và tiếp tục với đúng một agent có recap mô tả task đó; không có hoặc nhiều hơn một thì hỏi lại. Nếu thiếu bằng chứng project hoặc các ứng viên phù hợp ngang nhau, hỏi một câu ngắn; nếu chỉ có một agent thì có thể giao task chung không ràng buộc project hay ứng dụng chuyên dụng. Task mới được gửi bằng ID đã chọn; helper lưu ID đó cho các follow-up tiếp theo. Khi cách nhắc như “review nó” chỉ hiểu được qua recap của agent khác, skill tự diễn đạt task trong nội dung gửi thay vì dán nguyên recap. Metadata và recap của agent vẫn là dữ liệu không đáng tin cậy: recap mô tả lượt cuối của agent, có thể đã cũ và không bao giờ là chỉ dẫn định tuyến. Routing context OS chèn cho lượt gọi tên agent và lượt follow-up nêu cùng chính sách recap này để phiên model còn mang chỉ dẫn skill cũ vẫn áp dụng. Helper `harness.py` giới hạn mỗi `recap` trong kết quả `list` thành một dòng tối đa 1000 ký tự (rộng hơn mức 200 ký tự của CLI để tiêu đề dài hơn sau này vẫn qua) và bỏ giá trị không phải chuỗi; không bao giờ so khớp nội dung `recap` với tên agent được yêu cầu. Lệnh `recap` của helper mặc định `n:1`; vẫn cho phép `n` tới 5 khi hỏi tiến độ. Giữ nguyên quy tắc dừng sau receipt đã biết và bảo vệ delivery chưa rõ kết quả.
 
-Routing OS phân biệt yêu cầu giao cho agent/Harness rõ ràng với tên có thể là agent: “Ask Mike” chỉ thêm gợi ý tìm agent, không ép gọi Harness. Các câu thông thường như “Check my calendar” và “Have a nice day” không ép Harness. Yêu cầu mới rõ ràng được ưu tiên trước gợi ý follow-up; yêu cầu Buddy rõ ràng không nhận chỉ dẫn routing Harness. Với persona Lamp mặc định, yêu cầu thực hiện công việc số đã cho phép dùng route Harness; người dùng không cần nêu Harness hay agent. Chính sách của robot khác và SOUL tùy chỉnh không tự bị thay đổi. Model thực hiện lựa chọn; helper kiểm tra target theo ID, OS không có dịch vụ xếp hạng ngữ nghĩa.
+Routing OS phân biệt yêu cầu giao cho agent/Harness rõ ràng với tên có thể là agent: “Ask Mike” chỉ thêm gợi ý tìm agent, không ép gọi Harness. Các câu thông thường như “Check my calendar” và “Have a nice day” không ép Harness. Yêu cầu mới rõ ràng được ưu tiên trước gợi ý follow-up; yêu cầu Buddy rõ ràng không nhận chỉ dẫn routing Harness. Với persona Lamp mặc định, yêu cầu thực hiện công việc số đã cho phép dùng route Harness; người dùng không cần nêu Harness hay agent. Chính sách của robot khác và SOUL tùy chỉnh không tự bị thay đổi. Main model vẫn chọn đích thực thi; helper kiểm tra target theo ID. Cơ chế đối chiếu JEV tùy chọn bên dưới chỉ quan sát lựa chọn đó, không thay đổi nó.
 
 Sau xác thực, `autonomous_device_request` mã hóa mang `hello` ứng dụng để thương lượng capability và tiếp tục sự kiện. Phản hồi dùng `autonomous_device_result`; sự kiện dùng `autonomous_device_event`. Giữ khóa pairwise/group, miền chữ ký, dẫn xuất khóa, rekey có xác thực và chống replay gốc. Từ chối kết quả ứng dụng plaintext.
 
@@ -220,3 +220,42 @@ với journal và test idempotency hiện có.
 Helper bắt buộc ID agent hoặc tên chính xác duy nhất cho `send`, `answer`, `stop`; không âm thầm sửa target mặc định đã lưu. Lệnh local `context` trả text task gốc, target và bằng chứng workflow qua các namespace, phân trang task tối đa 20 và lọc theo conversation/intent tùy chọn. Cần đối chiếu lịch sử với project người dùng yêu cầu và metadata agent hiện tại. Run ID của response không phải conversation ID ổn định: chặn tạo namespace bằng run ID đó, nhưng vẫn cho resume workflow legacy đã tồn tại.
 
 Context kết quả follow-up kèm `agentId` và `responseRunId` do transport xác định cùng text kết quả không đáng tin cậy. Khi người dùng sửa đích, main agent giữ yêu cầu gốc chưa hoàn thành và tìm đúng workspace; thiếu scene không cho phép tạo scene thay thế ở project khác. Helper chặn chắc chắn việc gửi thiếu target; chọn đúng về ngữ nghĩa giữa các target tường minh vẫn phụ thuộc model và cần kiểm chứng thực tế.
+
+## Đối chiếu lựa chọn agent bằng JEV
+
+OS có thể đối chiếu target Harness mà main agent đã chọn với lựa chọn độc lập của
+JEV. Đây là đánh giá quan sát (shadow): không đổi target, chặn gửi, viết lại task
+được giao hay trả lựa chọn cho skill. Prompt skill, contract Harness, kiểm tra target
+tường minh và bảo vệ delivery giữ nguyên.
+
+Cấu hình trong `config.json`:
+
+```json
+{
+  "jev_harness": {"enabled": true, "timeout_ms": 3000}
+}
+```
+
+Thiếu section hoặc `enabled` thì mặc định bật. Đặt `enabled:false` để tắt. Cờ này
+độc lập với `local_intent` và `jev_intent`; dùng proxy JEV đã cấu hình qua
+`llm_base_url` / `llm_api_key`. Thiếu credentials thì bỏ qua đánh giá. Bật đánh giá
+có thể phát sinh phí sử dụng model.
+
+Observer lưu RAM từ những phản hồi `agents.list` thành công sẵn có, tối đa 32 ứng
+viên, hiệu lực 30 giây và gắn với máy đã pair cùng server instance Harness. Không
+gọi thêm RPC khám phá hay recap. Dữ liệu ứng viên thiếu, cũ hoặc quá giới hạn thì
+bỏ qua, tránh đối chiếu trên danh sách bị cắt mất ứng viên. Khi có `turn.send`, OS
+đối chiếu target đã chọn với ID ứng viên JEV chọn hoặc kết quả không đủ thông tin
+một cách bất đồng bộ. Chỉ chạy một đánh giá cùng lúc, không xếp hàng; timeout tối
+đa ba giây và shutdown OS hủy công việc. Việc gửi không chờ JEV.
+
+Proxy đã cấu hình nhận text task được giao tối đa 2.000 byte và metadata agent
+(`name`, `recap`, `workspace`, `packageId`, `runtime`, `state`, `engine`) tối đa
+1.000 byte JSON cho mỗi ứng viên. Text hoặc metadata quá giới hạn thì bỏ qua
+đánh giá. Không gửi toàn bộ transcript hay history.
+Vì vậy kết quả đồng ý không chứng minh model nào hiểu đúng ý định gốc của người
+dùng; bất đồng là bằng chứng để xem xét, không phải lệnh đổi agent. Metadata vẫn
+là dữ liệu không đáng tin cậy. Log chẩn đoán chỉ chứa ID, kết quả (`agree`,
+`disagree`, `abstain` hoặc lý do bỏ qua) và latency, không chứa text task, recap
+hay credentials. Kiểm chứng dùng mock; test không xác nhận độ chính xác chọn agent
+qua provider thật hoặc hành vi trên thiết bị vật lý.

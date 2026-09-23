@@ -34,6 +34,7 @@ type jevDecider interface {
 // errors open a brief cooldown. No hardware work runs in a detached goroutine.
 type Resolver struct {
 	client     jevDecider
+	harness    bool
 	busy       atomic.Bool
 	retryAfter atomic.Int64
 }
@@ -60,8 +61,16 @@ func (r *Resolver) Resolve(ctx context.Context, text string, candidates []Candid
 	if strings.TrimSpace(options.Endpoint) == "" || strings.TrimSpace(options.APIKey) == "" {
 		return skip("missing_config")
 	}
-	text = jevText(text)
-	if text == "" || len(text) > jevMaxInputBytes {
+	maxInputBytes := jevMaxInputBytes
+	if r.harness {
+		// Project names, paths and structured task context must retain their case
+		// and punctuation; hardware speech normalization is not suitable here.
+		text = strings.TrimSpace(text)
+		maxInputBytes = 8000
+	} else {
+		text = jevText(text)
+	}
+	if text == "" || len(text) > maxInputBytes {
 		return skip("invalid_input")
 	}
 	if len(candidates) == 0 {
