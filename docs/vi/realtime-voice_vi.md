@@ -2854,3 +2854,20 @@ thứ tự frame nhận (`rx`), status của chính frame, cờ terminal/interru
 `speak_queue` để phân biệt text lặp từ upstream hay lặp trong HAL. Đây là output
 của Autonomous proxy; riêng log này chưa phân biệt model sinh lặp với proxy
 replay. Không ghi payload audio/ảnh hoặc credential. Routing và playback không đổi.
+
+Tất cả prompt realtime (mặc định, OpenAI Realtime, Gemini, Pipecat và cả hai
+tầng GPT-Live) chuyển về main khi người dùng nói rõ với thiết bị rằng họ đau đầu,
+mệt, chóng mặt, bí bách hoặc khó tập trung, kể cả không có câu hỏi/động từ hành
+động và có “okay” ở cuối. Câu hỏi về không khí/CO₂/nhiệt độ/độ ẩm/thông gió
+của phòng hiện tại và follow-up về khó chịu (“Could it be because the room is
+too airtight?”) cũng thuộc skill wellbeing/environment của main. System prompt của từng provider,
+lời nhắc routing Gemini sau memory và mô tả tool delegate dùng chung nêu rõ ngoại lệ
+này: không thay handoff bằng lời khuyên chung, giải thích nguyên nhân, hứa giảm
+triệu chứng, disclaimer, search hay `complete_response`. Báo triệu chứng khẩn
+cấp được chuyển ngay; main quyết định có cần kiểm tra sensor hay không. Câu hỏi
+kiến thức không liên quan vẫn trả lời trực tiếp; vẫn kiểm tra lời nói có hướng
+tới thiết bị và nghe rõ hay không. Đây là hướng dẫn model, không phải bộ phân
+loại triệu chứng xác định. Voice GPT-Live dùng handoff backend native; backend
+gọi tiếp `delegate_to_main` thay vì tự trả lời hoặc search. Cả hai tầng không
+phát lời xác nhận cho handoff wellbeing. Thay đổi đi cùng HAL; chỉ upload skills không cập
+nhật prompt realtime.

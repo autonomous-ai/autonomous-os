@@ -2942,3 +2942,20 @@ distinguish repeated upstream text from downstream duplication. This observes
 the Autonomous proxy output, not the model before the proxy; it cannot by itself
 distinguish model repetition from proxy replay. No audio/image payload or
 credentials are logged. Routing and playback are unchanged.
+
+All realtime prompts (default, OpenAI Realtime, Gemini, Pipecat and both
+GPT-Live stages) delegate clearly addressed reports of headache, fatigue, dizziness,
+stuffiness or difficulty concentrating, even without a question/action verb
+and even with a trailing “okay”. Current-room air/CO₂/temperature/humidity/
+ventilation questions and discomfort follow-ups (“Could it be because the room
+is too airtight?”) also belong to main's wellbeing/environment skills. The
+provider system prompts, Gemini post-memory routing reminder and shared
+delegate tool description make this exception explicit: no generic advice, causal explanation, relief
+promise, disclaimer, search or `complete_response` in place of handoff.
+Urgent reports hand off immediately; main decides whether a sensor check is
+appropriate. Unrelated educational questions remain direct answers, and
+addressed-speech/audio-fidelity checks still apply. This is model guidance,
+not a deterministic symptom classifier. GPT-Live voice uses its native backend
+handoff; its backend then calls `delegate_to_main` instead of answering or
+searching. Neither stage speaks a wellbeing acknowledgment. It ships with HAL; uploading skills
+alone does not update the realtime prompts.
