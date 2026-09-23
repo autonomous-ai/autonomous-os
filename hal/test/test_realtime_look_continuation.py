@@ -28,8 +28,15 @@ def test_fresh_look_replays_only_legacy_sessions(monkeypatch, async_status):
         name="look", call_id="look-1", arguments="{}",
     ))
     assert replay is not async_status
-    ack, image = [call.args[0][0] for call in rt._agent.send.call_args_list]
+    sent = [call.args[0][0] for call in rt._agent.send.call_args_list]
+    ack = sent[0]
     assert isinstance(ack, FunctionCallResultInput)
     assert ack.call_id == "look-1"
-    assert isinstance(image, ImageInput)
+    if async_status:
+        assert len(sent) == 1
+        assert ack.image is rt._capture_frame.return_value
+    else:
+        assert len(sent) == 2
+        assert ack.image is None
+        assert isinstance(sent[1], ImageInput)
     assert rt._looked_this_turn
