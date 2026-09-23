@@ -28,7 +28,7 @@ func (s *Server) observeHarnessPreparation(kind string, reply *harnessReplyReque
 		"state": boundedHarnessStoreText(operation["state"], 40), "phase": boundedHarnessStoreText(operation["phase"], 40), "text": text,
 	}, reply.RunID)
 	if s.agentHandler != nil {
-		s.agentHandler.DeliverHarnessPreparationProgress(reply.RunID, text)
+		s.agentHandler.DeliverHarnessPreparationProgress(reply.RunID, boundedHarnessStoreText(operation["operationId"], 128), text)
 	}
 }
 
