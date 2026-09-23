@@ -87,12 +87,12 @@ Endpoint tới sau playback không được dùng để tạo ngược mẫu lat
 Realtime chỉ ghi completed khi nhận terminal thành công của provider gắn đúng
 interaction. Timeout khi nhận, tín hiệu done tự tạo và ngắt lời không phải bằng
 chứng hoàn tất; không có terminal thành công thì task vẫn là incomplete.
-Câu trả lời trực tiếp của Gemini extended-thinking NON_BLOCKING còn cần model
-xác nhận tường minh bằng `complete_response`. Nếu hết cửa sổ chờ tool mà thiếu
-outcome, HAL delegate transcript gốc từ provider, không ghi hoàn tất: filler,
-lời hứa hoặc lời báo lỗi không chứng minh KPI-3 thành công. Thời điểm playback
-KPI-1 và mọi ngưỡng KPI giữ nguyên. Model vẫn có thể phân loại sai khi gọi
-`complete_response`; đây là bằng chứng thực thi, không chứng minh đúng ý người dùng.
+Gemini Extended Thinking dùng `interactionStatus=IDLE` cùng text trả lời được
+chấp nhận, không còn tool cục bộ hoặc continuation bị giữ làm bằng chứng thực
+thi. Không cần verdict từ LLM thứ hai sau terminal này. Output rỗng và công việc
+cục bộ chưa xong vẫn fallback. Session thiếu status giữ xác nhận/kiểm tra outcome
+và grace có giới hạn hiện hữu. Provider kết thúc hoặc classifier xác nhận đều
+không bảo đảm đúng nội dung. Playback KPI-1 và mọi ngưỡng KPI giữ nguyên.
 Ngắt lời thật từ provider tạo biên suppression `server_barge_in`
 chỉ áp dụng cho interaction bị huỷ, giữ grace **2 giây** và cửa sổ quan sát
 **60 giây** hiện có. Audio không có owner không được tính là acknowledgement.
@@ -364,7 +364,7 @@ lỗi, transcript hay kết quả tool.
 | `harness_turn_done`, `harness_turn_summary` | `completed`: completion Harness đã ghép đúng; summary cần nội dung, done không cần recap hay TTS |
 | `harness_turn_error` | `failed`: `turn.error` hoặc `agent.error` Harness đã ghép đúng, kể cả thiếu text |
 | `harness_question_open` | `unknown`: đang chờ trả lời câu hỏi, gồm thu thập câu trả lời từng phần cục bộ |
-| `realtime_turn_done` | `completed`: terminal thành công của provider gắn đúng lượt hoàn tất turn đã handled; Gemini extended-thinking NON_BLOCKING còn cần `complete_response` tường minh, không tính filler hay fallback do thiếu outcome |
+| `realtime_turn_done` | `completed`: terminal thành công của provider gắn đúng lượt hoàn tất turn đã handled; Gemini Extended Thinking dùng `IDLE` cùng text trả lời được chấp nhận và không còn công việc cục bộ chưa xong; session thiếu status giữ xác nhận/kiểm tra outcome, fallback không tính hoàn thành |
 
 Ghép bằng chứng bằng **thiết bị + run_id** hoặc **thiết bị + interaction_id**.
 OS cũng ghi run không phải thoại: không tự đưa chúng vào mẫu số. Với

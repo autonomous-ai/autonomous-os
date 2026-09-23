@@ -15,7 +15,7 @@ Code nằm ở `hal/realtime/`; được điều khiển bởi
 
 Với [KPI-3 giọng nói](voice-metrics_vi.md#kpi-3-chạy-xong-không-đánh-giá-làm-đúng),
 `TurnDoneEvent.execution_completed` mặc định `false`, chỉ thành true khi có
-tín hiệu kết thúc từ provider: Gemini `generation_complete` hoặc
+tín hiệu kết thúc từ provider: Gemini Extended Thinking dùng `IDLE` cùng text trả lời được chấp nhận và không còn công việc cục bộ chưa xong; session thiếu status dùng `generation_complete` hoặc
 `turn_complete` bình thường, không interrupted; OpenAI `response.done`
 với `response.status == "completed"` và không có barge-in trong response đó;
 GPT-Live không có terminal nào trên đường truyền, nên adapter tự tổng hợp —
@@ -276,13 +276,14 @@ ngay ở `generation_complete`, đồng thời nhả commit manual-VAD kế ti�
 còn chờ silent-watchdog vô ích sau khi đã trả lời; `turn_complete` đến muộn sẽ
 được bỏ trước lượt sau.
 
-**Ghi chú điều tra (2026-09-22, chưa triển khai):**
-[Tài liệu Gemini 3.8 Live Extended Thinking của Google](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-live-extended-thinking)
-phân biệt `interaction_status=IN_PROGRESS` và `IDLE`; `IDLE` báo đã xong suy luận,
-xử lý và tool. Cần xác minh Autonomous proxy cùng SDK đang cài có chuyển tiếp
-trường này trước khi dùng nó để kết thúc grace định tuyến. Giữ pending tool,
-ownership playback và cancel; vẫn cần fallback khi thiếu status. Không coi riêng
-`turnComplete` tương đương trạng thái idle này.
+**Ghi chú lifecycle (điều tra 22/09, triển khai 23/09/2026):**
+Với Gemini Extended Thinking, `IN_PROGRESS` giữ interaction qua filler và tool.
+`IDLE` kết thúc thực thi phía provider. Khi đã nhận text trả lời được chấp nhận,
+không còn tool cục bộ hoặc continuation bị giữ, HAL kết thúc lượt mà không gọi
+LLM thứ hai để phân loại. Routing tường minh và interrupt vẫn được ưu tiên;
+output rỗng hoặc công việc cục bộ chưa xong vẫn fallback. Đây là bằng chứng kết
+thúc thực thi, không bảo đảm đúng nội dung. Session thiếu status giữ grace có
+giới hạn và bộ kiểm tra outcome bên dưới.
 
 Với Gemini `extended-thinking`, tool dùng `NON_BLOCKING`: câu filler như
 “I can help with that.” không được làm mất tác vụ người dùng (#453).
@@ -292,7 +293,7 @@ này; hành động, lời hứa, lỗi và việc chưa giải quyết phải d
 trực tiếp cần outcome được xác nhận cùng terminal thành công của provider mới
 được tính handled/completed. Text/audio đơn thuần không chứng minh hoàn tất.
 
-Với lời đã phát nhưng thiếu quyết định routing, HAL chạy kiểm tra độc lập bằng
+Với session thiếu interaction status và lời đã phát nhưng thiếu quyết định routing, HAL chạy kiểm tra độc lập bằng
 text model trong cửa sổ grace hiện có, dùng model, endpoint và credential của
 realtime summarizer. Đầu vào gồm yêu cầu gốc, lời đã nói và bằng chứng tìm kiếm
 công khai; bước kiểm tra không có tool hay phát âm thanh. Kết quả chính xác
@@ -2842,4 +2843,14 @@ vẫn giữ cue thinking.
 
 ### Lifecycle interaction của Gemini Extended Thinking
 
-Với `gemini-3.8-live-extended-thinking`, `serverContent.interactionStatus` là trạng thái lifecycle của provider: kết thúc một đoạn nói khi còn `IN_PROGRESS` không kết thúc interaction. HAL giữ trường này bằng adapter riêng từng session vì google-genai 2.12.1 loại bỏ trường phản hồi chưa biết. Lời nói tiếp theo vẫn stream trong cùng lượt, kể cả sau filler và tool `complete_response` chỉ mang tính gợi ý. Khi `IDLE`, HAL kiểm tra toàn bộ câu trả lời trước khi xác nhận thành công hoặc fallback; idle không đồng nghĩa task thành công. Delegate/reject tường minh và interrupt vẫn được ưu tiên. Interaction bị kẹt có giới hạn im lặng bằng giá trị lớn hơn giữa `REALTIME_TURN_MAX_SILENCE_S` và `REALTIME_RECV_QUEUE_TIMEOUT_S`, gia hạn khi có output/tool, không gia hạn chỉ vì status heartbeat lặp lại. Model/session không có tín hiệu này giữ nhánh grace có giới hạn hiện hữu. Khi session đã báo trạng thái async này, `look` mới trả JPEG trong `FunctionResponse.parts` cùng call ID và tên tool gốc, tiếp tục interaction hiện tại mà không replay audio người dùng. Trong test qua proxy, frame video realtime gửi riêng sau `activityEnd` không được dùng cho câu trả lời ảnh hiện tại; gắn ảnh vào kết quả tool sửa việc liên kết này. Chỉ kết quả đa phương thức này dùng payload WebSocket base64 tường minh vì google-genai 2.12.1 không serialize được bytes lồng trong `send_tool_response`. Kết quả bị bỏ nếu call look đã bị cancel, resolve hoặc xoá khi reset session. ACK tool khác vẫn qua SDK; session không có async status giữ ACK → video → replay. Image input gửi riêng giữ gate pending-tool hiện hữu.
+Với `gemini-3.8-live-extended-thinking`, `serverContent.interactionStatus` là trạng thái lifecycle của provider: kết thúc một đoạn nói khi còn `IN_PROGRESS` không kết thúc interaction. HAL giữ trường này bằng adapter riêng từng session vì google-genai 2.12.1 loại bỏ trường phản hồi chưa biết. Lời nói tiếp theo vẫn stream trong cùng lượt, kể cả sau filler và tool `complete_response` chỉ mang tính gợi ý. Khi `IDLE`, HAL kết thúc lời đáp mà không gọi classifier độc lập nếu không còn tool cục bộ hoặc continuation bị giữ. Output rỗng hoặc công việc cục bộ chưa xong vẫn fallback; terminal này xác nhận kết thúc thực thi, không bảo đảm đúng nội dung. Delegate/reject tường minh và interrupt vẫn được ưu tiên. Interaction bị kẹt có giới hạn im lặng bằng giá trị lớn hơn giữa `REALTIME_TURN_MAX_SILENCE_S` và `REALTIME_RECV_QUEUE_TIMEOUT_S`, gia hạn khi có output/tool, không gia hạn chỉ vì status heartbeat lặp lại. Model/session không có tín hiệu này giữ nhánh grace có giới hạn hiện hữu. Khi session đã báo trạng thái async này, `look` mới trả JPEG trong `FunctionResponse.parts` cùng call ID và tên tool gốc, tiếp tục interaction hiện tại mà không replay audio người dùng. Trong test qua proxy, frame video realtime gửi riêng sau `activityEnd` không được dùng cho câu trả lời ảnh hiện tại; gắn ảnh vào kết quả tool sửa việc liên kết này. Chỉ kết quả đa phương thức này dùng payload WebSocket base64 tường minh vì google-genai 2.12.1 không serialize được bytes lồng trong `send_tool_response`. Kết quả bị bỏ nếu call look đã bị cancel, resolve hoặc xoá khi reset session. ACK tool khác vẫn qua SDK; session không có async status giữ ACK → video → replay. Image input gửi riêng giữ gate pending-tool hiện hữu.
+
+### Log transcription gốc từ Gemini
+
+`[realtime][wire-output]` ghi từng `serverContent.outputTranscription` ngay khi
+nhận WebSocket, trước SDK và buffer câu của HAL. Log có ID session cục bộ, số
+thứ tự frame nhận (`rx`), status của chính frame, cờ terminal/interrupt,
+`finished` và toàn bộ text với ký tự xuống dòng được escape. Đối chiếu chunk với
+`speak_queue` để phân biệt text lặp từ upstream hay lặp trong HAL. Đây là output
+của Autonomous proxy; riêng log này chưa phân biệt model sinh lặp với proxy
+replay. Không ghi payload audio/ảnh hoặc credential. Routing và playback không đổi.

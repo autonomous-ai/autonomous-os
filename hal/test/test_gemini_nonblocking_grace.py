@@ -1123,15 +1123,80 @@ def test_server_status_keeps_filler_and_answer_in_one_interaction(monkeypatch, l
     texts = [e.output.text for e in events
              if isinstance(e, OutputEvent) and isinstance(e.output, TextOutput)]
     assert texts == ["Let me look.", "Your shirt says DO IT ANYWAY."]
-    assert checked[-1] == "Let me look.Your shirt says DO IT ANYWAY."
-    assert events[-1].fallback_to_main == (not completed)
-    assert events[-1].execution_completed == completed
+    # A provisional pre-status check may run, but never a second check of the
+    # completed interaction. Its result must not override provider IDLE.
+    assert all(answer == "Let me look." for answer in checked)
+    assert not events[-1].fallback_to_main
+    assert events[-1].execution_completed
 
 
 def test_routing_finishes_in_progress_without_waiting_for_idle():
     agent = _agent([_status("IN_PROGRESS"), _tool()])
     events = _receive(agent)
     assert _calls(events)[0].name == "delegate_to_main"
+    assert not events[-1].fallback_to_main
+
+
+@pytest.mark.parametrize("live", [False, True])
+@pytest.mark.parametrize("same_frame", [False, True])
+def test_idle_answer_finishes_without_waiting_for_unavailable_checker(monkeypatch, live, same_frame):
+    from hal.realtime import response_outcome
+    monkeypatch.setattr(gemini_live.app_config, "LIVE_MODE", live)
+    checked = []
+
+    async def stalled_check(*args, **kwargs):
+        checked.append(args)
+        await asyncio.Future()
+
+    monkeypatch.setattr(response_outcome, "spoken_response_complete", stalled_check)
+    answer = _speech("You are wearing a yellow shirt.")
+    if same_frame:
+        answer.server_content.interaction_status = "IDLE"
+        answer.server_content.turn_complete = True
+    messages = [_status("IN_PROGRESS"), _speech("Let me look."),
+                _tool("complete_response"), answer]
+    if not same_frame:
+        messages.append(_status("IDLE"))
+    agent = _agent(messages)
+    agent._user_transcript = "Look at me. What am I wearing?"
+    events = _receive(agent)
+    _assert_done(agent, events)
+    assert not checked
+    assert not events[-1].fallback_to_main
+    assert events[-1].execution_completed
+    assert [e.output.text for e in events if isinstance(e, OutputEvent)
+            and isinstance(e.output, TextOutput)] == [
+                "Let me look.", "You are wearing a yellow shirt."]
+
+
+@pytest.mark.parametrize("pending", [False, True])
+def test_idle_does_not_claim_completion_for_empty_or_pending_work(pending):
+    messages = [_status("IN_PROGRESS")]
+    if pending:
+        messages.extend([_speech("Let me look."), _tool("look", "look-pending")])
+    messages.append(_status("IDLE"))
+    agent = _agent(messages)
+    events = _receive(agent)
+    assert events[-1].fallback_to_main
+    assert not events[-1].execution_completed
+
+
+@pytest.mark.parametrize("name", ["delegate_to_main", "reject_turn", "end_conversation"])
+def test_idle_after_speech_preserves_explicit_routing(name):
+    routing = _tool(name)
+    routing.server_content = _status("IDLE").server_content
+    agent = _agent([_status("IN_PROGRESS"), _speech("I'll pass that on."), routing])
+    events = _receive(agent)
+    assert [call.name for call in _calls(events)] == [name]
+    assert not events[-1].fallback_to_main
+
+
+def test_idle_with_interrupt_never_completes_or_falls_back():
+    terminal = _status("IDLE")
+    terminal.server_content.interrupted = True
+    agent = _agent([_status("IN_PROGRESS"), _speech("Your shirt is yellow."), terminal])
+    events = _receive(agent)
+    assert not events[-1].execution_completed
     assert not events[-1].fallback_to_main
 
 
