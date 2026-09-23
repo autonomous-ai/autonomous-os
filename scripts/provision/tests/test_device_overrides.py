@@ -18,20 +18,6 @@ overrides = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(overrides)
 
 
-def alsa_block(text, name):
-    """Extract a named block, including any nested slave configuration."""
-    start = text.index(name + " {")
-    depth = 0
-    for index in range(text.index("{", start), len(text)):
-        if text[index] == "{":
-            depth += 1
-        elif text[index] == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start:index + 1]
-    raise AssertionError(f"unclosed ALSA block: {name}")
-
-
 class DeviceOverrideTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -86,30 +72,27 @@ class DeviceOverrideTests(unittest.TestCase):
         self.assertEqual(identity.read_text(), "pro-respeaker-lite\n")
         self.assertFalse((self.root / "opt/hal/.env").exists())
 
-    def test_pro_uses_standard_microphones_and_keeps_lite_speaker(self):
+    def test_pro_only_adds_environment_to_standard(self):
+        before = self.snapshot()
         self.select("pro")
         overrides.apply_overrides(self.profile, self.root)
-        env = (self.profile / "rootfs/opt/hal/.env").read_text()
-        for value in ("HAL_AEC_ENABLED=true", "HAL_LIVE_MODE=false",
-                      "HAL_SILERO_THRESHOLD=0.15", "HAL_LIVE_UPLINK_DURING_PLAYBACK=cancelled",
-                      "HAL_AUDIO_INPUT_ALSA=plug:device_micro2", "HAL_AUDIO_SENSING_DEVICE=plug:device_micro1",
-                      "HAL_AUDIO_OUTPUT_ALSA=plug:device_speaker", "HAL_VOLUME_STATE_PATH=/root/config/.volume-pro"):
-            self.assertIn(value + "\n", env)
-        alsa = (self.profile / "rootfs/etc/asound.conf").read_text()
-        self.assertIn("ctl.device_micro1 { type hw card device_cmedia }", alsa)
-        self.assertIn("ctl.device_micro2 { type hw card device_micro2 }", alsa)
-        self.assertNotIn("respeaker_capture_shared", alsa)
-        self.assertIn('pcm.device_speaker { type plug slave.pcm "respeaker_playback_vol" }', alsa)
-        self.assertIn("ctl.device_speaker { type hw card Lite }", alsa)
-        standard = (SOURCE / "rootfs/etc/asound.conf").read_text()
-        lite = (SOURCE / "overrides/pro-respeaker-lite/rootfs/etc/asound.conf").read_text()
-        for name in ("pcm.device_micro1", "ctl.device_micro1", "pcm.device_micro2", "ctl.device_micro2"):
-            self.assertEqual(alsa_block(alsa, name), alsa_block(standard, name))
-        for name in ("pcm.respeaker_playback_shared", "pcm.respeaker_playback_vol",
-                     "pcm.device_speaker", "ctl.device_speaker", "pcm.!default", "ctl.!default"):
-            self.assertEqual(alsa_block(alsa, name), alsa_block(lite, name))
-        self.assertIn("startup_volume: 35", (self.profile / "ROBOT.md").read_text())
-        self.assertIn("max_volume: 35", (self.profile / "SAFETY.md").read_text())
+        after = self.snapshot()
+        changed = {name for name in before.keys() | after.keys() if before.get(name) != after.get(name)}
+        self.assertEqual(changed, {"ROBOT.md", "sen63c.json", "rootfs/opt/hal/.env"})
+        # The generic renderer namespaces saved volume for every selected profile;
+        # no microphone, playback, processing or volume-policy overrides exist.
+        env = (SOURCE / "rootfs/opt/hal/.env").read_text()
+        self.assertEqual(
+            (self.profile / "rootfs/opt/hal/.env").read_text(),
+            overrides.merge_env(env, "HAL_VOLUME_STATE_PATH=/root/config/.volume-pro"),
+        )
+        for name in ("rootfs/etc/asound.conf", "SAFETY.md"):
+            self.assertEqual((self.profile / name).read_bytes(), (SOURCE / name).read_bytes())
+        self.assertEqual(
+            (self.profile / "ROBOT.md").read_text().replace("  environment:", "  # environment:"),
+            (SOURCE / "ROBOT.md").read_text(),
+        )
+        self.assertFalse((self.profile / "overrides/pro/rootfs").exists())
 
     def test_pro_xvf3800_keeps_the_array_tuning(self):
         # The reSpeaker XVF3800 assembly tested before the ReSpeaker Lite: live
@@ -144,7 +127,7 @@ class DeviceOverrideTests(unittest.TestCase):
     def test_profile_cannot_overwrite_identity(self):
         self.select("pro")
         target = self.profile / "overrides/pro/rootfs" / overrides.PROFILE_PATH
-        target.parent.mkdir(parents=True)
+        target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("standard")
         before = self.snapshot()
         with self.assertRaisesRegex(ValueError, "identity"):
@@ -172,10 +155,10 @@ class DeviceOverrideTests(unittest.TestCase):
         self.assertEqual(identity.read_text(), "pro")
 
     def test_volume_state_is_selected_without_env_overlay(self):
-        self.select("pro")
-        (self.profile / "overrides/pro/rootfs/opt/hal/.env").unlink()
+        self.select("pro-respeaker-lite")
+        (self.profile / "overrides/pro-respeaker-lite/rootfs/opt/hal/.env").unlink()
         overrides.apply_overrides(self.profile, self.root)
-        self.assertIn("HAL_VOLUME_STATE_PATH=/root/config/.volume-pro", (self.profile / "rootfs/opt/hal/.env").read_text())
+        self.assertIn("HAL_VOLUME_STATE_PATH=/root/config/.volume-pro-respeaker-lite", (self.profile / "rootfs/opt/hal/.env").read_text())
 
     def test_standard_environment_is_disabled(self):
         self.select("standard")

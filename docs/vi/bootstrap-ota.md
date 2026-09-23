@@ -372,26 +372,28 @@ chỉ nằm trong package device. Ví dụ:
 | Profile | Mic hội thoại | Mic sensing | Loa | Âm lượng khởi động / tối đa | SEN63C |
 |---|---|---|---|---|---|
 | `standard` | Jieli `device_micro2` | CMedia `device_cmedia` | Loa gốc | Mặc định gốc | Tắt |
-| `pro` | Jieli `device_micro2` | CMedia `device_cmedia` | ReSpeaker Lite softvol `Speaker` | 35 / 35 | Bật trên `orangepi_sun60`, bus `0` |
+| `pro` | Jieli `device_micro2` | CMedia `device_cmedia` | Loa gốc | Mặc định gốc | Bật trên `orangepi_sun60`, bus `0` |
 | `pro-respeaker-lite` | Kênh trái đã xử lý của ReSpeaker Lite | ES8389 trên board (`sndi2s4`) | ReSpeaker Lite softvol `Speaker` | 35 / 35 | Bật trên `orangepi_sun60`, bus `0` |
 | `pro-xvf3800` | XVF3800 (`Array`) | ES8389 trên board (`sndi2s4`) | XVF3800 | 77 / 77 | Bật trên `orangepi_sun60`, bus `0` |
 
-Mỗi thư mục Pro có `profile.json` chứa mặc định âm lượng và
+Mỗi thư mục Pro có `profile.json` chứa
 `capabilities: {"environment": true}`, cùng `device/sen63c.json` bật sensor
-OrangePi. Package Standard gốc comment capability này và tắt SEN63C, nên
+OrangePi. Chỉ hai bản Lite và XVF3800 ghi đè mặc định âm lượng. Package Standard gốc comment capability này và tắt SEN63C, nên
 không thu nhận, ghi clock bus cho SEN63C, polling UI môi trường hay đủ điều
 kiện chọn skill environment. SEN55/SCD41 và board thiếu entry tương ứng vẫn
 tắt ngay cả trên Pro.
 
 `pro-respeaker-lite` giữ nguyên toàn bộ overlay `pro` trước đây, gồm file ALSA,
 udev và service softvol: bật AEC HAL, ngưỡng Silero `0.10`, tắt Live, uplink
-luôn mở. `pro` chỉ đổi đường mic về cặp Jieli/CMedia của Standard và mặc
-định xử lý mic tương ứng: bật AEC HAL, Silero `0.15`, tắt Live, uplink đã khử
-echo. Đường loa Lite và mặc định âm lượng 35% giữ nguyên. `pro-xvf3800` giữ
+luôn mở. `pro` chỉ là audio Standard thêm SEN63C: không có override `rootfs/`,
+`.env`, ALSA, udev, service hay âm lượng. Cấu hình ALSA và giới hạn safety
+sau render giống Standard từng byte; mic, loa, xử lý và mặc định âm lượng
+đều dùng package gốc. Renderer chung chỉ thêm namespace lưu âm lượng của
+profile (`HAL_VOLUME_STATE_PATH=/root/config/.volume-pro`) vào môi trường HAL được sinh. `pro-xvf3800` giữ
 XMOS AEC, tắt AEC phần mềm, bật Live và uplink luôn mở.
 
 ReSpeaker Lite (XMOS XU316, USB `2886:0019`, card ALSA `Lite`) dùng audio
-S16_LE 2 kênh 16 kHz. Cả `pro` và `pro-respeaker-lite` cần nối loa qua Lite.
+S16_LE 2 kênh 16 kHz. `pro-respeaker-lite` cần nối loa qua Lite.
 Card không có mixer ALSA; oneshot do udev kích mở PCM trước `hal.service`
 để tạo control softvol cho bước khôi phục âm lượng lúc boot. Mức 35% được
 chỉnh trên bộ Lite, không phải mức âm lượng tương đương đã hiệu chuẩn giữa
@@ -399,7 +401,7 @@ các thiết bị. Standard giữ mặc định audio và ceiling. Renderer khô
 flash hoặc tune phần cứng được gắn.
 
 Máy `pro` hiện có dùng mic Lite phải chọn rõ `pro-respeaker-lite` trước khi
-cài package device mới để giữ đường mic. Không tự chuyển marker. Chỉ đổi
+cài package device mới để giữ toàn bộ cấu hình audio. Không tự chuyển marker. Chỉ đổi
 marker không thay file đã cài; cần cài lại gói device.
 
 Image builder/cài mới áp override trước khi cài rootfs. OTA bắt đầu từ
@@ -444,8 +446,10 @@ Updater cũ chưa biết áp override: bootstrap tự động refresh updater tr
 nhưng cập nhật thủ công hoặc refresh thất bại phải cài updater mới trước khi
 chọn profile.
 
-Profile được chọn lưu volume riêng trong `config/.volume-<tên>` (HAL và os-server
-thống nhất); thiếu/standard giữ `config/.volume`. Nhờ vậy mức phần trăm của loa
+Mọi profile được chọn lưu volume riêng trong `config/.volume-<tên>`
+(HAL và os-server thống nhất), kể cả `pro` chỉ override capability/JSON device.
+Renderer chung sinh `HAL_VOLUME_STATE_PATH` tương ứng; thiếu lựa chọn hoặc
+Standard giữ `config/.volume`. Nhờ vậy mức phần trăm của loa
 cũ không ghi đè volume khởi động của bộ mới. HAL chỉnh đúng cả `PCM,0` và
 `PCM,1`, không chỉnh control capture; ghi mixer lỗi trả 503 thay vì lưu thành
 công giả. UI, lệnh giọng nói và volume khởi động vẫn qua ceiling đã chọn.

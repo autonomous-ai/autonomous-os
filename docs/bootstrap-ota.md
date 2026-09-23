@@ -378,28 +378,29 @@ device package. For example:
 | Profile | Voice microphone | Sensing microphone | Speaker | Startup / maximum volume | SEN63C |
 |---|---|---|---|---|---|
 | `standard` | Jieli `device_micro2` | CMedia `device_cmedia` | Base speaker | Base defaults | Disabled |
-| `pro` | Jieli `device_micro2` | CMedia `device_cmedia` | ReSpeaker Lite softvol `Speaker` | 35 / 35 | Enabled on `orangepi_sun60`, bus `0` |
+| `pro` | Jieli `device_micro2` | CMedia `device_cmedia` | Base speaker | Base defaults | Enabled on `orangepi_sun60`, bus `0` |
 | `pro-respeaker-lite` | ReSpeaker Lite processed left input | Onboard ES8389 (`sndi2s4`) | ReSpeaker Lite softvol `Speaker` | 35 / 35 | Enabled on `orangepi_sun60`, bus `0` |
 | `pro-xvf3800` | XVF3800 (`Array`) | Onboard ES8389 (`sndi2s4`) | XVF3800 | 77 / 77 | Enabled on `orangepi_sun60`, bus `0` |
 
-Each Pro directory contains `profile.json` with its volume defaults and
+Each Pro directory contains `profile.json` with
 `capabilities: {"environment": true}`, plus `device/sen63c.json` enabling the
-OrangePi sensor. The base Standard package comments that capability and
+OrangePi sensor. Only the Lite and XVF3800 variants override volume defaults. The base Standard package comments that capability and
 disables SEN63C, so it does not start acquisition, write the SEN63C bus clock,
 poll the environment UI or qualify for the environment skill. SEN55/SCD41
 and boards without matching entries remain disabled even on Pro.
 
 `pro-respeaker-lite` preserves the former `pro` overlay in full, including its
 ALSA, udev and softvol service files: HAL AEC enabled, Silero threshold `0.10`,
-Live off, and always-on uplink. `pro` changes only the microphone path to the
-Standard Jieli/CMedia pair and its microphone processing defaults: HAL AEC
-enabled, Silero `0.15`, Live off, cancelled uplink. Its Lite speaker path and
-35% volume defaults remain unchanged. `pro-xvf3800` keeps XMOS AEC, software
+Live off, and always-on uplink. `pro` is Standard audio plus SEN63C only:
+it has no `rootfs/`, `.env`, ALSA, udev, service or volume override. Its rendered
+ALSA configuration and safety bounds are byte-identical to Standard;
+microphones, speaker, processing and volume defaults all use the base package.
+The common renderer only adds the selected profile's saved-volume namespace
+(`HAL_VOLUME_STATE_PATH=/root/config/.volume-pro`) to the generated HAL environment. `pro-xvf3800` keeps XMOS AEC, software
 AEC off, Live on and always-on uplink.
 
 ReSpeaker Lite (XMOS XU316, USB `2886:0019`, ALSA card `Lite`) uses S16_LE
-2 ch 16 kHz audio. Both `pro` and `pro-respeaker-lite` require their speaker
-wired through Lite. This card has no ALSA mixer; a udev-triggered oneshot opens
+2 ch 16 kHz audio. `pro-respeaker-lite` requires its speaker wired through Lite. This card has no ALSA mixer; a udev-triggered oneshot opens
 the PCM before `hal.service` to create the softvol control for boot volume
 restore. The 35% setting was tuned on the Lite assembly, not calibrated as an
 acoustic equivalence across devices. Standard retains its audio defaults and
@@ -407,7 +408,7 @@ ceiling. The renderer does not detect, flash or retune attached hardware.
 
 Existing `pro` machines using the Lite microphone must explicitly select
 `pro-respeaker-lite` before installing the updated device package to preserve
-their microphone path. There is no automatic marker migration. Changing the
+their full audio configuration. There is no automatic marker migration. Changing the
 marker alone does not replace installed files; reinstall the device package.
 
 Image builders/fresh setup apply a selected override before installing rootfs.
@@ -454,8 +455,10 @@ OTA; simply deleting the file does not undo an already rendered overlay. An old
 updater cannot apply overrides: automatic bootstrap refreshes its updater first,
 but manual/failed-refresh deployments must update it before selecting a profile.
 
-Selected profiles save volume separately as `config/.volume-<name>` (HAL and
-os-server agree); absent/standard retains `config/.volume`. This prevents a
+Every selected profile saves volume separately as `config/.volume-<name>`
+(HAL and os-server agree), including the capability/device-JSON-only `pro`
+profile. The common renderer generates `HAL_VOLUME_STATE_PATH` accordingly;
+absent/Standard retains `config/.volume`. This prevents a
 legacy speaker's saved percentage from overriding the new assembly's startup
 level. HAL addresses both `PCM,0` and `PCM,1`, excluding capture controls; mixer
 write failure returns 503 rather than persisting a false success. UI, voice and
