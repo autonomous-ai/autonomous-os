@@ -302,6 +302,51 @@ in its backend doc (e.g. `docs/agentic/hermes.md`), not a blanket guarantee here
 
 ---
 
+### Jev skill preloading across runtimes
+
+Skill preloading belongs to the runtime's hook or managed bridge, after OS
+hardware-intent routing. It is separate from `jev_intent`: selecting a skill
+never executes a tool or grants permission. Keep Hermes's existing native plugin
+when adding another runtime; do not also classify the same turn in os-server.
+
+- Hermes uses its native `pre_llm_call` hook and `skill_view` loader.
+- PicoClaw uses a native `before_llm` process hook and the skill roster advertised
+  in its system messages. It shares Hermes's Python decision implementation.
+- Codex, Claude Code and OpenCode preload in their OS-managed bridges. They share
+  `system/lib/jevskills` as a library, with separate runtime adapters and native policy
+  checks. This covers ordinary chat sent through those bridges; standalone CLI
+  sessions and Telegram `/coding` sessions retain native discovery.
+- OpenClaw's native plugin and its opt-in/compatibility requirements are described
+  in [OpenClaw Jev preloading](openclaw.md).
+
+The Go adapters use the configured OS proxy at `llm_base_url + /jev/decisions`,
+with `llm_api_key`; only current request text and skill names/descriptions leave
+the device. For recognized voice envelopes, only the authoritative instruction
+is classified; contradictory transcripts and appended Harness routing/result
+metadata are excluded. Empty/malformed envelopes and context-dependent fragments
+(such as “brighter” or “continue”) defer to the runtime. The original forwarded
+request remains unchanged. Skill bodies are loaded locally. There are no retries, redirects,
+direct-provider fallbacks or conversation-history uploads. The total selection
+budget is at most 3 seconds, with a 30-second error cooldown and a non-blocking
+busy gate. Selection requires probability >= 0.70, margin >= 0.20 and independent
+fit >= 0.60. More than 32 eligible skills causes abstention, not roster truncation.
+These are skill-discovery thresholds, not the stricter hardware-intent thresholds.
+
+A preload includes the complete bounded SKILL.md and its absolute directory.
+The Go adapters only preload simple static skills from the runtime's installed
+root; dynamic templates, custom frontmatter controls, conflicting project skill
+roots and unsupported native policy settings defer to native discovery. They
+recheck eligibility and content after inference. System/slash/attachment turns
+keep their existing route. Set `JEV_SKILL_PRELOAD=0` in a managed bridge's service
+environment to disable it; `JEV_CONFIG_PATH` selects its OS config file.
+
+Bind a result to the originating request, preserve source/session identity, and
+reuse it only for a retry of that same request. Never persist a selected skill
+as an AGENTS.md or persona update. Native history may retain supplied skill text
+like an ordinary skill read; this does not make it selected for subsequent turns.
+Test selected/abstain/error paths, native policy opt-outs, timeout, tool loops,
+retry, session isolation and source/attachment routing with mocks before release.
+
 ## 6. Hooks — OS-side reimplementation for Hermes (a worked example)
 
 OpenClaw hooks (`hooks/<name>/{HOOK.md, handler.ts}`) are TypeScript handlers that
