@@ -114,6 +114,8 @@ WARM_MIC_ECHO_SKIP_MAX_S = float(os.environ.get("HAL_WARM_MIC_ECHO_SKIP_MAX_S", 
 # not a hal dependency — absent, every AEC entry point degrades to a no-op and
 # the voice path behaves exactly as it did before, so defaulting this on cannot
 # break a device that lacks the binding.
+# Hardware-AEC profiles disable this explicitly. With LIVE_MODE enabled,
+# that selects the shared adaptive live path; no hardware name is inspected.
 # ---------------------------------------------------------------------------
 AEC_ENABLED = os.environ.get("HAL_AEC_ENABLED", "true").lower() == "true"
 # Speaker→mic delay hint. AEC3 estimates the real delay itself, but the hint

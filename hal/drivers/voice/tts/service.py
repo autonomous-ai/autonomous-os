@@ -22,6 +22,7 @@ import numpy as np
 
 from hal import config as hal_config
 from hal.drivers.voice import aec
+from hal.drivers.voice._internal import live_playback
 from hal.drivers.voice.tts.resampler import PCMResampler
 from hal.drivers.voice.tts.backend import (
     TTSBackend,
@@ -161,6 +162,8 @@ class _WatchedStream:
                 if track_playback and stop_event is not None and stop_event.is_set():
                     return result
                 chunk = data[off:off + step]
+                if live_playback.ENABLED:
+                    chunk = live_playback.playback(chunk, rate)
                 started = time.monotonic()
                 self._owner._write_started_ts = started
                 try:
@@ -184,6 +187,9 @@ class _WatchedStream:
                     )
                     return result
                 write_end = time.monotonic()
+                if track_playback:
+                    frames_written = len(chunk) // 2 if isinstance(chunk, (bytes, bytearray, memoryview)) else len(chunk)
+                    live_playback.record_written(frames_written, rate)
                 self._owner._write_started_ts = None
                 if underflowed:
                     # PortAudio reports xruns as a boolean, not an exception.
@@ -780,6 +786,11 @@ class TTSService:
             return
         with self._pending_queue_lock:
             before = len(self._pending_queue)
+            if live_playback.ENABLED:
+                logger.info(
+                    "[live-aec] TTS stop: speaking=%s realtime=%s pending=%d preserve_main=%s",
+                    self._speaking, self.realtime_speaking, before, preserve_main_queue,
+                )
             retained = []
             for item in self._pending_queue:
                 if preserve_main_queue and item.realtime_feedback:
@@ -800,6 +811,38 @@ class TTSService:
                 self._wake_drain_queues()
         if cleared:
             logger.info("TTS stop cleared %d pending queued speech item(s)", cleared)
+
+    def stop_realtime_reply(self) -> None:
+        """Cancel LIVE speech even between segments, preserving main speech.
+
+        An interruption can arrive after Gemini finished generating while
+        external TTS is still queued. Queue cleanup must not depend on the
+        provider's current turn or on whether the speaker is active right now.
+        """
+        with self._pending_queue_lock:
+            before = len(self._pending_queue)
+            retained = []
+            for item in self._pending_queue:
+                if item.realtime_reply:
+                    item.cancelled.set()
+                else:
+                    retained.append(item)
+            self._pending_queue[:] = retained
+            active_realtime = self.realtime_speaking
+            if active_realtime:
+                active = getattr(self, '_active_pending_speech', None)
+                if active is not None and active.realtime_reply:
+                    active.cancelled.set()
+                self._resume_pending_after_stop = bool(retained)
+                self._stop_event.set()
+                self._wake_drain_queues()
+            if live_playback.ENABLED:
+                logger.info(
+                    '[live-aec] TTS stop realtime: speaking=%s active_realtime=%s '
+                    'pending=%d cancelled=%d retained=%d',
+                    self._speaking, active_realtime, before, before - len(retained),
+                    len(retained),
+                )
 
     def _report_unspoken_reply(self, text: str, realtime_feedback: bool) -> None:
         """Hand a dropped agent reply to the unspoken-reply hook.

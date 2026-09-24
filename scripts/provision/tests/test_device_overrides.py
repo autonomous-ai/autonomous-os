@@ -57,7 +57,7 @@ class DeviceOverrideTests(unittest.TestCase):
         identity = self.select("pro-respeaker-lite\n")
         self.assertEqual(overrides.apply_overrides(self.profile, self.root), "pro-respeaker-lite")
         env = (self.profile / "rootfs/opt/hal/.env").read_text()
-        for value in ("HAL_AEC_ENABLED=true", "HAL_LIVE_MODE=false",
+        for value in ("HAL_AEC_ENABLED=false", "HAL_LIVE_MODE=true",
                       "HAL_SILERO_THRESHOLD=0.10",
                       "HAL_VOLUME_STATE_PATH=/root/config/.volume-pro-respeaker-lite", "HAL_TTS_SPEED=1.1",
                       "HAL_LIVE_UPLINK_DURING_PLAYBACK=always"):
@@ -106,6 +106,15 @@ class DeviceOverrideTests(unittest.TestCase):
             self.assertIn(value + "\n", env)
         self.assertIn("max_volume: 77", (self.profile / "SAFETY.md").read_text())
         self.assertIn("card Array", (self.profile / "rootfs/etc/asound.conf").read_text())
+
+    def test_profiles_select_aec_without_an_extra_adaptive_gate_flag(self):
+        for profile in ("standard", "pro", "pro-xvf3800", "pro-respeaker-lite"):
+            with self.subTest(profile=profile):
+                self.select(profile)
+                overrides.apply_overrides(self.profile, self.root)
+                env = (self.profile / "rootfs/opt/hal/.env").read_text()
+                self.assertNotIn("HAL_LITE_ADAPTIVE_GATE", env)
+                self.assertIn("HAL_AEC_ENABLED=" + ("true" if profile in ("standard", "pro") else "false") + "\n", env)
 
     def test_arbitrary_profile_uses_package_data_without_product_logic(self):
         (self.profile / "overrides/pro").rename(self.profile / "overrides/studio")
