@@ -109,7 +109,9 @@ def prepare_ort_session(
             n_warmup = 3
             logger.info(
                 "Warming up ONNX session for %s (%d shape(s) x %d runs)",
-                model_path.name, len(shapes), n_warmup,
+                model_path.name,
+                len(shapes),
+                n_warmup,
             )
             for inputs in shapes:
                 for _ in range(n_warmup):

@@ -6,7 +6,9 @@ ALL = ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvid
 
 
 def _trt_opts(providers):
-    return next(p[1] for p in providers if isinstance(p, tuple) and p[0] == "TensorrtExecutionProvider")
+    return next(
+        p[1] for p in providers if isinstance(p, tuple) and p[0] == "TensorrtExecutionProvider"
+    )
 
 
 def test_no_profile_leaves_trt_options_unchanged():

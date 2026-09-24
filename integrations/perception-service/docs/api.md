@@ -121,8 +121,11 @@ GET  /hal/api/dl/ser/labels
 else `null`. `GET /hal/api/dl/ser/labels` → `{"engine": "emotion2vec", "labels": [...]}`.
 
 **Input length:** the server bounds every clip to 2–8 s after resampling. It
-keeps the **last** 8 s of a longer clip and zero-pads a shorter one to 2 s. It
-never rejects on length. Clients should send ≤8 s of speech (HAL does).
+keeps the **last** 8 s of a longer clip and zero-pads a shorter one to 2 s. An
+in-limit clip is never rejected for being too long or too short to fit that
+bound — decoding itself still rejects empty audio or anything over
+`INPUT_LIMITS__MAX_AUDIO_DURATION_S` (default 60 s; see `configuration.md`)
+before the 2–8 s fit ever runs. Clients should send ≤8 s of speech (HAL does).
 
 ---
 

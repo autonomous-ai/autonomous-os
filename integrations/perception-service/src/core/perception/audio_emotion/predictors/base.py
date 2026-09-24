@@ -91,7 +91,8 @@ class AudioEmotionRecognizer(PredictorBase[Audio, RawAudioEmotionDetection]):
         if self._batch_size > self.MAX_BATCH_SIZE:
             self._logger.warning(
                 "batch_size=%d exceeds MAX_BATCH_SIZE=%d for SER; clamping",
-                self._batch_size, self.MAX_BATCH_SIZE,
+                self._batch_size,
+                self.MAX_BATCH_SIZE,
             )
             self._batch_size = self.MAX_BATCH_SIZE
 
@@ -135,7 +136,9 @@ class AudioEmotionRecognizer(PredictorBase[Audio, RawAudioEmotionDetection]):
             {name: np.zeros((1, hi), dtype=np.float32)},
         ]
         self._session = prepare_ort_session(
-            self._model_path, warmup_inputs=warmup, trt_profile=profile,
+            self._model_path,
+            warmup_inputs=warmup,
+            trt_profile=profile,
         )
         self._class_names = self._load_classes(self._labels_path)
         self._running = True
@@ -181,7 +184,9 @@ class AudioEmotionRecognizer(PredictorBase[Audio, RawAudioEmotionDetection]):
             if n > self.max_samples or n < self.min_samples:
                 self._logger.info(
                     "SER input %.2fs outside [%.1f, %.1f]s — fitting",
-                    n / self._sample_rate, self.MIN_AUDIO_S, self.MAX_AUDIO_S,
+                    n / self._sample_rate,
+                    self.MIN_AUDIO_S,
+                    self.MAX_AUDIO_S,
                 )
             waveforms.append(fit_length(audio.waveform, self.min_samples, self.max_samples))
         max_t = max(w.shape[0] for w in waveforms)

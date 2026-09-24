@@ -288,7 +288,7 @@ test-fer-local:
 test-ser: test-ser-unit test-ser-api test-ser-local
 
 test-ser-unit:
-	-python -m pytest tests/audio_emotion_unit/ -v
+	-DL_API_KEY=$${DL_API_KEY:-test} python -m pytest tests/audio_emotion_unit/ -v
 
 test-ser-api:
 	-python -m pytest tests/audio_emotion_api/ -v
