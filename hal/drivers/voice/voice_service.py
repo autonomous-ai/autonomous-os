@@ -152,9 +152,21 @@ class VoiceService:
         )
         cleaned: str = VoiceService.RT_MARKER_RE.sub("", text)
         cleaned = re.sub(r"  +", " ", cleaned).strip()
-        if re.fullmatch(r"<\s*no\s+speech\s*>", cleaned, re.IGNORECASE):
+        # A provider silence marker can precede real text or an error, and
+        # can arrive split across events. Keep quoted/embedded mentions intact.
+        cleaned = re.sub(r"^(?:(?:<\s*no\s+speech\s*>|\{\s*pause\s*\})\s*)+",
+                         "", cleaned, flags=re.IGNORECASE)
+        if VoiceService._pending_rt_silence_marker(cleaned):
             return ""
         return cleaned
+
+    @staticmethod
+    def _pending_rt_silence_marker(text: str) -> bool:
+        partial = " ".join(text.lower().split())
+        partial = re.sub(r"^\{\s*", "{", partial)
+        return bool(partial) and any(
+            marker.startswith(partial) for marker in ("<no speech>", "{pause}")
+        )
 
     def __init__(
         self,
@@ -1440,7 +1452,12 @@ class VoiceService:
                 return True
             return live_replies.play(key, enqueue)
         metrics = LiveVoiceMetrics()
-        history = LiveHistory(self._sensing_sender, harness_voice, self.strip_rt_markers)
+        # Apply the same suppression before OS/Main history sync as before TTS.
+        # Clean the assembled reply so templates split across events still match.
+        history = LiveHistory(
+            self._sensing_sender, harness_voice,
+            lambda text: _filter_system_error_tts(self.strip_rt_markers(text), log=False),
+        )
 
         def bind_opener(key):
             # The confirmed capture is the first input sent after the live
@@ -1466,6 +1483,7 @@ class VoiceService:
                     return
             metrics.complete(key, completed)
 
+        deferred_error_tail = None
         fallback_sequence = 0
         while self._live_running and generation == self._live_generation:
             fallback_sequence += 1
@@ -1485,6 +1503,10 @@ class VoiceService:
                 for out in self._realtime.stream_output(**output_options):
                     if not (self._live_running and generation == self._live_generation):
                         break
+                    if (deferred_error_tail is not None
+                            and isinstance(out, (RejectSignal, DelegateSignal, RTInterruptedOutput))
+                            and (not out.user_turn_id or out.user_turn_id == deferred_error_tail[0])):
+                        deferred_error_tail = None
                     if live_replies is not None:
                         if sentence_buf and not live_replies.allowed(buffer_reply_key):
                             sentence_buf = ""
@@ -1698,6 +1720,14 @@ class VoiceService:
                             transcript += out.transcript
                         continue
                     if isinstance(out, RTTextOutput):
+                        if deferred_error_tail is not None:
+                            owner, prefix = deferred_error_tail
+                            if out.user_turn_id == owner:
+                                sentence_buf = prefix + sentence_buf
+                                buffer_reply_key = owner
+                                speech_iid = metrics.interaction(owner)
+                            # Never attach a held fragment to a different turn.
+                            deferred_error_tail = None
                         if out.user_turn_id:
                             response_inputs.add(out.user_turn_id)
                         history.output(out.user_turn_id, out.text)
@@ -1784,7 +1814,17 @@ class VoiceService:
                 if (not native and sentence_buf.strip()
                         and self._live_running and generation == self._live_generation
                         and not (stop_event is not None and stop_event.is_set())):
-                    tail = _filter_system_error_tts(self.strip_rt_markers(sentence_buf))
+                    visible_tail = self.strip_rt_markers(sentence_buf)
+                    if ((_pending_system_error_tts(visible_tail)
+                         or self._pending_rt_silence_marker(sentence_buf))
+                            and not getattr(self._realtime, "execution_completed", False)):
+                        # Receive timeout is not a provider terminal. Preserve
+                        # only attributed candidates until the next fragment.
+                        if isinstance(buffer_reply_key, str) and buffer_reply_key:
+                            deferred_error_tail = (buffer_reply_key, sentence_buf)
+                        tail = ""
+                    else:
+                        tail = _filter_system_error_tts(visible_tail)
                     if tail:
                         if cues is not None:
                             cues.finish(getattr(self._realtime, "execution_turn_id", ""))

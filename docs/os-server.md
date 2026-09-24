@@ -469,12 +469,17 @@ Requires sensing with camera (InsightFace). Enrolled person JPEGs persist under 
 
 ### TTS speed
 
+`POST /api/voice/preview` accepts optional `speed` (`0.25–4.0`) and forwards it
+to HAL `/voice/speak` for that uncached utterance only. It does not persist the
+rate or change the shared service speed. Omission retains the runtime default.
+
 `GET /api/device/config` returns effective `tts_speed`; `PUT /api/device/config`
 accepts `{"tts_speed":1.2}`. This optional field accepts `0.25–4.0`; omitting
 it preserves the saved value. Saved config takes precedence over `HAL_TTS_SPEED`,
-retaining the existing environment fallback and `1.3` default. HAL reads config
+retaining the existing environment fallback and `1.2` default. HAL reads config
 at boot and `/voice/start` through `get_tts_speed()`; speed changes are pushed
-live through `/voice/tts/config {speed}`. The ElevenLabs backend still clamps
+live through `/voice/tts/config {speed}`. ElevenLabs HTTP v3 uses provider speed `1.0` and applies the saved speed
+locally with pitch-preserving streaming. Other ElevenLabs models still clamp
 the outgoing value to `0.7–1.2`.
 
 ### Piper — on-device TTS

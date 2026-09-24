@@ -12,6 +12,7 @@ from hal.drivers.voice.tts.backend import (
     TTSRateLimitError,
 )
 from hal.drivers.voice.tts.openai import _ensure_openai_v1
+from hal.drivers.voice.tts.tempo import change_tempo
 
 logger = logging.getLogger("hal.voice.tts")
 
@@ -24,6 +25,7 @@ class ElevenLabsTTSBackend(TTSBackend):
     """ElevenLabs TTS backend with streaming support."""
 
     DEFAULT_MODEL = "eleven_v3"
+    cache_revision = "local-v3-tempo-v1"
     ELEVENLABS_PATH = "/elevenlabs"
 
     # Voice name -> voice_id mapping, grouped by trained language.
@@ -214,7 +216,10 @@ class ElevenLabsTTSBackend(TTSBackend):
         }
         # Send normal speed explicitly too: omission inherits the voice's
         # stored settings, which may use a different speaking speed.
-        body["voice_settings"] = {"speed": max(0.7, min(1.2, speed))}
+        local_tempo = el_model == "eleven_v3"
+        body["voice_settings"] = {
+            "speed": 1.0 if local_tempo else max(0.7, min(1.2, speed)),
+        }
 
         with self._client.stream(
             "POST", url, headers=headers, json=body
@@ -244,5 +249,9 @@ class ElevenLabsTTSBackend(TTSBackend):
                         status_code=response.status_code,
                     )
                 response.raise_for_status()
-            for chunk in response.iter_bytes(STREAM_CHUNK_SIZE):
-                yield chunk
+            chunks = response.iter_bytes(STREAM_CHUNK_SIZE)
+            if local_tempo:
+                logger.info("TTS v3 local tempo: speed=%.2f provider_speed=1.00", speed)
+                yield from change_tempo(chunks, speed, self.sample_rate)
+            else:
+                yield from chunks
