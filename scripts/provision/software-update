@@ -96,6 +96,15 @@ ensure_openclaw_node() {
   ensure_node_engine "$engine" "openclaw@$version"
 }
 
+# cli_semver: print the FIRST x.y.z[suffix] found on stdin (a `--version`
+# output), or nothing. It must be the first: Hermes 0.21+ prints
+# "Hermes Agent v0.21.1 (2026.9.7) · upstream …", and a greedy `sed 's/.*(…)/'`
+# grabbed the last match — even a fragment of it ("6.9.7") — so a correct
+# install failed its version check and skipped the gateway/os-server restarts.
+cli_semver() {
+  grep -oE '[0-9]+\.[0-9]+\.[0-9]+([-.+_][0-9A-Za-z.-]+)?' | head -1
+}
+
 update_hermes_package() {
   # Match upstream scripts/install.sh node_satisfies_build. The update command
   # only resolves an existing npm; it does not run the installer's Node setup.
@@ -681,7 +690,7 @@ if [ "$APP" = "rollback" ]; then
   esac
   BACKUP="/root/bootstrap/rollback/${ROLLBACK_TARGET}.previous"
   [ -x "$BACKUP" ] || { echo "No rollback backup for $ROLLBACK_TARGET"; exit 1; }
-  BLOCKED_VERSION=$("$DEST" --version 2>/dev/null | sed -nE 's/.*([0-9]+\.[0-9]+\.[0-9]+([-.+_][0-9A-Za-z.-]+)?).*/\1/p' | head -1)
+  BLOCKED_VERSION=$("$DEST" --version 2>/dev/null | cli_semver)
   if [ -z "$BLOCKED_VERSION" ] && [ -f /root/bootstrap/state.json ]; then
     BLOCKED_VERSION=$(jq -r --arg key "$ROLLBACK_TARGET" '.components[$key] // empty' /root/bootstrap/state.json 2>/dev/null || true)
   fi
@@ -927,7 +936,7 @@ elif [ "$APP" = "hermes" ]; then
     echo "[software-update] metadata has no hermes.commit — unpinned: hermes update to upstream HEAD"
     update_hermes_package || { echo "hermes update failed"; exit 1; }
   fi
-  HERMES_NOW=$(hermes --version 2>/dev/null | sed -nE 's/.*([0-9]+\.[0-9]+\.[0-9]+([-.+_][0-9A-Za-z.-]+)?).*/\1/p' | head -1)
+  HERMES_NOW=$(hermes --version 2>/dev/null | cli_semver)
   [ -n "$HERMES_NOW" ] || { echo "hermes not runnable after update"; exit 1; }
   if [ "$HERMES_NOW" != "$VERSION" ]; then
     if [ -n "$HERMES_COMMIT" ]; then
