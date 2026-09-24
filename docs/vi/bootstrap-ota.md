@@ -30,6 +30,12 @@ Các trình build image OrangePi, Pi 4 và Pi 5 cũng dùng `--locked` khi gói 
 tải về có `uv.lock`. HAL được lấy từ OTA metadata, không phải checkout local;
 chạy lại build sau khi phát hành gói đã sửa.
 
+Setup lamp và image Pi/OrangePi cài HAL với `--extra hardware --extra aec
+--extra pipecat`. OTA cho thiết bị không phải Reachy chọn cùng các extra này,
+nên Smart Turn được cài tự động, không cần lệnh riêng trên thiết bị. Reachy giữ
+`--extra hardware --extra reachy`: yêu cầu ONNX runtime của nó xung đột với
+Pipecat. Extra `pipecat` vẫn tùy chọn khi developer chạy riêng `uv sync`.
+
 ### Sơ đồ hệ thống
 
 ```
@@ -347,8 +353,8 @@ version profile bị loại sau đó sẽ bị chặn.
 ### Override phần cứng tùy chọn
 
 OS đọc tên trên một dòng trong `/etc/autonomous/hardware-profile`. Thiếu file,
-rỗng hoặc `standard` dùng nguyên package device hiện tại: không thêm kiểm tra
-USB, không đổi mặc định audio/Live của máy cũ. Tên khác phải khớp
+rỗng hoặc `standard` chọn package device gốc mới giải nén, không áp override:
+không thêm kiểm tra USB, không đổi mặc định audio/Live của máy cũ. Tên khác phải khớp
 `[a-z][a-z0-9_-]{0,63}`, chọn `overrides/<tên>/` bên trong package của device đó.
 File định danh thuộc máy, không được đóng gói trong overlay.
 
@@ -356,33 +362,51 @@ File định danh thuộc máy, không được đóng gói trong overlay.
 Helper merge `rootfs/opt/hal/.env` của override lên env chung, copy các file
 `rootfs/` khác vào rootfs staging, rồi áp hai trường số nguyên tùy chọn
 `startup_volume`/`max_volume` từ `profile.json` vào `ROBOT.md`/`SAFETY.md`.
-Giá trị riêng sản phẩm chỉ nằm trong package device. Ví dụ:
+Map `capabilities` tùy chọn nhận giá trị boolean, bật hoặc comment các entry
+capability sẵn có trong frontmatter `ROBOT.md`; không tự tạo khai báo mới.
+Các file `device/*.json` được chọn thay toàn bộ JSON device cấp cao nhất đã
+tồn tại, không merge nội dung. Renderer kiểm tra các input này trước khi ghi
+và từ chối capability hay file thay thế không hợp lệ. Giá trị riêng sản phẩm
+chỉ nằm trong package device. Ví dụ:
 
-```text
-robots/lamp/overrides/pro/
-  profile.json                # startup_volume 35, max_volume 35 (softvol -40..0 dB, 35 ≈ -26 dB; chỉnh bằng tai trên lamp-0c4e 21/09/2026)
-  rootfs/opt/hal/.env          # TẮT Live (dư âm sau AEC Lite quá cao cho phiên live), canceller HAL bật, Silero 0.10 (đánh đổi đã đo ghi trong file)
-  rootfs/etc/asound.conf       # ReSpeaker Lite dmix/dsnoop + softvol "Speaker", kênh trái đã xử lý
-  rootfs/etc/udev/rules.d/     # 90-respeaker-lite (kích oneshot softvol khi card xuất hiện), 91-pulseaudio (danh sách base + Lite)
-  rootfs/etc/systemd/system/   # respeaker-lite-softvol.service (tạo control softvol trước hal)
+| Profile | Mic hội thoại | Mic sensing | Loa | Âm lượng khởi động / tối đa | SEN63C |
+|---|---|---|---|---|---|
+| `standard` | Jieli `device_micro2` | CMedia `device_cmedia` | Loa gốc | Mặc định gốc | Tắt |
+| `pro` | Jieli `device_micro2` | CMedia `device_cmedia` | Loa gốc | Mặc định gốc | Bật trên `orangepi_sun60`, bus `0` |
+| `pro-respeaker-lite` | Kênh trái đã xử lý của ReSpeaker Lite | ES8389 trên board (`sndi2s4`) | ReSpeaker Lite softvol `Speaker` | 35 / 35 | Bật trên `orangepi_sun60`, bus `0` |
+| `pro-xvf3800` | XVF3800 (`Array`) | ES8389 trên board (`sndi2s4`) | XVF3800 | 77 / 77 | Bật trên `orangepi_sun60`, bus `0` |
 
-robots/lamp/overrides/pro-xvf3800/   # bộ Pro trước đó (mảng 4 mic reSpeaker XVF3800, card Array)
-  profile.json                # startup_volume 77, max_volume 77
-  rootfs/opt/hal/.env          # XMOS AEC: tắt AEC phần mềm, bật Live, uplink always
-  rootfs/etc/asound.conf       # XVF3800 dmix/dsnoop, kênh trái đã xử lý
-```
+Mỗi thư mục Pro có `profile.json` chứa
+`capabilities: {"environment": true}`, cùng `device/sen63c.json` bật sensor
+OrangePi. Chỉ hai bản Lite và XVF3800 ghi đè mặc định âm lượng. Package Standard gốc comment capability này và tắt SEN63C, nên
+không thu nhận, ghi clock bus cho SEN63C, polling UI môi trường hay đủ điều
+kiện chọn skill environment. SEN55/SCD41 và board thiếu entry tương ứng vẫn
+tắt ngay cả trên Pro.
 
-`pro-xvf3800` được giữ để chọn được (`printf 'pro-xvf3800\n' > /etc/autonomous/hardware-profile`), quay lại mảng mic chỉ là một dòng chứ không phải đào git; bản Lite là `pro`.
+`pro-respeaker-lite` giữ nguyên toàn bộ overlay `pro` trước đây, gồm file ALSA,
+udev và service softvol: bật AEC HAL, ngưỡng Silero `0.10`, tắt Live, uplink
+luôn mở. `pro` chỉ là audio Standard thêm SEN63C: không có override `rootfs/`,
+`.env`, ALSA, udev, service hay âm lượng. Cấu hình ALSA và giới hạn safety
+sau render giống Standard từng byte; mic, loa, xử lý và mặc định âm lượng
+đều dùng package gốc. Renderer chung chỉ thêm namespace lưu âm lượng của
+profile (`HAL_VOLUME_STATE_PATH=/root/config/.volume-pro`) vào môi trường HAL được sinh. `pro-xvf3800` giữ
+XMOS AEC, tắt AEC phần mềm, bật Live và uplink luôn mở.
 
-Lamp Pro dùng Seeed ReSpeaker Lite (XMOS XU316, USB `2886:0019`, card ALSA
-`Lite`): cố định S16_LE 2 kênh 16 kHz cả hai chiều, kênh trái đã xử lý; loa phải
-nối qua Lite. Card không có mixer ALSA nên volume loa là một tầng softvol, chỉ
-tồn tại sau lần mở PCM đầu tiên — một oneshot do udev kích mở nó trước
-`hal.service` để bước khôi phục volume lúc boot có control để ghi. Mức 35% đã thử là tuning riêng của bộ này, không phải độ lớn tương
-đương giữa các thiết bị. File, mặc định và ceiling hiện tại của Lamp thường
-giữ nguyên. Renderer không dò, flash hoặc tune phần cứng được gắn.
+ReSpeaker Lite (XMOS XU316, USB `2886:0019`, card ALSA `Lite`) dùng audio
+S16_LE 2 kênh 16 kHz. `pro-respeaker-lite` cần nối loa qua Lite.
+Card không có mixer ALSA; oneshot do udev kích mở PCM trước `hal.service`
+để tạo control softvol cho bước khôi phục âm lượng lúc boot. Mức 35% được
+chỉnh trên bộ Lite, không phải mức âm lượng tương đương đã hiệu chuẩn giữa
+các thiết bị. Standard giữ mặc định audio và ceiling. Renderer không dò,
+flash hoặc tune phần cứng được gắn.
 
-Image builder/cài mới áp override trước khi cài rootfs. OTA render trước khi
+Máy `pro` hiện có dùng mic Lite phải chọn rõ `pro-respeaker-lite` trước khi
+cài package device mới để giữ toàn bộ cấu hình audio. Không tự chuyển marker. Chỉ đổi
+marker không thay file đã cài; cần cài lại gói device.
+
+Image builder/cài mới áp override trước khi cài rootfs. OTA bắt đầu từ
+archive gốc mới giải nén, không từ cây Pro đã render, nên chuyển về Standard
+sẽ khôi phục mặc định tắt sensor và capability. OTA render trước khi
 dừng service và snapshot rootfs; thiếu helper/profile hoặc render lỗi không
 đụng package đang chạy. Lỗi copy hay health check rollback đồng bộ profile và
 rootfs thực tế. Rollback không đổi lựa chọn hardware-profile của máy.
@@ -400,6 +424,12 @@ nguyên package mặc định. Lựa chọn không nằm trong base cache dùng 
 khác standard được thêm vào tên image/release cuối cùng. Variant không tồn tại
 hoặc package thiếu helper override sẽ làm build thất bại.
 
+Máy thiếu marker hardware-profile vẫn là Standard, kể cả máy từng nhận mặc
+định bật SEN63C chung; không tự chuyển sang Pro. Để giữ SEN63C trên phần cứng
+Pro, chọn rõ `pro`, `pro-respeaker-lite` hoặc `pro-xvf3800` rồi cài lại gói device. Nâng cấp từ bản
+cũ cần cả HAL (sửa clock I2C) lẫn gói device (capability và cấu hình sensor).
+Chỉ cập nhật HAL không cài các mặc định profile này.
+
 Khi sản xuất, ghi tên profile trước khi cài. Với máy đang chạy, cài updater và
 HAL/os-server mới trước, sau đó:
 
@@ -416,8 +446,10 @@ Updater cũ chưa biết áp override: bootstrap tự động refresh updater tr
 nhưng cập nhật thủ công hoặc refresh thất bại phải cài updater mới trước khi
 chọn profile.
 
-Profile được chọn lưu volume riêng trong `config/.volume-<tên>` (HAL và os-server
-thống nhất); thiếu/standard giữ `config/.volume`. Nhờ vậy mức phần trăm của loa
+Mọi profile được chọn lưu volume riêng trong `config/.volume-<tên>`
+(HAL và os-server thống nhất), kể cả `pro` chỉ override capability/JSON device.
+Renderer chung sinh `HAL_VOLUME_STATE_PATH` tương ứng; thiếu lựa chọn hoặc
+Standard giữ `config/.volume`. Nhờ vậy mức phần trăm của loa
 cũ không ghi đè volume khởi động của bộ mới. HAL chỉnh đúng cả `PCM,0` và
 `PCM,1`, không chỉnh control capture; ghi mixer lỗi trả 503 thay vì lưu thành
 công giả. UI, lệnh giọng nói và volume khởi động vẫn qua ceiling đã chọn.
@@ -628,7 +660,9 @@ component thiết bị THỰC SỰ có (`componentInstalled`), nên mục CLI ch
 nó đang chạy, không có cái nào khác. `held_by_floor` nghĩa là đã publish bản mới
 nhưng `min_version` chưa được promote lên — worker sẽ từ chối, nên card Versions
 trên web coi component bị giữ là "không có update". os-server proxy thành
-`GET /api/system/ota-versions`. Device profile đang cài được báo thành `device`,
+`GET /api/system/ota-versions` và, cho cloud, thành MQTT `data` kind
+`system.ota_versions` (cả hai qua `system/ota`; `system.software_update` là bản
+MQTT của nút trên card Versions). Device profile đang cài được báo thành `device`,
 resolve từ `metadata.devices.<device_type>` lồng nhau thay vì danh sách component phẳng.
 
 ### Phát hiện version hiện tại
@@ -783,7 +817,7 @@ Updater tìm `uv` trong `PATH`, rồi `/root/.local/bin/uv`, rồi
 `/home/pollen/.local/bin/uv` (vị trí bộ cài Reachy sử dụng). Trước khi dừng HAL,
 script chọn Python extras theo `DEVICE_TYPE` trong `/opt/hal/.env`, fallback sang
 `device_type` trong `/root/config/config.json`: `reachy-mini` dùng `hardware + reachy`
-để giữ Pollen SDK; các thiết bị khác vẫn dùng `hardware + aec`.
+để giữ Pollen SDK; các thiết bị khác dùng `hardware + aec + pipecat`.
 
 > **Cache uv nằm NGOÀI cây runtime** (`/opt/.uv-cache-hal`, cạnh `/opt/hal` để uv
 > hardlink vào venv mới). Trước đây nó ở `/opt/hal/.uv-cache` nên mỗi lần update
@@ -810,7 +844,11 @@ script chọn Python extras theo `DEVICE_TYPE` trong `/opt/hal/.env`, fallback s
     # Build a fresh venv; preserve .env and use the external shared cache.
     unzip -q "$ZIP" -d /opt/.hal.new
     cp -a /root/bootstrap/rollback/hal.previous/.env /opt/.hal.new/
-    (cd /opt/.hal.new && UV_CACHE_DIR=/opt/.uv-cache-hal "$UV_BIN" sync --python 3.12 --extra hardware --extra "$HAL_EXTRA")
+    HAL_EXTRA_ARGS=(--extra "$HAL_EXTRA")
+    if [ "$HAL_EXTRA" != "reachy" ]; then
+        HAL_EXTRA_ARGS+=(--extra pipecat)
+    fi
+    (cd /opt/.hal.new && UV_CACHE_DIR=/opt/.uv-cache-hal "$UV_BIN" sync --python 3.12 --extra hardware "${HAL_EXTRA_ARGS[@]}")
     mv /opt/.hal.new /opt/hal
 
     systemctl restart hal
@@ -1177,7 +1215,7 @@ Version của HAL là file text `VERSION` trong thư mục gốc package. Bootst
 - [x] **HAL HTTP port**: `5001` (OS Server là `5000`).
 - [x] **Bridge protocol**: HTTP proxy đơn giản. HAL chạy FastAPI trên `127.0.0.1:5001`, OS Server proxy từ port 5000.
 - [ ] **Python version**: Pin Python 3.11+? Yêu cầu Python hiện tại của HAL?
-- [ ] **Đóng gói HAL**: Include venv sẵn? Hay cài deps trên thiết bị? (Pi resources hạn chế cho `pip install`)
+- [x] **Đóng gói HAL**: Tạo venv trên thiết bị qua `uv sync --python 3.12 --extra hardware`, thêm `--extra reachy` cho Reachy Mini hoặc `--extra aec --extra pipecat` cho thiết bị khác. OTA tạo venv mới bằng cache dùng chung, giữ `.env` và runtime cũ để rollback.
 - [ ] **Display driver**: DisplayService (GC9A01) — nằm trong HAL Python? Hay module mới?
 - [ ] **HAL config**: HAL cần config file riêng? Hay cấu hình qua OS Server?
 

@@ -328,3 +328,16 @@ as turn-based voice, including their existing LED, display and body behavior.
 It requires recognized input text and the regular addressing gate; noise or
 opening the mic cannot start these emotions. Thinking requires provider end
 evidence, never a local silence estimate. There is no separate LIVE LED overlay. See [realtime voice](../../../docs/realtime-voice.md#hw-emotion-feedback-in-live-mode) for timing and cleanup.
+
+### Relative intent dimming
+
+The local/Jev `dim` action reads `/led/color`, halves each RGB channel, writes
+`/led/solid`, and verifies the readback. Repeated requests dim again; black
+stays black. Integer rounding may reach off. This stops effects and scenes,
+using the reported base color or brightest pixel; it does not preserve patterns.
+
+Local/Jev voice completion (`handledLocally=true`) releases the retained
+realtime thinking cue without waiting for TTS. Muted or silent replies therefore
+do not leave the cue active. Cleanup preserves newer emotions and restores the
+saved LED state (including off/dim); active speech/music retains its overlay
+until normal playback teardown. Agent-owned turns retain their thinking cue.

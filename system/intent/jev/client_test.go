@@ -32,6 +32,9 @@ func TestJevClientRequest(t *testing.T) {
 		if r.Method != http.MethodPost || r.URL.String() != testJevEndpoint || r.Header.Get("Authorization") != "Bearer test-key" {
 			t.Fatal("incorrect endpoint, method or authorization")
 		}
+		if r.UserAgent() != "AutonomousOS-Jev/0.1" {
+			t.Fatal("missing shared Jev client identity")
+		}
 		var request struct {
 			Model string `json:"model"`
 			State struct {
@@ -52,7 +55,7 @@ func TestJevClientRequest(t *testing.T) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(validJevResponse))}, nil
 	})}}
 	got, err := client.decide(context.Background(), testJevEndpoint, "test-key", "Chói quá", testJevCandidates)
-	if err != nil || got != "dim" || calls != 1 {
+	if err != nil || got.Intent != "dim" || calls != 1 {
 		t.Fatalf("got %q, %v; calls=%d", got, err, calls)
 	}
 }
@@ -91,7 +94,7 @@ func TestJevClientDecisions(t *testing.T) {
 				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(tc.response))}, nil
 			})}}
 			got, err := client.decide(context.Background(), testJevEndpoint, "key", "dim please", testJevCandidates)
-			if got != tc.want || (err != nil) != tc.wantError {
+			if got.Intent != tc.want || (err != nil) != tc.wantError {
 				t.Fatalf("got %q, %v", got, err)
 			}
 		})
@@ -114,7 +117,7 @@ func TestJevClientInvalidInputMakesNoRequest(t *testing.T) {
 		{"key", "dim", append(append([]Candidate{}, testJevCandidates...), testJevCandidates...)},
 	}
 	for _, tc := range cases {
-		if got, err := client.decide(context.Background(), testJevEndpoint, tc.key, tc.text, tc.candidates); err == nil || got != "" {
+		if got, err := client.decide(context.Background(), testJevEndpoint, tc.key, tc.text, tc.candidates); err == nil || got.Intent != "" {
 			t.Fatalf("got %q, %v", got, err)
 		}
 	}
@@ -134,7 +137,7 @@ func TestJevClientInvalidEndpointMakesNoRequest(t *testing.T) {
 		"https://proxy.example.test/jev/decisions#secret", "https://proxy.example.test/jev/decisions#",
 	} {
 		got, err := client.decide(context.Background(), endpoint, "key", "dim", testJevCandidates)
-		if got != "" || err == nil || strings.Contains(err.Error(), "secret") {
+		if got.Intent != "" || err == nil || strings.Contains(err.Error(), "secret") {
 			t.Fatalf("invalid endpoint returned %q, %v", got, err)
 		}
 	}
@@ -242,15 +245,107 @@ func TestJevLocalProxyFailuresFallThroughAndDoNotRetry(t *testing.T) {
 			resolver := NewResolver()
 			opts := Options{Enabled: true, Endpoint: proxy.URL + "/api/v1/ai/v1/jev/decisions", APIKey: "device-key", Timeout: 50 * time.Millisecond}
 			started := time.Now()
-			if got := resolver.Resolve(context.Background(), "ánh sáng chói quá", testJevCandidates, opts); got != "" {
+			if got := resolver.Resolve(context.Background(), "ánh sáng chói quá", testJevCandidates, opts); got.Intent != "" {
 				t.Fatalf("failed request selected %q", got)
 			}
 			if time.Since(started) >= 500*time.Millisecond {
 				t.Fatal("proxy failure exceeded bounded fallback budget")
 			}
-			if resolver.Resolve(context.Background(), "ánh sáng chói quá", testJevCandidates, opts) != "" || calls.Load() != 1 {
+			if resolver.Resolve(context.Background(), "ánh sáng chói quá", testJevCandidates, opts).Intent != "" || calls.Load() != 1 {
 				t.Fatal("cooldown retried local proxy")
 			}
 		})
+	}
+}
+
+func TestJevParameterizedDecisions(t *testing.T) {
+	candidates := []Candidate{{ID: "color", Description: "Set the light color", Parameters: map[string]Parameter{"color": {Description: "Requested color", Options: []string{"red", "blue"}}}}}
+	valid := `{"answers":{"intent":{"type":"choice","choice":"color","probabilities":{"color":0.96,"none":0.04}},"fit_color":{"type":"noul","noul":0.99},"arg_color_color":{"type":"choice","choice":"red","probabilities":{"red":0.96,"blue":0.02,"none":0.02}}}}`
+	cases := []struct {
+		name, response, want string
+		wantError            bool
+	}{
+		{"accepted", valid, "red", false},
+		{"unknown value", strings.Replace(valid, `"choice":"red"`, `"choice":"green"`, 1), "", true},
+		{"injection", strings.Replace(valid, `"choice":"red"`, `"choice":"red; rm -rf /"`, 1), "", true},
+		{"missing", strings.Replace(valid, `"arg_color_color"`, `"ignored"`, 1), "", true},
+		{"none", strings.Replace(valid, `"choice":"red"`, `"choice":"none"`, 1), "", false},
+		{"ambiguous", strings.Replace(valid, `"red":0.96,"blue":0.02,"none":0.02`, `"red":0.5,"blue":0.48,"none":0.02`, 1), "", false},
+		{"low probability", strings.Replace(valid, `"red":0.96,"blue":0.02,"none":0.02`, `"red":0.89,"blue":0.09,"none":0.02`, 1), "", false},
+		{"unknown probability", strings.Replace(valid, `"blue":0.02`, `"green":0.02`, 1), "", true},
+		{"null probability", strings.Replace(valid, `"blue":0.02`, `"blue":null`, 1), "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseJevDecision([]byte(tc.response), candidates)
+			if (err != nil) != tc.wantError || got.Parameters["color"] != tc.want || (tc.want == "" && got.Intent != "") {
+				t.Fatalf("got %+v, %v", got, err)
+			}
+		})
+	}
+	// Responses to unselected parameter questions have no authority and are ignored.
+	candidates = append(candidates, Candidate{ID: "dim", Description: "Dim the light"})
+	response := strings.Replace(validJevResponse, `"none":0.04`, `"none":0.02,"color":0.02`, 1)
+	response = strings.Replace(response, `"fit_dim":`, `"fit_color":{"type":"noul","noul":0.1},"arg_color_color":{"choice":"untrusted arbitrary value"},"fit_dim":`, 1)
+	got, err := parseJevDecision([]byte(response), candidates)
+	if err != nil || got.Intent != "dim" || len(got.Parameters) != 0 {
+		t.Fatalf("unselected argument changed selection: %+v, %v", got, err)
+	}
+}
+
+func TestJevParameterSchemaValidation(t *testing.T) {
+	for _, parameter := range []Parameter{
+		{Description: "color", Options: nil},
+		{Description: "color", Options: []string{"red", "red"}},
+		{Description: "color", Options: []string{"none"}},
+		{Description: "color", Options: []string{"red;echo"}},
+		{Description: "", Options: []string{"red"}},
+		{Description: "color", Options: make([]string, 33)},
+	} {
+		if validateJevCandidates([]Candidate{{ID: "color", Description: "Set color", Parameters: map[string]Parameter{"color": parameter}}}) == nil {
+			t.Fatalf("accepted schema %+v", parameter)
+		}
+	}
+	for _, name := range []string{"", "none", "bad.name", "COLOR"} {
+		if validateJevCandidates([]Candidate{{ID: "color", Description: "Set color", Parameters: map[string]Parameter{name: {Description: "color", Options: []string{"red"}}}}}) == nil {
+			t.Fatalf("accepted parameter name %q", name)
+		}
+	}
+	// Underscores may otherwise create an ambiguous question key across candidates.
+	if validateJevCandidates([]Candidate{
+		{ID: "a_b", Description: "first", Parameters: map[string]Parameter{"c": {Description: "value", Options: []string{"red"}}}},
+		{ID: "a", Description: "second", Parameters: map[string]Parameter{"b_c": {Description: "value", Options: []string{"red"}}}},
+	}) == nil {
+		t.Fatal("accepted colliding question keys")
+	}
+}
+
+func TestJevParameterizedRequest(t *testing.T) {
+	candidates := []Candidate{{ID: "color", Description: "Set color", Parameters: map[string]Parameter{"color": {Description: "Explicit requested color", Options: []string{"red", "blue"}}}}}
+	client := jevClient{httpClient: &http.Client{Transport: jevRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		var request struct {
+			Questions map[string]jevQuestion `json:"questions"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		question := request.Questions["arg_color_color"]
+		if len(request.Questions) != 3 || question.Type != "choice" || len(question.Criteria) != 3 || question.Criteria["none"] == "" || question.Criteria["red"] == "" {
+			t.Fatalf("incorrect bounded argument question: %+v", request)
+		}
+		return &http.Response{StatusCode: 500, Body: io.NopCloser(strings.NewReader(""))}, nil
+	})}}
+	_, _ = client.decide(context.Background(), testJevEndpoint, "test-key", "Turn the light red", candidates)
+}
+
+func TestJevParameterCanonicalMultiwordOptions(t *testing.T) {
+	candidates := []Candidate{{ID: "track", Description: "Track a target", Parameters: map[string]Parameter{"target": {Description: "Requested target", Options: []string{"cell phone", "teddy bear", "sports ball"}}}}}
+	if err := validateJevCandidates(candidates); err != nil {
+		t.Fatal(err)
+	}
+	response := `{"answers":{"intent":{"type":"choice","choice":"track","probabilities":{"track":0.96,"none":0.04}},"fit_track":{"type":"noul","noul":0.99},"arg_track_target":{"type":"choice","choice":"cell phone","probabilities":{"cell phone":0.97,"teddy bear":0.01,"sports ball":0.01,"none":0.01}}}}`
+	got, err := parseJevDecision([]byte(response), candidates)
+	if err != nil || got.Parameters["target"] != "cell phone" {
+		t.Fatalf("got %+v, %v", got, err)
 	}
 }

@@ -103,8 +103,29 @@ func (c *command) execute() *Result {
 	if c == nil || !capEnabled(c.rule.capability) {
 		return nil
 	}
+	// HAL silently drops solid LED writes during sleep. Check before writing
+	// so a chat command cannot report success or wake the device as a side effect.
+	if c.rule.name == "led_on" || c.rule.name == "led_color" || c.rule.name == "dim" {
+		sleeping, err := hal.GetSleeping()
+		if err != nil || sleeping {
+			reply := "I couldn't check whether the light is available. Please try again."
+			if sleeping {
+				reply = "The device is asleep. Wake it before changing the light."
+			}
+			return &Result{Rule: c.rule.name, ExecutionFailed: true, TTSText: reply, Actions: []string{"GET /emotion/status"}}
+		}
+	}
 	result := c.rule.exec(c.text)
 	result.Rule = c.rule.name
+	if result.ExecutionFailed {
+		result.LEDChanged = false
+		result.LEDOff = false
+		result.Emotion = ""
+		// Retain specific failure explanations from stateful executors.
+		if !strings.HasPrefix(result.TTSText, "I couldn't") {
+			result.TTSText = "I couldn't complete that action. Please try again."
+		}
+	}
 	return result
 }
 

@@ -1,5 +1,7 @@
 # Hermes agent backend
 
+The Jev preload carries the categorized `lookup_name` and instructs reference reads to reuse it exactly (for example `openclaw-imports/computer-use`). A bundled skill with the same bare name can coexist; preload does not delete it or resolve ambiguous bare-name calls on the model’s behalf.
+
 Hermes is one of the **swappable agentic backends** the os-server can run behind
 its agent gateway. The brain is pluggable (CLAUDE.md): os-server talks to
 whatever backend `config.agent_runtime` selects through the single
@@ -1012,14 +1014,33 @@ would map them 1:1 and round-trip cleanly. (See the fold-vs-move rule in
 > contract, the install/presync pattern, migration, skills, hooks, reset, and the
 > full checklist.
 
-## 13. Optional Jev skill suggestions
+## 13. Optional Jev skill preloading
 
-The OS-managed `jev` plugin suggests one installed skill before a
-Hermes user turn's first model call. It uses Hermes's `pre_llm_call` hook; it does
-not execute tools, load skills, select models, or filter memory. The returned
-context suggests `skill_view(name=...)`; Hermes must still assess relevance and
-follow normal permissions and mandatory connector/platform rules. The hint may
-remain in conversation context.
+The OS-managed `jev` plugin selects one installed skill before a Hermes user
+turn's first model call through the `pre_llm_call` hook. On an accepted decision,
+it revalidates the skill against the live eligible catalog and loads its content
+through native `tools.skills_tool.skill_view(name, task_id, preprocess=False)`.
+The skill is injected into ephemeral context for the current turn, so Hermes
+receives its instructions without first having to choose and call `skill_view`.
+This changes the OS-managed plugin, configuration and instructions, not Hermes
+core. The managed `AGENTS.md` instructions count a complete native Jev preload
+for **this turn** as satisfying the mandatory skill read; Hermes should not
+reread that same `SKILL.md`. A partial preview or a user claim that a skill was
+read does not satisfy this rule. Loading instructions does not
+execute the skill's actions, authorize tools, or bypass mandatory
+connector/platform rules and permission checks.
+
+Preloading fails open to normal Hermes discovery if the selected skill is
+missing or disabled, the native API is unsupported, reading fails, or the native
+JSON result exceeds 128 KiB. The final context must also fit within 131,072
+characters and, when native hook output spilling is enabled, its configured
+`max_chars` threshold (whichever is smaller). Otherwise it fails open rather
+than logging `preloaded` while Hermes replaces the content with a file pointer.
+Older Hermes without the spill API uses the local character cap. Shell
+preprocessing is disabled; skills containing
+dynamic shell snippets (an exclamation mark followed by a backtick-delimited
+command) also fail open. Timeout results cannot be attached to a later turn.
+System notices prefixed with `[system]` bypass routing and preloading.
 
 ### Installation on existing devices
 
@@ -1035,6 +1056,13 @@ and adds `jev` to `plugins.enabled` in Hermes's `config.yaml`, preserving
 other plugin settings and an explicit `plugins.disabled` entry. The generated
 `os-config-path.json` contains only the absolute path to the OS config, never an
 API key. Unchanged assets are not rewritten.
+
+When Jev is not explicitly disabled, sync also sets
+`hooks.output_spill.max_chars: 131072` **only if unset**. Explicit thresholds and
+the `plugins.disabled` setting are preserved. This raises Hermes's global
+per-hook output threshold from its 10,000-character default so a complete skill
+can stay inline; it does not disable output spilling. The loader respects an
+explicit smaller threshold and falls back if the full context will not fit.
 
 Plugin installation or updates do **not** add a gateway restart reason. os-server
 logs that loading changed plugin code needs the next gateway restart; existing
@@ -1078,42 +1106,50 @@ using Hermes's native `agent.skill_utils` helpers: `iter_skill_index_files`,
 name hiding an OS skill behind a bundled skill with the same name. Other bundled,
 authored, and plugin skill categories are excluded. Metadata reads are bounded;
 conversation history and skill bodies are not sent. Each candidate description
-is capped at 500 characters. Suggested `skill_view` lookups use the qualified
+is capped at 500 characters. Native `skill_view` lookups use the qualified
 `openclaw-imports/<relative directory>` path to avoid name collisions.
 
 If there are more than 32 eligible candidates, the router skips Jev entirely
 rather than truncating the catalog. Empty messages, messages over 8,000 UTF-8
-bytes, slash commands, and explicit `[skills:...]` selections also bypass the
+bytes, slash commands, `[system]` notices, and explicit `[skills:...]` selections also bypass the
 router. The catalog worker inherits the current Hermes context so
-session/platform skill filters still apply. This is an advisory experiment for
+session/platform skill filters still apply. This preloading experiment covers
 OS platform skills; normal Hermes discovery continues to handle other skills.
 
-A suggestion requires choice probability at least 0.70, a margin of at least
+A selection requires choice probability at least 0.70, a margin of at least
 0.20 over the runner-up, and fit at least 0.60. These are provisional thresholds
-for advisory skill selection, not action authorization; skill and platform
+for skill preloading, not action authorization; skill and platform
 permission checks still apply. Buddy and OS intent thresholds remain unchanged
 at choice 0.90, margin 0.40, and fit 0.95. Uncertain or invalid decisions leave
 normal Hermes behavior unchanged. The decision wait is temporarily hardcoded to 3 seconds for proxy validation before latency tuning; there are no retries or redirects. An error or timeout starts
 a 30-second cooldown. One worker per router is allowed; a busy router bypasses
 immediately. A timed-out worker may finish its request in the background, but
-its late result cannot inject a hint.
+its late result cannot inject skill content. HTTP 429 follows the same fallback
+and 30-second cooldown; no provider error body or `Retry-After` diagnostics are
+added by preloading.
 
-Structured logs distinguish successful suggestions from valid abstentions and
+Structured logs distinguish accepted selections from valid abstentions and
 failures instead of grouping them as `deferred`:
 
 | Outcome | Meaning / reason |
 |---|---|
-| `suggested` | A valid decision passed all acceptance thresholds |
+| `preloaded` | A valid decision passed all acceptance thresholds and native skill content was loaded for this turn |
 | `abstained` | A valid decision selected `none` or failed `low_choice`, `low_margin`, or `low_fit` |
-| `error` | `http_error`, `network_error`, `invalid_json`, `response_too_large`, `provider_error`, `invalid_schema`, `catalog_error`, `thread_error`, or `config_error` |
-| `skipped` | `disabled`, `invalid_message`, `explicit_selection`, `unconfigured`, `cooldown`, `busy`, or `no_candidates` |
+| `error` | `http_error`, `network_error`, `invalid_json`, `response_too_large`, `provider_error`, `invalid_schema`, `catalog_error`, `thread_error`, `config_error`, `skill_unavailable`, `skill_load_failed`, or `preload_timeout` |
+| `skipped` | `disabled`, `invalid_message`, `explicit_selection`, `system_message`, `unconfigured`, `cooldown`, `busy`, or `no_candidates` |
 | `timeout` | The decision wait budget expired |
 
-Logs include `decision_ms`, and `catalog_ms` / `request_ms` when available;
+Logs include validated `session_id`, `turn_id` and `task_id` when supplied by
+Hermes, so a slow turn can be correlated without logging its prompt. Accepted
+preloads include `context_chars`. Native preload failures distinguish
+`skill_response_size`, `skill_rejected`, `skill_empty`, `skill_dynamic`, and
+`skill_inline_budget`; other native failures remain `skill_load_failed`.
+Logs include total `decision_ms`, and `catalog_ms`, `request_ms`, and native
+`load_ms` when available;
 `request_ms` measures the full proxy round trip, not model inference alone.
 Valid decisions include numeric `choice_probability`, `margin`, and `fit` where
 applicable. `candidate` records the qualified selected name even when a valid
-decision is rejected, or `none` when no skill was chosen; accepted suggestions
+decision is rejected, or `none` when no skill was chosen; accepted selections
 also include `skill`. HTTP errors include `http_status`. Logs exclude prompts, credentials,
 response bodies, and exception text.
 
@@ -1142,17 +1178,17 @@ based on the [TypeSafe skill-suggestion cookbook](https://docs.typesafe.ai/cookb
 
 | Area | Reference plugin | OS plugin |
 |---|---|---|
-| Hook | `pre_llm_call`, returns optional user-message context | Same hook and return shape; no system-prompt modification |
+| Hook | `pre_llm_call`, returns optional user-message context | Same hook; accepted skill content is loaded natively into ephemeral current-turn context; no system-prompt modification |
 | Skill data | Filesystem roster; shortlist receives full descriptions and up to 700 body characters | Bounded metadata from `openclaw-imports` files with native Hermes eligibility filters, descriptions capped at 500 characters, no body text; qualified skill lookup avoids name collisions |
 | Decision | Stage 1 ranks and gates skill need; stage 2 reranks a shortlist of 3 (per chunk) | One request with choice, `none`, and per-candidate fit |
 | Large catalogs | Splits into chunks of 240 choices | Skips when more than 32 eligible skills |
-| Acceptance | Catalog pin: gate 0.30 and winner fit 0.40; newer upstream also arbitrates disagreeing choice/fit signals | Choice 0.70, margin 0.20, fit 0.60; provisional advisory thresholds, uncalibrated for this workload |
+| Acceptance | Catalog pin: gate 0.30 and winner fit 0.40; newer upstream also arbitrates disagreeing choice/fit signals | Choice 0.70, margin 0.20, fit 0.60; provisional preloading thresholds, uncalibrated for this workload |
 | Latency | Default hook budget 10 seconds, answer cache and retry-capable client | Temporary 3-second diagnostic budget, no retries/cache, busy bypass and cooldown |
 | Credentials | TypeSafe API with separate key | Shared OS proxy credentials |
 
 The OS implementation is a narrower experiment, not an equivalent implementation
 of the two-stage recipe. Its provisional thresholds and shorter deadline may suppress
-useful suggestions; mock tests and limited synthetic probes cannot establish
+useful selections; mock tests and limited synthetic probes cannot establish
 calibrated routing accuracy or coverage.
 Do not transfer the reference's benchmark results to this plugin. To evaluate
 the enabled experiment, compare both policies on the same representative requests and installed roster,
@@ -1163,3 +1199,22 @@ platform-specific disabled-skill filtering) and skip slash commands, as the
 reference hook does. Those review fixes did not change thresholds, the default
 OFF setting at review time, or device state. The current build enables the
 plugin separately as described above.
+
+### OS-owned preparation deadlines
+
+Hermes implements the optional `domain.RunExpirer` interface for native managed
+runs. `ExpireRun(ctx, runID, reason)` accepts cancellation only when `runID` is
+both the active reply owner and the latest admitted request. An old deadline
+cannot stop a newer steered request, including a web request sharing the same
+native run. Unsupported/non-native runs return an error.
+
+The expiry cancels only that run's stream context; the existing reader sends a
+remote stop and checks terminal status, bounded by its 30-second cleanup budget.
+The normal lifecycle reports an error with the OS deadline reason, never a
+successful task completion. A remote `pending_steer` suffix is never replayed
+after expiry. Acceptance is not proof that remote execution has
+stopped. If cleanup cannot confirm a terminal state, existing unknown-ownership
+handling isolates the conversation instead of replaying work. Unrelated queued
+requests retain their existing admission and ownership checks. This is not a
+user `/stop`, does not create a model turn, and does not erase the Harness intent
+journal or dispatch a Harness task.

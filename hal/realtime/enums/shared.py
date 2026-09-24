@@ -36,6 +36,7 @@ class InputEventTypeEnum(StrEnum):
     """Types for the agent send queue."""
     INPUT = "input"
     AUDIO_COMMIT = "audio_commit"
+    AUDIO_STREAM_END = "audio_stream_end"
 
 
 class OutputEventTypeEnum(StrEnum):

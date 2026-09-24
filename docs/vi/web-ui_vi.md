@@ -134,8 +134,8 @@ Góc dưới sidebar hiển thị trạng thái OpenClaw (online/offline) và th
 hiển thị khoảng theo provider (`0.7–1.2×` cho ElevenLabs, `0.25–4.0×` cho
 provider khác), bước `0.05`. **Save Changes** lưu tốc độ qua
 `PUT /api/device/config`; hãy lưu trước khi **Test Voice**. Giá trị đã lưu
-ưu tiên hơn `HAL_TTS_SPEED` (mặc định `1.3`); ElevenLabs giới hạn tốc độ gửi
-đi trong `0.7–1.2`.
+ưu tiên hơn `HAL_TTS_SPEED` (mặc định `1.2`); ElevenLabs HTTP v3 áp dụng tốc độ ở HAL và gửi provider speed `1.0`;
+các model ElevenLabs khác giới hạn tốc độ gửi đi trong `0.7–1.2`.
 
 **Mirror key/URL từ AI Brain.** Panel tự điền ô TTS hoặc STT còn trống bằng key
 và base URL của AI Brain, để lần setup đầu chỉ phải nhập một bộ. Riêng phần key
@@ -748,8 +748,12 @@ với `status.timing` cấp cao nhất và nhãn cảm biến chung. Sample ho�
 sample là `null` sẽ hiện trạng thái chờ, không hiển thị ngày epoch. Giải thích về
 gas index chỉ xuất hiện khi VOC hoặc NOx có nguồn được khai báo hoặc giá trị đo.
 
-Lamp vẫn để `environment` được comment trong `ROBOT.md` và SEN55/SCD41 tắt trong
-file JSON tương ứng, nên card này ẩn cho đến khi capability được khai báo. Xem
+Chỉ hardware profile `pro`, `pro-respeaker-lite` và `pro-xvf3800` của Lamp khai báo `environment`
+tùy chọn (`required: false`) và bật SEN63C trên `orangepi_sun60`, bus `0`.
+Standard hiện `N/A` mà không polling vì không có capability này. SEN55/SCD41
+và board thiếu entry tương ứng vẫn tắt, ngay cả trên Pro. Trên Pro, thiếu
+SEN63C thì hiện lỗi và `N/A` trong khi HAL thử lại, không chặn khởi động.
+Tắt SEN63C trước khi bật SEN55 + SCD41 thay thế. Xem
 [tài liệu cảm biến môi trường của Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md)
 về đấu dây, bật cảm biến và contract dữ liệu HAL.
 

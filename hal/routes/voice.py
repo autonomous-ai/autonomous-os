@@ -10,6 +10,9 @@ import json
 import threading
 import time
 from typing import Optional
+from typing import Literal
+
+from pydantic import BaseModel
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -492,6 +495,21 @@ def grant_wake_focus(source: str = "os"):
     return {"status": "ok" if voice.grant_wakeword_focus(source) else "skipped"}
 
 
+class FollowupActivityRequest(BaseModel):
+    interaction_id: str
+    run_id: str
+    phase: Literal["start", "end", "cancel"]
+
+
+@router.post("/voice/followup/activity", response_model=StatusResponse)
+def followup_activity(req: FollowupActivityRequest):
+    """Release the wake idle timer after an authorized voice run and its TTS."""
+    voice = state.voice_service
+    accepted = bool(voice and hasattr(voice, "followup_activity") and
+                    voice.followup_activity(req.interaction_id, req.run_id, req.phase))
+    return {"status": "ok" if accepted else "skipped"}
+
+
 @router.post("/voice/mute", response_model=StatusResponse)
 def mute_mic():
     """Mute mic -- stop voice pipeline and sound perception."""
@@ -610,7 +628,7 @@ async def mic_level_stream(request: Request):
             payload = json.dumps(
                 {
                     "level": round(level, 1),
-                    "threshold": vad_threshold,
+                    "threshold": float(getattr(vs, "vad_threshold", vad_threshold)) if vs else vad_threshold,
                     "active": active,
                     "muted": state._mic_muted,
                     # present = sound perception exists (noise bar should render,

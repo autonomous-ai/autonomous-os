@@ -57,6 +57,40 @@ class TransportTests(MockServerCase):
     def send(self, action="get_ui_tree", params=None, **kwargs):
         return buddy.command(action, {} if params is None else params, endpoint=self.endpoint, **kwargs)
 
+    def test_observation_bounds_and_unknown_keys_fail_before_network(self):
+        for action in ("get_ui_tree", "cua_observe"):
+            for params in ({"max_elements": 800}, {"max_nodes": 800}, {"max_nodes": True},
+                           {"max_nodes": 0}, {"max_depth": 31}, {"max_depth": 0}, {"max_depth": 1.5}):
+                with self.assertRaisesRegex(buddy.BuddyError, "inspect mode navigation"):
+                    self.send(action, params)
+        self.assertEqual(self.server.requests, [])
+        for action in ("get_ui_tree", "cua_observe"):
+            self.send(action, {"app": "Calendar", "max_nodes": 500, "max_depth": 30})
+        self.assertEqual(len(self.server.requests), 2)
+
+    def test_cua_validation_rejects_trace_mistakes_without_network(self):
+        base = {"snapshot_id": "cua-observed", "element_token": "s1:0", "ui_action": "press_key", "key": "t"}
+        bad = [dict(base, window_id=61920), dict(base, ui_action="hotkey"),
+               dict(base, key=""), dict(base, modifiers="cmd"), dict(base, modifiers=[{}]),
+               dict(base, delivery_mode="automatic"), dict(base, pid=123),
+               {"snapshot_id": "cua-observed", "window_id": 61920, "ui_action": "press_key", "key": "t"},
+               {"snapshot_id": "cua-observed", "element_token": "s1:0", "ui_action": "type_text", "text": ""},
+               {"snapshot_id": "cua-observed", "element_token": "s1:0", "ui_action": "click", "ax_action": "unknown"}]
+        for params in bad:
+            with self.subTest(params=params), self.assertRaises(buddy.BuddyValidationError):
+                self.send("cua_action", params)
+        self.assertEqual(self.server.requests, [])
+
+    def test_valid_cua_actions_forward_exactly_once_without_rewriting(self):
+        base = {"snapshot_id": "cua-observed", "element_token": "s1:0"}
+        for extra in ({"ui_action": "click", "ax_action": "open"},
+                      {"ui_action": "press_key", "key": "t", "modifiers": ["cmd", "shift"], "delivery_mode": "foreground"},
+                      {"ui_action": "type_text", "text": "Ngày 31/12/2026"}):
+            params = dict(base, **extra)
+            self.send("cua_action", params)
+            self.assertEqual(self.server.requests[-1]["params"], params)
+        self.assertEqual(len(self.server.requests), 3)
+
     def test_command_preserves_unicode_nested_params_and_cancellation_id(self):
         params = {"from": {"x": -20, "y": 7}, "text": "Tiếng Việt `$(private)`\n"}
         response = self.send("drag", params, command_id="known-unique-id", timeout_ms=60000)
@@ -160,6 +194,20 @@ class ScreenshotTests(unittest.TestCase):
             self.assertEqual(send.call_args.args[1], {"return_format": "base64", "scale": 0.5})
             self.assertTrue(Path(json.loads(output.getvalue())["result"]["local_image_path"]).exists())
             self.assertNotIn("image_b64", output.getvalue())
+
+    def test_window_capture_rejects_old_companion_display_response(self):
+        with patch.object(buddy, "command", return_value=self.response()), patch.object(buddy, "save_screenshot") as save, patch("sys.stderr", io.StringIO()):
+            self.assertEqual(buddy.main(["screenshot", "--params", '{"app":"Calendar"}']), 1)
+            save.assert_not_called()
+
+    def test_window_capture_keeps_window_metadata(self):
+        data = self.response()
+        data["result"].update(capture_scope="window", window_id=42, pid=123)
+        with tempfile.TemporaryDirectory() as folder, patch.object(buddy, "command", return_value=data), patch("sys.stdout", io.StringIO()) as output:
+            self.assertEqual(buddy.main(["screenshot", "--params", '{"app":"Calendar","window_id":42}', "--output-dir", folder]), 0)
+            capture = json.loads(output.getvalue())["result"]
+            self.assertEqual(capture["capture_scope"], "window")
+            self.assertEqual(capture["window_id"], 42)
 
     def test_cli_failure_exits_nonzero(self):
         output = io.StringIO()
@@ -331,6 +379,13 @@ class ObserveTests(MockServerCase):
         self.assertEqual(result["screenshot"]["image_to_global_points"]["origin_x"], -1920)
         self.assertEqual(self.server.requests, [{"question": "Tìm ô tìm kiếm", "display_id": 123, "scale": 0.5}])
 
+    def test_observe_forwards_window_target(self):
+        self.send_observe(params={"app": "com.apple.iCal", "window_id": 42})
+        self.assertEqual(self.server.requests[0]["app"], "com.apple.iCal")
+        self.assertEqual(self.server.requests[0]["window_id"], 42)
+        self.assertEqual(self.server.requests[0]["scale"], 1)
+        self.assertNotIn("display_id", self.server.requests[0])
+
     def test_observe_missing_description_and_raw_base64_rejected(self):
         for data in [{"screenshot": {}}, {"description": "", "screenshot": {}},
                      {"description": "visible", "screenshot": {"image_b64": "unexpected"}}]:
@@ -344,6 +399,9 @@ class ObserveTests(MockServerCase):
             with self.subTest(question=question), self.assertRaises(buddy.BuddyError):
                 self.send_observe(question)
         for params in [{"display_id": 0}, {"display_id": -1}, {"display_id": True}, {"display_id": 4294967296},
+                       {"app": " "}, {"app": True}, {"app": "a" * 257}, {"window_id": 42},
+                       {"app": "Calendar", "window_id": True}, {"app": "Calendar", "window_id": 0},
+                       {"app": "Calendar", "window_id": 4294967296}, {"app": "Calendar", "display_id": 1},
                        {"scale": 0}, {"scale": 1.1}, {"scale": float("nan")}, {"scale": True}, {"path": "/private/file"}]:
             with self.subTest(params=params), self.assertRaises(buddy.BuddyError):
                 self.send_observe(params=params)

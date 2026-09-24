@@ -135,8 +135,8 @@ Defined at `.lm-root` in `index.css`:
 shows the provider range (`0.7–1.2×` for ElevenLabs, `0.25–4.0×` otherwise)
 in `0.05` steps. **Save Changes** persists speed through
 `PUT /api/device/config`; save before using **Test Voice**. Saved speed takes
-precedence over `HAL_TTS_SPEED` (default `1.3`); ElevenLabs clamps the outgoing
-speed to `0.7–1.2`.
+precedence over `HAL_TTS_SPEED` (default `1.2`); ElevenLabs HTTP v3 applies speed locally while requesting provider speed
+`1.0`; other ElevenLabs models clamp the outgoing speed to `0.7–1.2`.
 
 **AI Brain key/URL mirroring.** The panel fills a blank TTS or STT field from the
 AI Brain's key and base URL, so a first-time setup only asks for one credential.
@@ -766,9 +766,12 @@ generic sensor label. A `null` sample or sample timestamp displays a waiting sta
 never an epoch date. The gas-index explanation appears only when VOC or NOx has a
 declared source or a measured value.
 
-Lamp still ships with `environment` commented out in `ROBOT.md` and SEN55/SCD41
-disabled in their respective JSON configurations, so this card remains hidden until the capability is
-declared. See [Lamp environmental sensing](../robots/lamp/docs/environment-sensing.md)
+Only Lamp hardware profiles `pro`, `pro-respeaker-lite` and `pro-xvf3800` declare optional
+`environment` (`required: false`) and enable SEN63C on `orangepi_sun60`,
+bus `0`. Standard shows `N/A` without polling because its capability is absent.
+SEN55/SCD41 and boards without matching entries remain disabled, even on Pro.
+On Pro, missing SEN63C shows an error and `N/A` while HAL retries, without
+blocking startup. Disable SEN63C before enabling SEN55 + SCD41 instead. See [Lamp environmental sensing](../robots/lamp/docs/environment-sensing.md)
 for wiring, enabling, and the HAL data contract.
 
 ## 6. LED Color API

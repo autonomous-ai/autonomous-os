@@ -15,14 +15,14 @@ from hal.realtime.enums.gemini import GeminiThinkingLevel
 from hal.realtime.voice_agent.gemini_live import GeminiLiveAgent
 
 
-def _build(model: str) -> types.LiveConnectConfig:
+def _build(model: str, language=None, use_language_codes=False) -> types.LiveConnectConfig:
     agent = object.__new__(GeminiLiveAgent)
     agent._vad_disabled = True  # short-circuits _activity_detection setup
     agent._resumption_handle = None
     agent._tools = [{"name": "delegate_to_main", "description": "", "parameters": None}]
     agent._config = SimpleNamespace(
-        language=None,
-        use_language_codes=False,
+        language=language,
+        use_language_codes=use_language_codes,
         model=model,
         thinking_level=GeminiThinkingLevel.LOW,
         voice=SimpleNamespace(value="Kore"),
@@ -59,3 +59,23 @@ if __name__ == "__main__":
     test_extended_thinking_declares_non_blocking()
     test_plain_live_leaves_tool_blocking()
     print("ok")
+
+
+def test_input_language_hint_serializes_for_developer_api():
+    from google.genai._live_converters import _AudioTranscriptionConfig_to_mldev
+
+    cfg = _build("gemini-3.8-live-extended-thinking", "vi", True)
+    data = cfg.input_audio_transcription.model_dump(exclude_none=True)
+    wire = _AudioTranscriptionConfig_to_mldev(data)
+    assert wire == {"languageHints": {"language_codes": ["vi-VN"]}}
+    assert cfg.output_audio_transcription.model_dump(exclude_none=True) == {}
+
+
+def test_input_language_hint_opt_in_and_preserves_locale():
+    for language, enabled, expected in [
+        ("vi", False, None), (None, True, None), ("", True, None),
+        ("fr-FR", True, ["fr-FR"]), ("vi-VN", True, ["vi-VN"]),
+    ]:
+        cfg = _build("gemini-3.8-live-extended-thinking", language, enabled)
+        hints = cfg.input_audio_transcription.language_hints
+        assert (hints.language_codes if hints else None) == expected

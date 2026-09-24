@@ -110,7 +110,14 @@ startup paths while retaining change detection. HAL's optional per-component
 warm-up after an OS-only restart; invalid/stale components remain excluded.
 The `environment` skill interprets measurements and consults `wellbeing` for
 proportionate advice. Hardware acquisition and OS change policy are separate;
-this feature does not enable Lamp's commented capability or disabled SEN55/SCD41/SEN63C.
+the policy does not enable hardware. Only Lamp hardware profiles `pro`, `pro-respeaker-lite` and
+`pro-xvf3800` declare optional `environment` (`required: false`) and enable
+SEN63C on `orangepi_sun60`, bus `0`. Standard keeps the capability commented
+and SEN63C disabled: no acquisition, SEN63C clock writes, environment events
+or capability-based eligibility for the environment skill. SEN55/SCD41 and
+boards without matching entries remain disabled, including Raspberry Pi on Pro.
+Missing SEN63C on Pro reports an error and retries without blocking startup.
+Disable SEN63C before enabling the alternative SEN55 + SCD41 components.
 See [Lamp environment sensing](../robots/lamp/docs/environment-sensing.md#os-change-policy-and-agent-access)
 for defaults, validation, payloads and use cases.
 
@@ -241,7 +248,7 @@ Config field: `guard_mode` in `config/config.json` (bool, default `false`). The 
 | `motion.activity` | MotionPerception (while PRESENT) | No | Activity detected while user is present — emotional actions logged via Mood skill |
 
 **Processing flow:**
-1. `voice_command`, `voice_followup`, or `voice` + local intent enabled → match local rules → execute directly (~50ms); unmatched requests may use the Jev fallback described below before reaching the main runtime. `voice_followup` has the same user priority as `voice_command`; `web_chat` / `mqtt_chat` skip local intent (typed text ≠ wake-word voice).
+1. `voice_command`, `voice_followup`, or `voice` + local intent enabled → match local rules → execute directly (~50ms); unmatched requests may use the Jev fallback described below before reaching the main runtime. `voice_followup` has the same user priority as `voice_command`; Text-only `web_chat` / `mqtt_chat` also try local rules and Jev, without TTS. Requests with images or files retain the agent path. Local replies return `handler: "local"`, `response`, `handledLocally: "true"`, and `localRunId` (no agent `runId`); web chat renders the immediate reply, while MQTT uses `localRunId` for its acknowledgement and final `chat.event`.
 2. Ambient turn floor: `motion.activity`, `emotion.detected`, `speech_emotion.detected`, `sound`, `presence.away`, `light.level` are dropped when the last agent turn created by this handler (any type) was less than `sensing_turn_floor_s` seconds ago (config key, default `120`, `0` disables; guard mode bypasses). One cross-type floor on top of HAL's independent per-type gates — a burst of different event types costs at most one agent turn per window. Dropped events surface as `sensing_drop` (reason `ambient_floor`) in the Flow Monitor.
 3. No match → forward to OpenClaw via WebSocket `chat.send`
 4. If event has `images` → call `SendChatMessageWithImages` → send every attached photo with the text for AI vision analysis. A LIST, not a single field: a chat client can attach several at once and every wire format behind the gateway already carries `attachments[]`; a camera event simply sends one entry. For chat types (`web_chat` / `mqtt_chat`), each image is saved to `/tmp/web-chat-<ms>-<i>.jpg` (indexed so photos attached to the SAME turn cannot collide) and tagged `[image: <path>]` so the agent can reference it (e.g. for face enrollment). When the main model is text-only, the describe-first gate runs once PER image, **concurrently** (`safego`), and the descriptions are numbered `(image N of M)`. Concurrency is not an optimisation here: the gate runs inside the HTTP handler, so the caller's POST does not return until every describe finishes — a single describe measured 8-38 s, so two photos in series left the web chat silent for ~53 s, long enough that reloading the page (which cancels the request and loses the turn) is the natural move. Fanning out makes the wait the slowest image instead of their sum.
@@ -465,9 +472,10 @@ Requires sensing with camera (InsightFace). Enrolled person JPEGs persist under 
 `GET /api/device/config` returns effective `tts_speed`; `PUT /api/device/config`
 accepts `{"tts_speed":1.2}`. This optional field accepts `0.25–4.0`; omitting
 it preserves the saved value. Saved config takes precedence over `HAL_TTS_SPEED`,
-retaining the existing environment fallback and `1.3` default. HAL reads config
+retaining the existing environment fallback and `1.2` default. HAL reads config
 at boot and `/voice/start` through `get_tts_speed()`; speed changes are pushed
-live through `/voice/tts/config {speed}`. The ElevenLabs backend still clamps
+live through `/voice/tts/config {speed}`. ElevenLabs HTTP v3 uses provider speed `1.0` and applies the saved speed
+locally with pitch-preserving streaming. Other ElevenLabs models still clamp
 the outgoing value to `0.7–1.2`.
 
 ### Piper — on-device TTS
@@ -854,7 +862,7 @@ records for up to five seconds before cancelling any remaining delivery.
 
 ## Local Intent Matching
 
-When receiving a `voice_command`, `voice_followup`, or `voice` event, the OS server checks local intent first (~50ms):
+When receiving a text-only `voice_command`, `voice_followup`, `voice`, `web_chat`, or `mqtt_chat` event, the OS server checks local intent first (~50ms):
 
 | Command | Action |
 |---------|--------|
@@ -909,37 +917,39 @@ Chitchat is **off while the realtime voice agent is enabled** — the model rece
 
 ### Jev intent fallback
 
-Jev is **disabled by default**. For `voice_command`, `voice_followup`, and `voice`
-events received by os-server with `local_intent` enabled, local rules still run
-first. Only an unmatched request may call the proposed BFF Decisions endpoint
-with `typesafe/jev-1.13`; typed chat and built-in Live routing are outside this
-path. Existing local-rule matching and its limitations remain unchanged.
+Jev is **enabled by default**. With `local_intent` enabled, eligible
+`voice_command`, `voice_followup`, `voice`, and text-only `web_chat` / `mqtt_chat`
+events received by os-server try local rules first. Only an unmatched request may
+call the BFF Decisions endpoint with `typesafe/jev-1.13`. Context-dependent
+follow-ups defer to the main runtime before either classifier. Requests with
+attachments, Harness-only voice, and turns answered directly inside the realtime
+agent retain their separate paths.
 
 The optional configuration in `config/config.json` is:
 
 ```json
 {
-  "jev_intent": {"enabled": false, "timeout_ms": 350}
+  "jev_intent": {"enabled": true, "timeout_ms": 3000}
 }
 ```
 
-Omitting `jev_intent` or its `enabled` field keeps Jev off. Set `enabled: true`
-only after the BFF contract below is implemented; set it back to `false` to
-remove this additional decision latency. `local_intent: false` is also a master
+Omitting `jev_intent` or its `enabled` field enables Jev. An explicit
+`enabled: false` remains off, including in existing configurations, and removes
+this additional decision latency. The default decision budget is 3,000 ms, matching the Hermes Jev plugin. `local_intent: false` is also a master
 switch. Apply configuration using the existing manual startup/restart procedure;
 there is no settings UI or Jev environment flag/key.
 
 The client uses `llm_base_url` plus the fixed `/jev/decisions` path and authenticates
 with `Authorization: Bearer <llm_api_key>`, using the existing device credential
-configuration shared by LLM/STT/TTS. It never falls back to a direct OpenRouter
-call. Disabled or missing-credential requests make no Jev HTTP call and retain
+configuration shared by LLM/STT/TTS. Requests identify the client with `User-Agent: AutonomousOS-Jev/0.1`, as in
+the Hermes plugin. It never falls back to a direct OpenRouter call. Disabled or missing-credential requests make no Jev HTTP call and retain
 the existing main-runtime fallback immediately.
 
 Core inference code lives in `system/intent/jev/` (`client`, `resolver`, and
 `catalog`). `system/intent/semantic.go` connects it to local rules and execution,
 keeping the model decision separate from HAL side effects.
 
-The decision budget defaults to **350 ms**, capped at **1,000 ms** (nonpositive
+The decision budget defaults to **3,000 ms**, capped at **3,000 ms** (nonpositive
 values use the default). Each decision makes one request without retries. A
 concurrent decision is skipped immediately, without queueing. Errors, timeout,
 non-2xx responses, or malformed responses trigger a **30-second cooldown**; those requests and
@@ -947,35 +957,123 @@ subsequent misses during cooldown continue to the main runtime. Provider
 abstention also continues to the main runtime. This adds latency on unmatched
 requests when enabled; there is no live latency benchmark or accuracy guarantee.
 
-Only positively declared device capabilities expose candidates. Missing or
-unknown capabilities disable semantic hardware actions. The fixed allowlist is
-`led_on`, `led_off`, `dim`, `volume_up`, and `volume_down`, plus `none` to defer.
-Jev supplies no executable arguments: accepted selections reuse existing HAL
-actions and safety limits. `dim` sets warm RGB `[80,60,40]`; volume actions set
-the configured safe maximum or **30% of that maximum**, not relative steps.
-Unsupported parameters, compound requests, or ambiguity should select `none`.
+The catalog covers all **20 local intents**, plus `none` to defer:
+
+- Light: `led_on`, `led_off`, `dim`, and `led_color`.
+- Scenes: `scene_off`, `scene_reading`, `scene_focus`, `scene_relax`,
+  `scene_movie`, `scene_night`, and `scene_energize`.
+- Audio/media: `volume_up`, `volume_down`, `mute_speaker`, `unmute_speaker`,
+  `music_stop`, and `stop_talking`.
+- Camera/servo: `servo_track` and `servo_track_stop`.
+- Device clock: `what_time` (current local time only).
+
+Hardware candidates require positively declared device capabilities, checked
+both before inference and immediately before execution. Missing or unknown body
+capabilities disable those candidates; hardware-free `what_time` remains available.
+Mute/unmute and music stop require `media`; volume and speech interruption require
+`audio`. Camera tracking requires `motion`; lights/scenes require `light`.
+
+`led_color` requires one `color` from 10 canonical values: `yellow`, `red`,
+`green`, `blue`, `cyan`, `purple`, `orange`, `pink`, `white`, `warm`.
+`servo_track` requires one `target` from 23 labels: `face`, `hand`, `person`,
+`dog`, `cat`, `bird`, `cup`, `bottle`, `cell phone`, `book`, `remote`, `laptop`,
+`keyboard`, `mouse`, `teddy bear`, `sports ball`, `backpack`, `chair`, `clock`,
+`scissors`, `banana`, `apple`, `orange`. Synonyms resolve to canonical values
+(for example violet → purple, mug → cup). Missing, unsupported or ambiguous
+parameters defer; multiple targets/actions are not supported.
+
+Jev returns a typed selection containing an intent and bounded parameters.
+Go validates the offered intent and exact parameter names/values, then converts
+accepted enum values into code-owned text for the existing rule executor.
+Neither raw user speech nor model-generated HAL payloads reach that executor.
+HAL safety limits remain authoritative. `dim` reads `/led/color`, halves each RGB
+channel (integer rounding), and writes `/led/solid`, then verifies the readback.
+Repeating the request dims again, and an already-dark light stays off. Effects
+and scenes become a solid color based on the reported effect base or brightest
+pixel; animation/pattern preservation is not supported. `volume_down` halves
+current speaker volume; `volume_up` adds 10% of the safe range (at least one
+point), capped by the safe maximum. Read/write/verification failures return an
+honest failure, not a success acknowledgement. Color stops the LED effect before
+setting a solid color. Night activates its scene and may add the sleepy expression.
+Stopping speech, stopping music and muting the speaker remain distinct actions.
+Candidate descriptions separate accepted user intent from execution effects.
+Reading/work needs may select a lighting scene: “need focus to read book” selects
+reading because the specific activity takes precedence over generic focus; an
+explicit focus-mode request still selects focus. Book recommendations defer.
+The production local fast path accepts only complete canonical commands; longer
+or qualified text goes to Jev (or the agent when Jev is unavailable), preventing
+substring matches from executing negated, quoted, numeric or multi-action requests.
+Generic light requests accept the on preset or relative dimming without naming RGB values;
+current complaints about excessive brightness, glare or harsh light can select
+`dim` when no external source is named. Politeness and a reason for the request
+do not add tasks. Explicit percentages, preserving an animation or pattern, other
+rooms/devices, negation, quoted speech, future/conditional requests and multiple
+tasks still defer. Complaints such as “lamp speak too loud” select relative volume reduction; repeated requests reduce it again.
+The classifier does not replace the existing local-rule fast path.
+
 Acceptance requires a complete valid probability response, selected probability
 **≥0.90**, margin over the runner-up **≥0.40**, and independent action fit
-**≥0.95**. These are experimental routing thresholds, not calibrated accuracy
+**≥0.95**. Each required parameter of the selected intent must independently
+pass probability **≥0.90** and margin **≥0.40** with a supported non-`none` value.
+These are experimental routing thresholds, not calibrated accuracy
 claims or a guarantee against misclassification.
 
 When enabled, the selected `[voice-instruction]` text, otherwise the cleaned
 transcript, is sent through BFF to OpenRouter. The fields are never concatenated; no chat
 history is sent. Inputs over **2,000 bytes** are skipped, not truncated.
-Decision logs include `decision_ms` and `outcome`; Flow Monitor `intent_match`
+Decision logs include `decision_ms` and `outcome`, plus the validated `intent`
+ID and validated `parameters` when present on `selected` (for example
+`intent=led_color parameters=map[color:blue]`). A separate `intent Jev evaluation`
+line records the validated `candidate`, `probability`, `margin`, `fit` (except
+`none`) and `reason`: `accepted`, `no_match`, `low_probability`, `low_margin`,
+`low_fit`, `param_no_match`, `low_parameter_probability`, or
+`low_parameter_margin`. Accepted parameterized decisions also log validated
+`parameters`. Malformed required parameter responses are errors, not selections.
+It logs no transcript, credentials or raw provider response. This records selection, not
+proof of hardware execution. Flow Monitor `intent_match`
 marks accepted selections with `source=jev`. Existing local-handled/API response
 semantics remain unchanged, including returning an attempted action's failure
 without forwarding it for a potentially duplicate execution. If neither local
 rules nor Jev handles the request, the existing main-runtime path remains in use.
 
 
+#### Live classifier evaluation
+
+**Historical five-intent evaluation (before the 20-intent expansion):**
+On 2026-09-23, the English fixture comparison on `lamp-4ace` accepted 2/10
+positive requests with the previous prompt/catalog and 19/20 across two runs
+with the revised prompt/catalog. All 34 rejection-case runs deferred. One
+"Reduce the brightness of this lamp now" run deferred at fit 0.94 versus the
+unchanged 0.95 cutoff; the live suite therefore passed once and failed once.
+These are small-sample observations, not a calibrated accuracy estimate or
+results for the expanded catalog. The expanded live suite contains 65 English
+cases covering all intent families, required parameters and rejection cases;
+the final expanded run on 2026-09-23 passed 62/65 cases (29/32 positive
+requests and all 33 rejection cases). Warm-white lighting, following the speaker
+("Follow me with your camera"), and tracking a cup next to a named room deferred
+at fit 0.94, 0.91 and 0.89 respectively, below the unchanged 0.95 gate. The live
+suite therefore still reports failure for those three misses; it is not a clean
+pass or a guarantee for other phrasing. After deployment, API smoke tests on
+`lamp-4ace` selected and executed `led_color` with `color=purple` (1,149 ms
+decision), `scene_relax` (829 ms), and `what_time` (738 ms), with matching
+`source=jev` flow records and successful local responses. Tracking was evaluated
+without moving hardware; these tests do not cover microphone/STT behavior.
+
+
+`TestJevLiveNaturalLanguage` is skipped in ordinary unit runs. Opt in on a test
+device with `JEV_EVAL_CONFIG=/root/config/config.json` and run the compiled Go
+test with `-test.run TestJevLiveNaturalLanguage -test.v`. It reads only the proxy
+URL/key, evaluates English requests and rejection cases through the real client,
+and never invokes HAL. Live model output can vary; a passing fixture set is not
+proof of microphone/STT performance or universal classification accuracy.
+
 <a id="jev-bff-contract"></a>
 
-#### Proposed BFF Decisions contract — not yet implemented
+#### BFF Decisions contract
 
-This is a handoff proposal for the BFF team, **not an available BFF API**. The
-local change implements the OS client and mock tests only; live integration
-cannot be tested until BFF deploys this endpoint.
+The OS client uses the contract below. On 2026-09-23, classifier-only calls
+from `lamp-4ace` reached its configured BFF endpoint and returned valid Decisions
+responses. This verifies that device/proxy combination, not every deployment.
 
 - **Route:** `POST {llm_base_url}/jev/decisions`, for example
   `POST /api/v1/ai/v1/jev/decisions` when the base ends in `/api/v1/ai/v1`.
@@ -989,10 +1087,11 @@ cannot be tested until BFF deploys this endpoint.
   HTTP 200, **without** the OS `{status,data,message}` envelope.
 - **Failure:** return a non-2xx status for authentication/provider errors. The
   client falls back and enters its 30-second error cooldown. The caller's
-  350-ms default budget (maximum 1,000 ms) applies; the client does not retry.
+  3,000-ms default budget (maximum 3,000 ms) applies; the client does not retry.
 
 Minimal one-candidate request illustrating the wire shape (production includes
-all eligible candidates, a `fit_<id>` question for each, and full instruction
+all eligible candidates, a `fit_<id>` question for each, enum choice questions
+`arg_<id>_<name>` for declared parameters, and full instruction
 boundaries rejecting unsupported or ambiguous requests):
 
 ```json
@@ -1035,10 +1134,17 @@ Corresponding response shape:
 ```
 
 `type`, the complete `probabilities` map (including `none`), and a numeric `noul`
-for every offered candidate are mandatory. The OS validates the response and
-applies the probability/margin/fit thresholds above; BFF must not reduce it to
-just a selected label. Examples contain no real credentials, and local tests
-use mock responses rather than paid/provider requests.
+for every offered candidate are mandatory. Parameter schemas are sent in
+`state.candidates[].parameters` as descriptions and finite `options` arrays.
+In the same HTTP request, `arg_led_color_color` and `arg_servo_track_target`
+are `choice` questions with those enum values plus `none`. For example, the
+color question can return `choice: "blue"` with a complete probability map
+covering all 10 colors and `none`. Every parameter answer for the selected intent
+must be present and valid; answers for unselected intents are ignored. There is
+no second extraction call. The OS applies the intent/fit and parameter thresholds
+above; BFF must preserve these answer objects rather than return only a label.
+Examples contain no real credentials, and local tests use mock responses rather
+than paid/provider requests.
 
 
 ### USER.md enrollment reconcile
@@ -1290,3 +1396,113 @@ For accepted realtime history, the sensing response returns the original exchang
 Harness reply-routing metadata on sensing voice/chat requests is conditional on the current paired Harness transport being connected. Disconnected requests omit both the reply marker and Harness-specific routing/follow-up hints; ordinary voice and follow-up routing remains unchanged.
 
 The HAL sensing payload accepts optional `voice_turn_type` (`voice`, `voice_command`, `voice_followup`) for voice diagnostics. OS copies validated values into Flow Monitor evidence only; `type` remains the authority for authorization, routing, queueing, history synchronization and speaker cancellation.
+
+#### Chat intent validation (2026-09-23)
+
+The revised classifier scored **72/74** in the opt-in live suite. All added
+brightness/volume complaints, reading/focus goals and negative controls passed.
+Two camera-tracking requests conservatively deferred on fit confidence (0.92
+and 0.90 versus the unchanged 0.95 threshold); the suite remains red.
+
+Device smoke checks covered web chat and injected `voice_command` requests:
+LED RGB `[48,39,30] → [24,19,15] → [12,9,7]` in chat, then `[6,4,3]`
+through voice; volume `50 → 25 → 12` in chat, then `6` through voice.
+Both sources selected reading for “need focus to read book”. Voice TTS reached
+HAL but was suppressed by speaker mute; microphone/STT and audible playback
+were not verified. MQTT reply/session handling passed automated tests.
+
+The canonical fast path also accepts anchored `[voice-instruction]` envelopes
+(with optional leading `[user]`/`[ambient]`). Only the authoritative instruction
+is matched; a negated, contextual, empty or malformed instruction never falls
+back to a command in `[transcript]`. Complete plural aliases “turn off/on the
+lights” and “lights off/on” map to the existing light commands. Unknown prefixes
+and instruction constraints remain intact and defer to semantic/agent handling.
+
+#### Intent full-flow boundaries
+
+Local and Jev classification now use the same conservative voice normalization:
+anchored instruction wins over transcript, including an empty instruction;
+malformed/embedded markers cannot discard a prefix or negate a constraint.
+Known speaker/audio decorations and exact no-STT realtime handoff suffixes are
+recognized; unknown content remains significant. See [Harness routing](harness.md#local-intent-versus-digital-task-context)
+for why contextual fragments may bypass both classifiers.
+
+Failed command results no longer emit success text or LED/emotion state-change
+notifications. Solid-light commands check HAL sleep first, returning an explicit
+blocked response rather than silently waking the device. RGB reads reject absent,
+null or invalid values. Dim/volume concurrent adjustments return busy instead of
+waiting indefinitely. This is not a transaction against concurrent HAL effects;
+readback verification remains best-effort and other commands still rely on HAL's
+reported execution status.
+
+Ordinary voice delivery waits 30 seconds (Jev's 3-second budget plus sequential
+HAL calls); image requests stay at 90 seconds and Harness-only requests at 5.
+An ambiguous connection failure on user voice is not retried: an interaction ID
+is telemetry, not an execution idempotency key. Explicit 503 retries remain.
+There is no new global execution deadline or durable deduplication contract.
+Jev logs skipped reasons (`busy`, `cooldown`, `invalid_input`, `no_candidates`,
+`missing_config`, `disabled`, `unavailable`, `cancelled`) without user text or keys.
+This revision was validated with local/mock tests only, without live Jev,
+robot deployment or paid Harness tasks. Mic/STT and Store integration remain
+separate acceptance checks.
+
+## Harness Store preparation
+
+The loopback-only `POST /api/harness/request` now forwards negotiated Store v1 operations (`store.list`, `store.inspect`, `agent.prepare`, `operation.get`) over the existing direct E2EE connection. No new public endpoint is exposed. All four capabilities are required; `agent.prepare` addresses the paired machine without a pre-existing agent ID. A `PreparationUnknownError` explains same-key/parameter retry or retained-operation polling, distinct from uncertain task delivery and `receipt.get`. Preparation progress uses local response metadata stripped before transport; it does not claim the final reply. Durable intent/task state belongs to the skill's private journal. See [Harness Store](harness-store.md) for commands, schema provenance, recovery and mock-versus-live validation.
+
+Harness Store preparation now has a 120-second OS deadline per response run, in addition to the helper’s durable 90-second polling budget. Expired routes cannot dispatch. Native Hermes stops only the matching active owner and reports a terminal error rather than remaining active indefinitely; other runtimes must implement `RunExpirer` for the same runtime guarantee. See [Harness Store](harness-store.md#progress-and-user-action) for recovery and cleanup bounds.
+
+## Harness follow-up provenance
+
+Harness follow-up context retains `agentId`, `responseRunId`, and the original result `text` as JSON during the existing follow-up window. Routing instructions keep that provenance separate from the helper's retained selection and preserve the unfinished user request when correcting its destination. See [Harness integration](harness.md) for explicit-target and local task-context rules.
+
+## JEV Harness agent selection
+
+`config.json` accepts `"jev_harness":{"enabled":true,"timeout_ms":1500}`.
+The section and `enabled` default to enabled independently of `local_intent` and
+`jev_intent`, using existing `llm_base_url` / `llm_api_key` JEV proxy settings.
+Enabled selection can incur model usage; `enabled:false` retains main's target.
+
+Strict-loopback `POST /api/harness/select-agent` accepts `{machineId,agentId,text}`
+and returns success data `{mode,agentId,machineId,reason}`, with mode `jev`,
+`fallback` or `disabled`. The ordinary skill `send` calls it before durable
+reservation. JEV may replace main's proposed ID; the resulting ID is saved in
+pending state and used for `turn.send` and its OS reply route. The endpoint itself
+never sends a task. Store dispatch, answer, stop and already-reserved deliveries
+retain their existing targets. Skill prompts and Harness wire contracts are unchanged.
+
+The selector reuses a RAM cache from successful existing `agents.list` calls,
+with at most 32 candidates and 30-second validity for the same machine/server
+instance. Delegated text is bounded to 2,000 bytes and metadata to 1,000 JSON bytes
+per candidate. One synchronous JEV selection runs at a time, with no queue and
+a default 1,500 ms budget (`timeout_ms` configurable up to 3,000 ms; helper HTTP
+timeout: four seconds). Missing/stale
+or oversized data, missing credentials, busy state, errors, timeout or uncertain/
+invalid selections retain main's proposal. No target changes after reservation.
+
+The proxy receives bounded task text and metadata, not full history. Logs contain
+mode, selected/proposed IDs, reason and latency, without task text, recaps or
+credentials. Local/mock tests do not establish provider accuracy or device behavior.
+See [Harness agent selection](harness.md#jev-harness-agent-selection).
+
+Voice follow-up activity: `POST /voice/followup/activity` on HAL accepts `{interaction_id, run_id, phase}` (`start`, `end`, `cancel`) only for a locally authorized voice interaction. OS holds processing through asynchronous TTS admission, then HAL waits for owned playback before starting the wake idle window. Silent/error terminals and cancellation release the hold; run metadata is bounded to five minutes, including cancellation after processing ends. Delivery uses a 250 ms timeout. See [realtime voice](realtime-voice.md).
+
+## Correlating overlapping Harness inputs
+
+OS binds each response route to the existing dispatch `idempotencyKey` before
+sending. Events match the device run ID and/or key (`payload.idempotencyKey` or
+`payload.receipt.idempotencyKey`); explicit mismatches never fall back. Agent-only
+legacy events require a unique pending route on an agent that has never overlapped.
+Overlap is sticky for that agent for the OS-server process lifetime, including
+future routes after siblings finish. This prevents late ambiguous duplicates from
+completing the wrong turn. Summary `fullText` is preferred; latest-recap fallback
+and bounded `turn.done` recovery are disabled for agents that have overlapped.
+
+Concurrent Harness-only voice input waits cancellably for the previous dispatch/
+receipt RPC, not remote terminal completion. Up to 64 unresolved deliveries stay
+in RAM; existing `Pending` exposes the oldest, and receipt/resolve advances it.
+New inputs do not overwrite uncertain delivery or blindly resend. Receipt progress
+reports queued separately from delivered/started. The app must carry the existing
+key or matching run ID on overlapping summary/tool/question events; missing
+correlation is ignored. No new wire field is introduced. Local/mock tests cover OS
+behavior, not live app steering or end-to-end overlap. No device deployment is implied.

@@ -7,9 +7,10 @@ PROMPT = (RESOURCES_DIR / "system_prompt_gemini.md").read_text(encoding="utf-8")
 
 
 def test_acknowledgment_never_replaces_same_turn_delegation():
-    assert "may immediately speak one brief acknowledgment" in PROMPT
+    assert "your first response MUST be the actual `delegate_to_main` function call" in PROMPT
     assert "MUST call `delegate_to_main` in the SAME turn" in PROMPT
-    assert "Do not wait for the main agent or a tool result" in PROMPT
+    assert "Do not speak an acknowledgment or call `express_emotion` before this handoff" in PROMPT
+    assert "Emit only the handoff function call, with no spoken audio or text before or after it" in PROMPT
     assert "never end the turn after the acknowledgment alone" in PROMPT
     assert "never say the action is done, music is playing, or a reminder is set" in PROMPT
     for obsolete_rule in (
@@ -24,10 +25,11 @@ def test_acknowledgment_never_replaces_same_turn_delegation():
     assert all("blank voice" not in line for line in delegation_examples)
 
 
-def test_music_example_requires_tool_call_after_immediate_receipt():
+def test_music_example_requires_tool_call_before_receipt():
     example = next(line for line in PROMPT.splitlines()
                    if line.startswith('User: "Play something light'))
-    assert 'immediately say "I can help with that." AND call' in example
+    assert "FIRST call `delegate_to_main" in example
+    assert "with blank spoken output" in example
     assert 'delegate_to_main(message="Play something light, don\'t make it too loud")' in example
     assert "in the SAME turn" in example
     assert "never stop there or claim music is already playing" in example
@@ -79,4 +81,25 @@ def test_email_examples_delegate_the_original_request():
         example = next(line for line in PROMPT.splitlines()
                        if line.startswith(f'User: "{request}"'))
         assert f'delegate_to_main(message="{request}")' in example
-        assert "optional neutral acknowledgment" in example
+        assert "blank spoken output" in example
+
+
+def test_gemini_routing_policy_follows_memory_context(tmp_path, monkeypatch):
+    from hal.realtime.context_manager.hermes import HermesContextManager
+
+    for provider in ('gemini', 'openai'):
+        manager = HermesContextManager(workspace_dir=str(tmp_path), provider=provider)
+        monkeypatch.setattr(manager, '_load_system_prompt', lambda: 'POLICY')
+        monkeypatch.setattr(manager, 'load_device_context', lambda: 'IDENTITY')
+        monkeypatch.setattr(manager, 'load_skills_catalog', lambda: '')
+        monkeypatch.setattr(manager, 'load_device_memory', lambda: ['MEMORY'])
+        monkeypatch.setattr(manager, 'load_realtime_memory', lambda: ['I can help with that.'])
+        instructions = manager.build_instructions()
+        assert 'I can help with that.' in instructions
+        if provider == 'gemini':
+            assert instructions.index('# Routing before speech') > instructions.index('# REALTIME MEMORY')
+            assert 'actual delegate_to_main function call' in instructions
+            assert 'For greetings answer directly' in instructions
+            assert 'for visual questions use look' in instructions
+        else:
+            assert '# Routing before speech' not in instructions

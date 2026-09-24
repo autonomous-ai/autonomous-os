@@ -351,6 +351,8 @@ tốc độ gửi đi trong `0.7–1.2`.
 | `system.network` | Chỉ thông tin mạng của interface đang giữ default route | _(không)_ |
 | `system.reboot` | Xếp lịch reboot OS qua HAL có cue | _(không)_ |
 | `system.shutdown` | Xếp lịch shutdown OS qua HAL có cue và release servo | _(không)_ |
+| `system.ota_versions` | Version OTA từng component + những gì bootstrap đang cài (dữ liệu của card Versions trên web) | _(không)_ |
+| `system.software_update` | Cài ngay bản đã publish của một component (nút `update` của card Versions); phản hồi `success`/`started`, sau đó gửi báo cáo hoàn tất không cần yêu cầu | `target` (bắt buộc) |
 
 `system.reboot` và `system.shutdown` publish `status:"starting"` trước khi
 thiết bị đặt lịch action, để backend nhận ACK trước lúc thiết bị rời mạng. Hai
@@ -451,6 +453,65 @@ về block `network`. Cách probe version: `os-server` từ biến ldflags lúc 
 qua `bootstrap-server --version`, `hal` qua HTTP từ endpoint `/version` của HAL
 local, `openclaw` từ probe cache của agent monitor (`openclaw_detected` phân biệt
 "chưa cài" với "đã cài nhưng không parse được").
+
+#### `system.ota_versions` / `system.software_update`
+
+Bản sao phía cloud của card Versions trên web. Cả hai kind và các endpoint HTTP
+(`GET /api/system/ota-versions`, `GET /api/system/ota-updating`,
+`POST /api/system/software-update/:target`) gọi cùng package `system/ota`, nên
+dùng chung allowlist target, alias `agent` và **một rate limiter 30 giây theo
+target** — một click trên web và một lệnh từ cloud cho cùng target trong 30 giây
+sẽ bị giới hạn lẫn nhau. MQTT không cần admin auth (cùng mức tin cậy với
+`system.reboot`).
+
+`system.ota_versions` (đồng bộ) trả về báo cáo `/versions` của bootstrap — gồm
+alias `agent` cho CLI của runtime đang cấu hình — và `/updating`:
+
+```json
+{"cmd":"data","kind":"system.ota_versions","data":{}}
+{"kind":"system.ota_versions","status":"success","data":{
+  "versions":{
+    "hal":{"current":"1.4.2","target":"1.4.3","min_version":"1.4.2","update_available":true,"held_by_floor":true},
+    "hermes":{"current":"0.21.1","target":"0.21.1","min_version":"0.21.1","update_available":false,"held_by_floor":false},
+    "agent":{"current":"0.21.1","target":"0.21.1","min_version":"0.21.1","update_available":false,"held_by_floor":false}},
+  "updating":["hal"]}}
+```
+
+Không gọi được bootstrap (hoặc lỗi đọc khác) → `status:"failure"`,
+`error:"bootstrap unreachable: …"`, không có `data`.
+
+`system.software_update` — `target`: `os-server` | `bootstrap` | `web` | `hal` |
+`device` | `codex` | `claudecode` | `opencode` | `picoclaw` | `hermes` | `agent`
+(ảo: phân giải sang CLI của runtime đang cấu hình). Phản hồi ngay là trạng thái
+**cuối** `success` với `state:"started"` (cài đặt chạy nhiều phút, backend không
+được chờ trên ack trung gian):
+
+```json
+{"cmd":"data","kind":"system.software_update","data":{"target":"agent"}}
+{"kind":"system.software_update","status":"success","data":{"target":"agent","resolved_target":"hermes","state":"started"}}
+```
+
+Từ chối trả `status:"failure"` với cùng thông điệp như API HTTP:
+`unknown target: <t>`, `software-update <t> rate-limited, retry in <n>s` (kèm
+`data.retry_after_seconds`), `bootstrap unreachable: …`,
+`bootstrap refused <t>: <status> <body>`:
+
+```json
+{"kind":"system.software_update","status":"failure","error":"software-update hal rate-limited, retry in 27s","data":{"target":"hal","retry_after_seconds":27}}
+```
+
+Sau phản hồi `started`, thiết bị poll `/updating` của bootstrap mỗi 3 giây (tối
+đa 40 phút; target không xuất hiện ở đó trong 15 giây được coi là đã xong), đọc
+lại versions rồi publish một báo cáo **không cần yêu cầu** với cùng kind:
+
+```json
+{"kind":"system.software_update","status":"success","data":{"target":"hal","resolved_target":"hal","state":"completed","current":"1.4.3","target_version":"1.4.3","update_available":false}}
+{"kind":"system.software_update","status":"failure","error":"update finished but hal is still at 1.4.2 (published 1.4.3)","data":{"target":"hal","resolved_target":"hal","state":"failed","current":"1.4.2","target_version":"1.4.3","update_available":true}}
+```
+
+Báo cáo hoàn tất là best-effort: cài `os-server`, `device` hoặc `hermes` sẽ
+restart os-server và giết luôn watcher, nên không có báo cáo cho các target đó —
+hãy poll `system.ota_versions` để lấy trạng thái cuối.
 
 `kind` không hợp lệ sẽ phản hồi `status:"failure"` kèm `error:"unknown kind: <kind>"`.
 
@@ -1175,6 +1236,8 @@ Xử lý bởi bootstrap worker, không qua MQTT handler trực tiếp.
 | `system/server/device/delivery/mqtt/mcp_connector_writer.go` | Writer MCP stdio đặc biệt (`figma-api`): token file + entry MCP wrapper cục bộ trong `openclaw.json` |
 | `system/server/device/delivery/mqtt/connector_refresh.go` | Loop refresh token connector (`/connector/refresh-token`) |
 | `system/server/device/delivery/mqtt/system_info_handler.go` | Handle `data` kinds `system.info`/`system.version`/`system.network` |
+| `system/server/device/delivery/mqtt/system_ota_handler.go` | Xử lý `data` kind `system.ota_versions`/`system.software_update` (+ watcher báo hoàn tất) |
+| `system/ota/ota.go` | Client OTA bootstrap dùng chung (versions, updating, force-update, rate limit theo target) cho cả MQTT kind và `/api/system/ota-*` + `software-update` |
 | `system/server/device/delivery/mqtt/channel_refresh_handler.go` | Handle `data` kind `channel.refresh_config` (re-apply block config của channel, bất đồng bộ) |
 | `system/server/device/delivery/mqtt/timezone_set_handler.go` | Handle `data` kind `timezone.set` (áp dụng múi giờ IANA của device, bất đồng bộ) |
 | `system/device/timezone.go` | `SetTimezone`/`CurrentTimezone`: validate zone, ghi lại `/etc/localtime` + `/etc/timezone`, `timedatectl` best-effort, lưu config |

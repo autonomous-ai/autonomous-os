@@ -11,6 +11,7 @@ import (
 	migratepersona "go.autonomous.ai/os/system/agent/migrate_persona"
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/flow"
+	"go.autonomous.ai/os/system/lib/hal"
 	sensinghttp "go.autonomous.ai/os/system/server/sensing/delivery/http"
 	"go.autonomous.ai/os/system/telemetry"
 )
@@ -119,6 +120,11 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 
 	// Resolve OpenClaw UUID → device ID for consistent flow tracing across all agent events
 	flowRunID := h.resolveRunID(payload.RunID)
+	if payload.Stream == "lifecycle" && (payload.Data.Phase == "end" || payload.Data.Phase == "error") {
+		// Register all final reply submissions before releasing processing.
+		// The HAL bridge waits for their asynchronous admission callbacks.
+		defer hal.EndVoiceFollowup(flowRunID)
+	}
 	switch payload.Stream {
 	case "lifecycle":
 		slog.Info("lifecycle event", "component", "agent", "phase", payload.Data.Phase, "runId", payload.RunID, "flowRunId", flowRunID, "session", payload.SessionKey)
@@ -568,7 +574,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 		// Runs sync on the WS worker — the chat-stream error for the same
 		// run arrives after this returns, so wasErrorRecovered is reliable.
 		errorRecovered := false
-		if payload.Data.Phase == "error" {
+		if payload.Data.Phase == "error" && !strings.HasPrefix(payload.Data.Error, domain.RunExpiryErrorPrefix) {
 			errorRecovered = h.tryRecoverIncompleteTurn(payload.RunID, flowRunID, payload.SessionKey)
 			if errorRecovered {
 				h.markErrorRecovered(flowRunID)

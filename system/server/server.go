@@ -50,20 +50,24 @@ import (
 type Server struct {
 	externalHistory *externalhistory.Store
 
-	harnessService   *harness.Service
-	harnessVoice     *harness.VoiceController
-	harnessVoiceCtx  context.Context
-	harnessRepliesMu sync.Mutex
+	harnessPreparationMu    sync.Mutex
+	harnessPreparationWaits map[string]*harnessPreparationWait
+	harnessService          *harness.Service
+	harnessSelector         *harnessSelector
+	harnessVoice            *harness.VoiceController
+	harnessVoiceCtx         context.Context
+	harnessRepliesMu        sync.Mutex
 	// harnessReplies is keyed by the local device run ID. A single Harness
 	// agent can work on more than one user request at once, so it cannot be
 	// keyed by agent ID.
-	harnessReplies  map[string]harnessReply
-	harnessFollowup atomic.Int64
-	harnessResultMu sync.RWMutex
-	harnessResult   string
-	harnessResultAt time.Time
-	engine          *gin.Engine
-	config          *config.Config
+	harnessReplies       map[string]harnessReply
+	harnessOverlapAgents map[string]bool
+	harnessFollowup      atomic.Int64
+	harnessResultMu      sync.RWMutex
+	harnessResult        string
+	harnessResultAt      time.Time
+	engine               *gin.Engine
+	config               *config.Config
 
 	environmentStartup *environment.StartupCoordinator
 
@@ -209,6 +213,7 @@ func ProvideServer(
 	sensingH.SetHarnessConnected(harnessConnected)
 	sensingmsg.SetHarnessConnected(harnessConnected)
 	sensingH.SetHarnessFollowup(s.HarnessVoiceFollowup)
+	sensingH.SetHarnessTaskPending(s.HarnessTaskPending)
 	sensingH.SetHarnessFollowupContext(s.HarnessFollowupContext)
 	sensingH.SetHarnessVoice(s.handleHarnessVoice)
 	return s

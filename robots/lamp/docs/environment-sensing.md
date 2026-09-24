@@ -18,8 +18,11 @@ polls that snapshot and sends qualifying `environment.update` events through
 The `environment` skill interprets measurements and consults `wellbeing` for
 considerate advice. Web and MQTT reads remain read-only and do not trigger turns.
 There is no environmental history store, scheduled follow-up service, automatic
-actuator control, or medical alarm. Lamp still ships with this hardware disabled
-and its capability commented out; the worker requires the declared capability.
+actuator control, or medical alarm. Only Lamp hardware profiles `pro`, `pro-respeaker-lite` and
+`pro-xvf3800` declare the optional `environment` capability and enable SEN63C
+on OrangePi `orangepi_sun60`, bus `0`. Standard leaves both disabled; SEN55/SCD41
+and boards without a matching entry remain disabled in all four profiles.
+The worker requires the declared capability.
 
 ## Wiring and mounting
 
@@ -52,7 +55,8 @@ SDA/SCL support 3.3 V logic. Use pull-ups to 3.3 V with a 3.3 V host;
 5 V powers the sensor, not the host GPIO. The I2C address is `0x69`, with
 bus speed at most 100 kHz. Confirm the actual board, header pin mapping,
 pin multiplexing, available bus, and power budget before wiring. HAL does
-not select board header pins or configure bus speed. Keep the air inlet and
+not select board header pins; SEN55 requires board-level bus-speed configuration
+(the SEN63C-specific Sunxi handling is described below). Keep the air inlet and
 outlet clear and avoid heat from the host when mounting.
 
 Device inspection on 2026-09-11 confirmed the host bus mapping, but the
@@ -64,10 +68,19 @@ enabling acquisition. This inspection did not change device configuration.
 
 ## Enable in HAL
 
-Lamp's `ROBOT.md` keeps the optional `environment` declaration commented out.
-HAL does not mount its endpoints or load its wiring until that line is uncommented.
-The prepared declaration uses driver `composite`, `routes: [environment]`, and
-`required: false`.
+The base Lamp `ROBOT.md` keeps `environment` commented out and the base
+`sen63c.json` keeps `orangepi_sun60` disabled on bus `0`. Standard therefore
+does not acquire environmental readings, write the SEN63C bus clock, or qualify
+for the capability-gated `environment` skill; its UI does not poll the sensor.
+
+The `profile.json` files in `overrides/pro/`, `overrides/pro-respeaker-lite/`
+and `overrides/pro-xvf3800/` set
+`capabilities: {"environment": true}`. The shared renderer activates the
+existing capability declaration (driver `composite`, `routes: [environment]`,
+`required: false`) and copies that override's `device/sen63c.json` to the
+package root. HAL then mounts the endpoints and loads enabled components.
+A missing SEN63C on any Pro profile reports component `error` and retries;
+this optional sensor is not a startup requirement.
 
 HAL discovers registered component drivers and reads their per-device, per-board
 JSON configuration: `sen55.json`, `scd41.json`, and `sen63c.json`. Each
@@ -75,9 +88,9 @@ JSON configuration: `sen55.json`, `scd41.json`, and `sen63c.json`. Each
 not access hardware. There is no separate component selection list; an old
 `environment.json` is ignored. Each enabled component runs its own worker.
 
-To replace SEN55 + SCD41 with SEN63C, set the former two entries to
-`"enabled": false` and SEN63C to `"enabled": true` with confirmed wiring, then
-restart HAL. Two enabled components cannot own the same metric: SEN55 + SEN63C
+SEN63C is the default component for OrangePi in all three Pro profiles. To use SEN55 + SCD41 instead, first
+set SEN63C to `"enabled": false`, then enable the replacement entries with
+confirmed wiring and restart HAL. Two enabled components cannot own the same metric: SEN55 + SEN63C
 or SCD41 + SEN63C is rejected as a configuration error instead of silently
 overwriting readings. Disabled components do not participate in this check.
 Adding future hardware requires its driver, registered metric ownership and
@@ -86,6 +99,16 @@ The binding lives in `hal/drivers/environment/registry.py`: config loader,
 driver (`start`, `read`, `close`), timing defaults and supported metric keys.
 Setup and `build-orangepi` extract the full device-profile archive, so new
 sensor JSON files need no sensor-specific installation branch.
+When upgrading older versions, install both the updated HAL package (including
+the clock fix) and device-profile package. Setup, image building and OTA apply
+the selected hardware override to a fresh base package. The device update
+replaces the extracted profile and restarts HAL and os-server.
+
+A missing, empty or `standard` `/etc/autonomous/hardware-profile` selects
+Standard, including machines previously enabled by the global SEN63C default.
+There is no automatic Pro migration. For Pro hardware, explicitly select `pro`,
+`pro-respeaker-lite` or `pro-xvf3800` and reinstall the device package; a HAL-only update cannot
+change capability or sensor JSON. See [hardware overrides](../../../docs/bootstrap-ota.md#optional-hardware-overrides).
 
 SEN55 configuration belongs to `robots/<device>/sen55.json`, using a
 `boards` map like `mpr121.json`. The target board is OrangePi (`orangepi_sun60`); Lamp ships its entry disabled
@@ -94,8 +117,8 @@ or selected-board entry disables the sensor. Disabled entries may omit `bus` or 
 Enabling acquisition requires a nonnegative integer `bus`.
 Invalid configuration, including unknown fields, is rejected at startup.
 
-To enable it after wiring is confirmed, uncomment the capability in `ROBOT.md`,
-edit the actual board's entry, and restart HAL. This template
+To enable SEN55 after wiring is confirmed, first disable SEN63C to avoid
+overlapping metrics, edit the actual board's SEN55 entry, and restart HAL. This template
 uses placeholders and is not directly loadable JSON:
 
 ```text
@@ -148,8 +171,10 @@ Actual SCD41 wiring and measurements have not been verified on hardware.
 
 ## SEN63C combined component
 
-`robots/lamp/sen63c.json` uses the same `boards` map and ships disabled, with
-`bus`, `sda_pin`, and `scl_pin` null. Confirm its wiring before enabling; the
+`robots/lamp/sen63c.json` uses the same `boards` map with SEN63C disabled for
+`orangepi_sun60` on bus `0`. All three Pro overrides supply a replacement JSON with
+that entry enabled. `sda_pin` and `scl_pin` remain null; other boards without
+an entry (including Raspberry Pi) remain disabled even in Pro. Confirm wiring for each installation; the
 SEN55 pin note above does not establish SEN63C wiring. The driver uses I2C
 address `0x6B`, verifies the SEN63C product type, checks word CRCs, and reads
 PM1/PM2.5/PM4/PM10, temperature, humidity and measured `co2_ppm`. VOC/NOx remain
@@ -161,7 +186,44 @@ and `no_data_timeout_s: 30`. `automatic_self_calibration: null` preserves the
 sensor setting; explicit true/false configures CO₂ ASC. This is separate from
 OS warm-up and change thresholds. No forced recalibration or persistence command
 is sent. See [Sensirion's SEN63C driver reference](https://sensirion.github.io/python-i2c-sen63c/api.html).
-SEN63C wiring and readings have not been verified on hardware.
+The host I2C bus must run at **100 kHz or less**, as specified in
+[Sensirion's SEN6x datasheet, section 4.4](https://sensirion.com/resource/datasheet/SEN6x).
+The OrangePi Sun60 bus can default to 400 kHz: on the tested device this
+caused product-type CRC failures; switching bus 0 to 100 kHz restored valid
+identity and measurement responses. Do not bypass CRC checks to accept these
+corrupted packets. This verifies that device's bus, not other installations' wiring.
+
+Before opening the sensor, every SEN63C driver construction calls the shared
+I2C clock helper for its configured bus. For adapters whose `name` starts with
+`SUNXI TWI`, HAL reads `/sys/class/i2c-adapter/i2c-N/device/info` and its
+`twi->freqency` field (the kernel's spelling). A rate above `100000` Hz is
+lowered to `100000` through the controller's `device/freq` attribute, then read
+back to verify that it is at most `100000`. An already compliant rate is left
+unchanged. HAL needs permission to read these attributes and write `freq` when
+lowering the clock. Missing/malformed controller data, a failed write, or a
+readback above the limit prevents sensor access and appears in the component's
+`last_error`; the normal worker retry reconstructs the driver and tries again.
+
+This preparation runs on each driver construction, including after HAL starts
+at boot or recovers from an error. Installing updated HAL through setup or OTA
+therefore includes the fix without a separately installed systemd drop-in.
+Disabled components and simulation do not construct the hardware driver and
+never write the clock. Other adapter types are left unchanged: configure their
+bus to at most 100 kHz through the board/kernel's supported configuration.
+The sensor JSON's `bus` field selects the adapter, not its speed. Wiring,
+pin-mux, power and the correct bus still require per-board confirmation.
+Lowering the controller clock affects every peripheral sharing that physical bus.
+
+After installing updated HAL, the earlier device-local workaround
+`/etc/systemd/system/hal.service.d/20-sen63c-i2c.conf` can be removed; reload
+systemd after removing it. Restart HAL and check the selected controller's
+`device/info` and `/environment/status` for a clock at most `100000`, fresh
+samples and no errors. On the tested OrangePi Sun60, the automatic path was
+verified by removing that drop-in, restoring 400 kHz with HAL stopped, and
+starting updated HAL: the driver logged the change to 100 kHz and resumed
+valid measurements. MPR121 on the same bus completed 100/100 status reads while
+SEN63C was running (mean 0.823 ms, maximum 5.040 ms). This checks communication;
+physical touch gestures and a full board reboot were not exercised in that test.
 
 HAL lifecycle logs use component keys `[sen55]`, `[scd41]`, and `[sen63c]`: disabled/start,
 measurement start, retry failures and stop are visible at INFO (failures may
@@ -250,9 +312,11 @@ component under `status.components`; legacy single-sensor snapshots remain suppo
 thresholds or historical storage. OS → agent events come from the independent
 worker below, not browser refreshes.
 
-With Lamp's current commented capability, the card shows `N/A` without polling.
-Declaring the capability while leaving `enabled: false` shows the disabled state
-and `N/A` values. UI visibility does not enable acquisition or agent events.
+Only the Pro profiles declare the capability, so Standard shows `N/A` without
+polling. On Pro, fresh OrangePi SEN63C readings appear; missing hardware shows
+errors and `N/A` while the worker retries. Disabling all components, or using a board without matching
+entries, shows the disabled state and `N/A`. UI visibility does not enable
+acquisition or agent events.
 
 ## MQTT reads
 
@@ -266,8 +330,9 @@ in `data`.
 
 A missing capability returns `status: "failure"` with
 `error: "environment capability not declared"`. HAL transport errors, non-200
-HTTP responses, and invalid status JSON also return failure. Lamp's currently
-commented capability therefore returns the missing-capability error. This is
+HTTP responses, and invalid status JSON also return failure. Only Pro profiles
+declare the capability, so missing hardware on Pro is reported in the snapshot;
+Standard returns the missing-capability failure. This is
 request/reply, with no continuous stream, automatic events, or agent invocation.
 See the [MQTT protocol](../../../docs/mqtt.md) for payloads and response rules.
 
@@ -414,14 +479,45 @@ and data rather than passing the turn repeatedly between skills. Room questions
 and discomfort support do not require camera observations, identity, activity
 logs or hydration counters.
 
+Ordinary room-feeling questions or reports (hot, cold, stuffy, dry or smoky),
+and their follow-ups, use `skills/environment/reference/room-comfort.md`:
+check status once or reuse a current snapshot, then answer in one short casual
+sentence without numbers, units, sensor names or spoken emotion tags. Explicit
+requests for readings still receive the requested values. Let the relevant
+usable reading decide; do not echo the complaint without evidence. Freshness
+and source readiness apply per metric, not just to the overall snapshot.
+
+The user-defined conversational thresholds are temperature above 27°C for hot
+or below 19°C for cold, humidity below 35% for dry or above 65% for sticky,
+measured CO₂ above 1000 ppm for stuffy/heavy, and PM2.5 above 35 µg/m³ for dusty.
+Comparisons are strict: equality does not trigger a label. These are wording
+rules, not health limits or OS event thresholds; high particles do not prove
+smoke. Normal readings allow a scoped reply such as “It doesn't look hot in
+here,” never “the air is safe” or “it's you.” Do not invent trends, sources or
+available appliances. If the relevant usable readings are unavailable for an
+ordinary room inquiry, say only “Not sure. I can't feel the air right now.”
+(or the current-language equivalent); this exact fallback is the two-sentence
+exception, with no extra advice.
+
+Startup observations and automatic updates retain their existing timing,
+silence and snapshot rules. They explain supported meaning before numbers,
+with at most one useful action. Personal symptoms without a room question
+retain the wellbeing flow below; reported breathing difficulty or smoke/exposure
+takes priority over sensor checks and the short-response rule. Partial readings
+cannot certify the room safe or clean or identify a symptom's cause.
+
 For fatigue, headache, dizziness, stuffiness or difficulty concentrating,
-wellbeing responds to the user first. Environment is optional: absent/unknown
+wellbeing must load its discomfort reference, including for informal phrasing
+such as “I'm headache, tired, what happen?”. It must not infer screen use,
+duration or a symptom cause from the complaint. Absent/unknown
 capability means no environment tool call; failed, all-null or stale readings
 mean silently omit environmental advice. Do not mention sensor errors or ask
-for hardware setup in response to a wellbeing concern. Only explicit questions
-about room readings need an unavailable-data explanation. With declared
-capability, one bounded status read (or a supplied current snapshot) can add a
-relevant observation and one conditional comfort/ventilation suggestion. No
+for hardware setup in response to a wellbeing concern. Ordinary room-feeling
+questions/reports instead use the unavailable-reading fallback above. With declared
+capability and non-urgent discomfort, consulting environment and using one
+bounded status read (or a supplied current snapshot) is required before
+completing the reply. Including a relevant observation and one conditional
+comfort/ventilation suggestion remains optional. No
 reading establishes the cause of a symptom or dismisses a user's concern.
 
 The discomfort reference covers when a reported symptom/exposure should take
@@ -432,8 +528,9 @@ concern; it adds no automatic concentration classification or OS threshold.
 A later real reading may support comparison, but no scheduled follow-up,
 new wellbeing log action or appliance permission is implied.
 
-- **Ask about the room:** read status once, report useful measurements; missing
-  or stale data is unknown, not zero pollution or proof of safe air.
+- **Ask about the room:** read status once or reuse a current snapshot, then use
+  the short room-comfort response above; missing relevant usable data gets only
+  the unavailable-reading fallback, never a claim of zero pollution or safe air.
 - **Startup:** greet immediately; optionally use cached eligible readings in one
   short sentence. If unavailable, the first eligible snapshot can produce a
   separate observation after the greeting, without greeting again or fetching

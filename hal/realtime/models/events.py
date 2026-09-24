@@ -38,6 +38,13 @@ class AudioCommitEvent(AgentInputEvent):
     queued_at: float = Field(default_factory=time.monotonic)
 
 
+class AudioStreamEndEvent(AgentInputEvent):
+    """End an automatic-VAD input stream on its original transport only."""
+
+    type: InputEventTypeEnum = InputEventTypeEnum.AUDIO_STREAM_END
+    session: object
+
+
 # --- Receive queue events ---
 
 
@@ -66,3 +73,4 @@ class TurnDoneEvent(AgentOutputEvent):
     # Providers opt in when speech alone does not establish task completion.
     fallback_to_main: bool = False
     user_transcript: str = ""
+    handoff_context: str = ""

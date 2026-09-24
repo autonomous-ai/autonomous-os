@@ -4,21 +4,33 @@
 
 For turns delegated by the main agent through the skill, OS prefixes the final UI/TTS response with a localized attribution (for example, “Harness says:” or “Harness trả lời:”). The response route records this origin at dispatch, so later voice-mode changes do not affect attribution. Direct Harness-only voice results remain unchanged. Original result text in external history and follow-up context stays verbatim; no additional model turn is used.
 
+Get Harness and follow its installation instructions at [OpenHarness](https://github.com/autonomous-ai/openharness).
+
 ## Product context and team ownership
 
-The Harness app and its device integration are developed independently by the Harness team. This repository supplies the Autonomous OS side of that integration and the `harness-use` skill; it does not own Harness's desktop product, agent runtime or pairing protocol. The purpose is to let the device delegate coding/research tasks to agents already managed by Harness on the user's computer.
+The Harness app and its device integration are developed independently by the Harness team. This repository supplies the Autonomous OS side of that integration and the `harness-use` skill; it does not own Harness's desktop product, agent runtime or pairing protocol. The purpose is to let the device delegate digital work to agents already managed by Harness on the user's computer.
 
 | Owner | Repository / code | Responsibility |
 |-------|-------------------|----------------|
 | Autonomous OS team | This repo: `skills/harness-use`, `system/harness`, `system/server/harness.go`, `system/web/src/pages/monitor/HarnessCard.tsx` | Voice/skill routing, conversation target and unresolved-delivery state, device-generated code, device-side trust/session, local API, OS Monitor and device event delivery. |
-| Harness team | [autonomous-harness](https://github.com/autonomous-ai/autonomous-harness): `cli/src/lib/autonomous-device`, `cli/src/lib/e2ee`, `cli/src/backendSocket.ts` | Computer-side discovery/reconnect, original pairing/E2EE, agent operations, capability negotiation, receipts/events and the CLI management API. |
-| Harness team | [autonomous-harness](https://github.com/autonomous-ai/autonomous-harness/tree/main/desktop): `desktop/lib/autonomous_device`, `desktop/lib/settings/sections/devices_section.dart`, `desktop/lib/state/app_state.dart` | Desktop pairing/management UI over its local Harness CLI. The Desktop UI does not own device trust or execute the skill. |
+| Harness team | [OpenHarness](https://github.com/autonomous-ai/openharness): `cli/src/lib/autonomous-device`, `cli/src/lib/e2ee`, `cli/src/backendSocket.ts` | Computer-side discovery/reconnect, original pairing/E2EE, agent operations, capability negotiation, receipts/events and the CLI management API. |
+| Harness team | [OpenHarness](https://github.com/autonomous-ai/openharness): `desktop/lib/autonomous_device`, `desktop/lib/settings/sections/devices_section.dart`, `desktop/lib/state/app_state.dart` | Desktop pairing/management UI over its local Harness CLI. The Desktop UI does not own device trust or execute the skill. |
 
-The execution path is: user/voice → `harness-use` → OS loopback API → authenticated direct connection → Harness CLI → selected computer agent. For an explicit request to a named agent, OS adds internal routing context that selects `harness-use` and excludes Buddy skills, including in a model session that still has older skill instructions. An explicit request for Autonomous Buddy overrides this Harness route and remains with the Buddy skill. The named Harness agent is the execution target: OS directs the skill to send its underlying task, never a request to contact or ask that same agent. A live follow-up window is only a hint; vague, unrelated, or uncertain input stays with the main agent unless it clearly continues the Harness task, answers its open question, or asks whether it is finished or for its result. This rule applies to voice, Web Chat, and MQTT Chat. A `send` or `answer` receipt in `queued`, `delivered`, `started`, `completed`, or `rejected` is a known outcome and ends the skill work immediately: the model makes no more Harness or shell calls, including `receipt`, `status`, `recap`, `list`, or a second mutation, and returns `NO_REPLY`. It may inspect a receipt only after `DeliveryUnknown`/no usable receipt or at the user's explicit request, and must never automatically resend. OS receives lifecycle events and delivers the final result directly. For a user turn, the skill records the local response target when it sends and returns no device-agent prose. Real Harness lifecycle events show acceptance and work in the pending Web Chat response. On terminal `turn.summary`, OS reads the latest `recap` RPC entry and chooses `turns[].fullText`, then `turn.summary.fullText`, then legacy `text` as the final response. If a completed `turn.done` arrives without a summary, OS waits briefly for the normal callback, then reads the latest recap at most twice while that exact response route is still pending. `fullText` is the bounded complete user-facing answer; `text` remains a compact preview for older CLIs and device cards. Voice records that direct result in realtime history before any later follow-up, and the next short follow-up receives it as untrusted context for the main runtime. If the agent opens a structured question, OS delivers that question to the original turn; the next routed answer calls `status`, answers the live question with its exact request ID and answer keys, and routes the eventual result to that follow-up turn. Voice speaks direct Harness content, while Web Chat displays it without TTS. Callback frames are not injected as JSON sensing events, so they cannot create a second turn or an altered device-agent answer. `harness-use` takes precedence when the user asks an agent to work, including browser research; `computer-use` is for direct visible Mac UI work and Buddy remains available only when explicitly requested.
+The execution path is: user/voice → `harness-use` → OS loopback API → authenticated direct connection → Harness CLI → selected computer agent. For an explicit request to a named agent, OS adds internal routing context that selects `harness-use` and excludes Buddy skills, including in a model session that still has older skill instructions. An explicit request for Autonomous Buddy overrides this Harness route and remains with the Buddy skill. The named Harness agent is the execution target: OS directs the skill to send its underlying task, never a request to contact or ask that same agent. A live follow-up window is only a hint; vague, unrelated, or uncertain input stays with the main agent unless it clearly continues the Harness task, answers its open question, or asks whether it is finished or for its result. This rule applies to voice, Web Chat, and MQTT Chat. A `send` or `answer` receipt in `queued`, `delivered`, `started`, `completed`, or `rejected` is a known outcome and ends the skill work immediately: the model makes no more Harness or shell calls, including `receipt`, `status`, `recap`, `list`, or a second mutation, and returns `NO_REPLY`. It may inspect a receipt only after `DeliveryUnknown`/no usable receipt or at the user's explicit request, and must never automatically resend. OS receives lifecycle events and delivers the final result directly. For a user turn, the skill records the local response target when it sends and returns no device-agent prose. Real Harness lifecycle events show acceptance and work in the pending Web Chat response. On terminal `turn.summary`, OS prefers the event’s own `fullText`. Only routes on agents that have never had overlapping outstanding turns may fall back to the latest `recap` RPC entry. For those routes only, a completed `turn.done` without a summary waits briefly for the callback, then reads the latest recap at most twice while that exact response route remains pending. Overlapped agents never use latest recap to identify a turn’s result. `fullText` is the bounded complete user-facing answer; `text` remains a compact preview for older CLIs and device cards. Voice records that direct result in realtime history before any later follow-up, and the next short follow-up receives it as untrusted context for the main runtime. If the agent opens a structured question, OS delivers that question to the original turn; the next routed answer calls `status`, answers the live question with its exact request ID and answer keys, and routes the eventual result to that follow-up turn. Voice speaks direct Harness content, while Web Chat displays it without TTS. Callback frames are not injected as JSON sensing events, so they cannot create a second turn or an altered device-agent answer. `harness-use` takes precedence when the user asks an agent to work, including browser research; Lamp applies the digital-work policy below before generic `computer-use` routing, and Buddy remains available only when explicitly requested.
 
 Autonomous Buddy is retained separately. This feature does not invoke Buddy, share its pairing keys or require its connection. Reusing the device's existing mDNS advertisement does not combine the two trust stores. Keep the integration device-neutral: `autonomous-device` is the CLI namespace, not `lamp`.
 
-The standalone `autonomous-harness-desktop` repository is archived; current Desktop changes belong in `autonomous-harness/desktop`.
+The standalone `autonomous-harness-desktop` repository is archived; current Desktop changes belong in `openharness/desktop`.
+
+## Lamp digital-work policy
+
+The default Lamp persona is a physical assistant that uses Harness as its digital assistant. Requests to execute digital work use `harness-use` without requiring “ask Harness” or “ask an agent”: coding, research deliverables, documents, spreadsheets, slides, CAD/3D design, media or music creation, scientific analysis and simulation. These are examples, not a fixed application-to-agent routing table. Explicit user choices of another workflow, including Autonomous Buddy, take precedence.
+
+Conversation and knowledge questions stay conversational. Physical/device controls, music playback, reminders, memory and services already covered by device connectors keep their existing routes. Realtime forwards the faithfully understood request to the main agent; the main agent uses the skill to select an existing agent from actual project/recap evidence or discover a Store package and prepare a new agent. It reads the newest `{recap,text}` pair for at most two candidates only when list evidence is insufficient. A retained follow-up target does not override selection for a new digital task.
+
+A specialist name, engine or Store listing does not prove that the required app, tools or dependencies are ready. Without suitable evidence, clarify or report the missing capability rather than silently assigning an unrelated agent. Store discovery and agent preparation now use the four negotiated Store v1 capabilities described in [Harness Store](harness-store.md). Preparation never dispatches a task; a separate ready-gated send is required.
+
+This is a persona/skill/prompt policy, not a deterministic routing guarantee. It requires the updated Lamp persona, skills and realtime prompts in the running device sessions; review any owner-customized persona for conflicting instructions. Repository checks do not deploy these changes or establish physical-device/model behavior.
 
 ## Contract references and coordination
 
@@ -55,6 +67,7 @@ An incorrect code fails the attempt and is shown in Desktop. Generate a new code
 - `GET /api/harness/status` is available to the administrator or strict loopback callers; it never returns the code.
 - `GET /api/harness/ws` accepts direct CLI sockets. PAKE and pinned E2EE authenticate this route, rather than an HTTP bearer. Browser Origin headers are refused. At most four incoming sockets are allowed, with a ten-second initial metadata timeout and a twenty-second session/application handshake timeout.
 - `POST /api/harness/request` is strict loopback only, including proxy-address checks, for the skill runtime.
+- `POST /api/harness/select-agent` uses the same strict-loopback checks for JEV selection before an ordinary skill send; it never dispatches a task itself.
 
 If pairing is interrupted after an authenticated provisional pin is saved, OS Monitor shows the retained computer and offers Unpair instead of generating a conflicting code. If removing trust fails to persist, the API returns an error and retains the previous pin in memory so status agrees with disk; retry Unpair after correcting the storage error.
 
@@ -100,11 +113,11 @@ All paths below use the normal OS response envelope and return non-cacheable res
 | `POST /api/harness/voice-mode/receipt` | Administrator | Reconcile the unresolved request with its existing receipt key; never resend. |
 | `POST /api/harness/voice-mode/resolve` | Administrator | Submit `{resolution:"do_not_retry",idempotencyKey}` matching the current pending request to resume without retrying it. |
 
-A pending request records `{idempotencyKey,machineId,agentId,runId}`. The controller deduplicates local voice runs and sends each mutation once. Uncertain delivery no longer blocks a new turn or automatically checks the old receipt. The latest mutation replaces the single pending slot; the old task is neither retried nor cancelled and may still run. Pending state is in RAM, not a durable receipt archive.
+A pending request records `{idempotencyKey,machineId,agentId,runId}`. The controller deduplicates local voice runs and sends each mutation once. A concurrent input waits cancellably for the previous dispatch/receipt RPC to return, not for the remote task to finish. Uncertain delivery is retained in a bounded RAM queue of 64 requests and does not block another input unless that queue is full. The existing `Pending` field exposes the oldest unresolved request; receipt reconciliation or explicit resolve advances to the next. New inputs never replace an older unresolved record, check its receipt automatically, or resend it. Pending state is not a durable receipt archive.
 
 Structured questions reuse CLI `status.openQuestion` and `question.answer`. Each row preserves `{key,q,options,multi}`. Spoken replies fill questions sequentially; OS speaks the next unanswered prompt and submits the complete map once collected. The Monitor form can answer the entire live question set with single selections, multiple selections or typed text; multiple selected labels are joined with `, `, as the CLI expects. Request IDs, focus revisions and exact answer keys are checked against the live question, so a changed question or focus must be refreshed. This route does not use a device model to interpret arbitrary spoken option paraphrases; the CLI receives the spoken answer text.
 
-The UI polls local mode/focus every 2 seconds and live questions every 10 seconds while available. It displays the focused agent read-only and provides refresh-question, check-delivery and continue-without-retrying controls. Missing focus, offline connections and unsupported CLI focus capabilities are shown explicitly. A failed mode lookup disables the switch until a successful refresh. Unresolved delivery does not block new voice requests or answers. The controller tracks only the latest pending mutation; sending a new turn replaces the earlier pending receipt slot, without retrying or cancelling the earlier task.
+The UI polls local mode/focus every 2 seconds and live questions every 10 seconds while available. It displays the focused agent read-only and provides refresh-question, check-delivery and continue-without-retrying controls. Missing focus, offline connections and unsupported CLI focus capabilities are shown explicitly. A failed mode lookup disables the switch until a successful refresh. Unresolved delivery does not block new voice requests or answers unless the 64-record queue is full. The controller retains older unresolved records and exposes the oldest through the existing pending controls, without retrying or cancelling earlier tasks.
 
 Focus routing requires the Harness CLI capability `focus.get`, `focus.changed` events and `focusRevision` guards on `turn.send` / `question.answer` over the existing encrypted connection. Older CLIs remain usable for normal skill delegation but cannot deliver Harness-only voice without this capability; there is no fallback during voice dispatch. Gesture activation additionally negotiates `focus.ensure` when initial app focus is needed. This coordinated CLI change adds no pairing flow or transport. Repository verification does not establish physical-device voice or installed-CLI compatibility.
 
@@ -116,13 +129,13 @@ MPR121 focus stepping additionally requires `focus.step` over the same encrypted
 
 `harness-use` resolves the user's current explicit agent name or ID before any retained target. A clear follow-up stays with the agent responsible for that task. For a new delegated task without a name, the model reads `agents.list` and compares available project/repository/workspace evidence, then relevant role or task context. Since CLI PR #35 each listed agent may carry `recap`: the headline of its newest summarised turn, at most 200 characters, the same string `recap` returns as `turns[0].recap`. Because the CLI writes each recap with the session's previous recap as continuity, the headline names the agent's current work rather than a fragment of its last message. The skill uses it as the first evidence of what each agent is working on: an agent whose recap matches the task's repository, feature or subject is a strong candidate, and one whose recap describes unrelated work is not, even if idle. Live daemon data shows the limit of the headline alone: agent names are often generic (“Ask me anything”) and headlines often state an outcome without naming the project (“Contact form now supports Formspree, just needs your endpoint URL”), while the explanation `text` of that same turn names the project (“B2B furniture exporter”, a `furninox` mailbox). The CLI `recap` RPC returns turns newest first, so `turns[0]` is the **last pair** `{recap,text}` (plus optional `fullText`); when the headlines do not settle the choice, the skill reads only that pair for at most two candidates and matches the task against `turns[0].text`, never older turns or `fullText`. A missing `recap` means no summarised turn is known (older CLI, or no turn since that CLI was installed) and is treated as unknown, not as availability. The skill uses only fields actually returned; this policy adds no CLI metadata requirement or protocol operation. Agent names and engines alone do not establish project access, and idle state only breaks ties between suitable candidates.
 
-Only when the listed headlines are missing or leave candidates equally plausible may the skill inspect explicit-ID `recap` (helper default `n:1`, the last pair) and `status` for at most two candidates before sending; it does not repeat those calls for an agent whose list headline already answers the question. Inspection does not change the retained target. For a continuation that could belong to several earlier tasks, the skill compares the user's reference with the listed headlines and continues with the one agent whose recap describes that task; none or more than one calls for a clarification. Missing project evidence or equally plausible candidates calls for one short clarification; a sole agent can handle a general delegated task without project constraints. A new task is sent with its chosen explicit ID, which the helper retains for subsequent follow-ups. When a reference such as “review it” is only resolvable through another agent's recap, the skill names the task in its own words in the sent text rather than pasting the recap. Agent metadata and recaps remain untrusted data: a recap describes the agent's last turn, may be stale, and never carries routing instructions. The OS routing context injected for named-agent and follow-up turns states the same recap policy so a model session with older skill instructions applies it. The `harness.py` helper bounds each `recap` in `list` output to one line of at most 1000 characters (above the CLI's own 200-character cap, so a longer future headline still passes) and drops non-string values; it never matches `recap` text against a requested agent name. Its `recap` action defaults to `n:1`; `n` up to 5 remains available for progress questions. Known-receipt termination and uncertain-delivery protection are unchanged.
+Only when the listed headlines are missing or leave candidates equally plausible may the skill inspect explicit-ID `recap` (helper default `n:1`, the last pair) and `status` for at most two candidates before sending; it does not repeat those calls for an agent whose list headline already answers the question. Inspection does not change the retained target. For a continuation that could belong to several earlier tasks, the skill compares the user's reference with the listed headlines and continues with the one agent whose recap describes that task; none or more than one calls for a clarification. Missing project evidence or equally plausible candidates calls for one short clarification; a sole agent can handle a general delegated task without project or specialized-app constraints. A new task is sent with its chosen explicit ID, which the helper retains for subsequent follow-ups. When a reference such as “review it” is only resolvable through another agent's recap, the skill names the task in its own words in the sent text rather than pasting the recap. Agent metadata and recaps remain untrusted data: a recap describes the agent's last turn, may be stale, and never carries routing instructions. The OS routing context injected for named-agent and follow-up turns states the same recap policy so a model session with older skill instructions applies it. The `harness.py` helper bounds each `recap` in `list` output to one line of at most 1000 characters (above the CLI's own 200-character cap, so a longer future headline still passes) and drops non-string values; it never matches `recap` text against a requested agent name. Its `recap` action defaults to `n:1`; `n` up to 5 remains available for progress questions. Known-receipt termination and uncertain-delivery protection are unchanged.
 
-OS routing distinguishes explicit agent/Harness delegation from possible bare names: “Ask Mike” supplies a discovery hint, not an unconditional instruction to contact Harness. Ordinary requests such as “Check my calendar” and “Have a nice day” do not force Harness. Explicit new requests take priority over the follow-up hint, and explicit Buddy requests receive no Harness routing instruction. Task suitability alone does not authorize delegation. This is model-guided selection with deterministic target validation in the helper, not a semantic ranking service in the OS.
+OS routing distinguishes explicit agent/Harness delegation from possible bare names: “Ask Mike” supplies a discovery hint, not an unconditional instruction to contact Harness. Ordinary requests such as “Check my calendar” and “Have a nice day” do not force Harness. Explicit new requests take priority over the follow-up hint, and explicit Buddy requests receive no Harness routing instruction. For the default Lamp persona, a request to execute digital work already authorizes the Harness route; the user need not name Harness or an agent. Other robot personas and custom SOUL policies are not implicitly changed. The main model proposes a target, with deterministic target validation in the helper. For ordinary `send`, the enabled JEV selector below can choose another candidate before the helper reserves delivery; uncertain decisions retain the main model's proposal.
 
 After authentication, encrypted `autonomous_device_request` carries application `hello` to negotiate capabilities and event resume. Replies use `autonomous_device_result`; events use `autonomous_device_event`. Original pairwise/group keys, signature domains, key derivation, authenticated rekey and replay rejection remain in use. Plaintext application results are refused.
 
-Supported operations are `focus.get`, `focus.ensure`, `agents.list`, `turn.send`, `turn.stop`, `status`, `recap`, `question.answer` and `receipt.get`. `agents.list` rows are `{machineId,agentId,name,engine,state,recap?}`; OS passes the frame through unmodified to `/api/harness/request` and `GET /api/harness/agents`, so the optional `recap` reaches the skill and the Monitor without an OS change. Agent-addressed operations require explicit machine and agent IDs. Tool permission approval, raw terminal input, arbitrary shell/file access and agent creation/deletion are outside this integration.
+Supported operations are `focus.get`, `focus.ensure`, `agents.list`, `turn.send`, `turn.stop`, `status`, `recap`, `question.answer` and `receipt.get`, plus negotiated `store.list`, `store.inspect`, `agent.prepare` and `operation.get`. See [Store workflow and durable recovery](harness-store.md). `agents.list` rows are `{machineId,agentId,name,engine,state,recap?,packageId?,workspace?,runtime?}`; OS passes the frame through unmodified to `/api/harness/request` and `GET /api/harness/agents`, so the optional `recap` reaches the skill and the Monitor without an OS change. Agent-addressed operations require explicit machine and agent IDs. Tool permission approval, raw terminal input, arbitrary shell/file access, generic agent creation and agent deletion are outside this integration. Store v1 exposes only bounded `agent.prepare` creation.
 
 Mutations require a stable idempotency key. OS sends once and waits at most 30 seconds. A timeout/disconnect after sending returns `DeliveryUnknownError`: query the receipt with the same key rather than automatically resend. There are at most 64 pending requests and 128 queued callback events. Event resume uses `serverInstanceId` and numeric `eventId`; resync requires refreshing agent state. The skill retains an explicit agent per conversation and unresolved mutations across invocations.
 
@@ -148,7 +161,7 @@ Authenticated device MQTT data commands expose `harness.pair.start`, `harness.st
 
 Queue replay across all runtimes restores the original `harness-reply` address for Web/MQTT chat and voice follow-ups only while Harness is paired and connected at replay time. A queued request uses the same local run ID and channel as an immediately dispatched request.
 
-Do not poll the latest recap immediately after sending: it can still describe the preceding turn and consume delivery before the new result arrives. Final recap delivery is triggered by `turn.summary`; a `turn.done` callback without a later summary uses the bounded compatibility fallback described above.
+Do not poll the latest recap immediately after sending: it can still describe the preceding turn and consume delivery before the new result arrives. Final delivery is triggered by a correlated `turn.summary`; latest-recap compatibility recovery is restricted to agents that have never overlapped, as described above.
 
 While Harness owns a run’s response, generic assistant chat events for that exact run are suppressed so a handoff or `NO_REPLY` cannot close Web/MQTT chat before the Harness result arrives. User messages and error events still pass through.
 
@@ -160,9 +173,9 @@ Completed Harness runs retain a delivery tombstone until cleanup after 15 minute
 
 Harness final delivery records `harness_response` in flow JSONL with the original device run ID and complete `text`. Web Chat uses this event to recover pending results after SSE disconnects or page reloads. Live delivery still emits `chat_response` with state `final`.
 
-Summary callbacks trigger recap lookup even without preview text. Empty results retain the pending route. Recap completion removes only the same run route it started with; a callback from an unrelated agent never consumes another pending chat.
+Summary callbacks prefer their own `fullText`. Only never-overlapped routes may look up latest recap, including when preview text is absent. Empty results retain the pending route. Recap completion removes only the same run route it started with; unrelated callbacks cannot consume another pending chat.
 
-Routes are keyed by the local device run ID, not by agent ID. One Harness agent may have several outstanding user tasks; when an older event lacks a local run ID, OS delivers it to that agent's oldest outstanding route and leaves newer routes intact. If a runtime stale-copies only the sequence component of a `device-…-<timestamp>` response route, OS restores the matching channel run from the in-memory flow record with that timestamp; a different timestamp is never rewritten. The local helper records a known receipt against its response route and rejects a second `send` or `answer` for that same route, preventing a model receipt/status loop from dispatching the current task twice. If a corrected or new user task is blocked by an earlier delivery, the runtime may inspect that receipt once; once it has a known terminal delivery state, it must send the current task before returning `NO_REPLY`.
+Routes are keyed by the local device run ID, not by agent ID. One Harness agent may have several outstanding user tasks. OS binds the existing `idempotencyKey` before dispatch and matches events using their run ID and/or key, including `payload.idempotencyKey` or `payload.receipt.idempotencyKey`. Explicit mismatches never fall back to another route. Legacy agent-only events are accepted only for one unique outstanding route on an agent that has never overlapped. Once overlap occurs, that agent requires explicit correlation for the remainder of the OS-server process lifetime, even after all sibling routes finish; late uncorrelated duplicates cannot claim a later turn. If a runtime stale-copies only the sequence component of a `device-…-<timestamp>` response route, OS restores the matching channel run from the in-memory flow record with that timestamp; a different timestamp is never rewritten. The local helper records a known receipt against its response route and rejects a second `send` or `answer` for that same route, preventing a model receipt/status loop from dispatching the current task twice. If a corrected or new user task is blocked by an earlier delivery, the runtime may inspect that receipt once; once it has a known terminal delivery state, it must send the current task before returning `NO_REPLY`.
 
 ### Main-runtime history for direct voice
 
@@ -177,3 +190,118 @@ Harness capture uses its own two-note sound: rising tones when recording is read
 Successful focus switching uses a short fixed localized confirmation (English: “Agent switched.”), without speaking the agent name.
 
 While Harness mode stays ON, the MPR121 mode watcher maintains a dim lime breathing indicator from `button_led.harness_on` in the device presets. OFF uses one brief dim blink from `harness_off`. The indicator yields to sleep, privacy and active voice/music feedback, returns on normal LED restore, and never changes saved user light settings. Devices without RGB skip LED feedback.
+
+### Local intent versus digital-task context
+
+Voice, Web Chat and MQTT share an intent deferral gate before local rules/Jev.
+Registered outstanding Harness response routes remain task evidence after the
+short follow-up timer expires; the timer is only a hint, not authorization to
+send work. With either signal, requests without an explicit physical target
+are left to the main runtime. Pairing/connection alone never disables intents.
+Explicit Lamp/light/speaker/volume commands remain eligible for local/Jev
+classification; naming a digital artifact (render/image/video/etc.) defers.
+Ambiguous adjustment fragments such as “brighter” or “make it brighter” without
+a physical target defer even without task evidence. This conservative rule
+also protects preparation follow-ups when preparation state is unavailable.
+Deferral neither dispatches Harness nor prepares a new agent; main owns context
+resolution, clarification and the existing skill workflow. Harness-only voice
+still runs first, and requests with attachments retain their existing path.
+
+The inspected local `leo-super-dev/harness-2` branch for OS PR #482 keeps Store
+intents in the helper journal; `observeHarnessPreparation` displays RPC snapshots
+but does not expose a pending preparation to sensing. This change reads neither
+that private journal nor Store/helper files and adds no Store API or delivery
+state. Before context-specific preparation routing is added, coordinate with the
+Store owner at that observation boundary: define a read-only, conversation-scoped
+pending-preparation signal, its restart/expiry semantics and terminal transitions.
+Until then, main/`workflow-status` owns recovery of the saved intent. OS mock tests
+prove forwarding without hardware or direct Harness dispatch; they do not prove
+that a live model resumes the correct preparation. The Harness session must test
+that integration with its existing journal/idempotency tests.
+
+## Task ownership across follow-ups
+
+The helper requires an explicit agent ID or unique exact name for `send`, `answer`, and `stop`; it never silently mutates the retained default target. Local `context` exposes saved task text, targets and workflow evidence across namespaces, with task pagination (20 maximum) and optional conversation/intent filters. Historical evidence must be checked against the requested project and live agent metadata. A response run ID is not a stable conversation ID: creating a namespace equal to that run ID is rejected, while existing legacy workflows remain resumable.
+
+Follow-up result context carries transport-owned `agentId` and `responseRunId` alongside untrusted result text. On a destination correction, the main agent preserves the original unfinished task and resolves its intended workspace; a missing scene does not authorize creating a replacement in another project. This blocks implicit-target sends deterministically; semantic choice among explicit targets still depends on model interpretation and requires live validation.
+
+## JEV Harness agent selection
+
+For ordinary `harness-use` sends, JEV can select the execution target before the
+helper reserves delivery. The main model's explicit agent ID is the fallback.
+The skill prompt stays unchanged; the helper calls the OS selector and uses its
+validated target for the pending record, `lastTask` and actual `turn.send`. The OS
+reply route therefore follows the same selected target. Task text is not rewritten.
+
+Configure it in `config.json`:
+
+```json
+{
+  "jev_harness": {"enabled": true, "timeout_ms": 1500}
+}
+```
+
+Omitting the section or `enabled` defaults to enabled. Setting `enabled:false`
+immediately retains the main model's selection. This flag is independent of
+`local_intent` and `jev_intent`; it uses the configured `llm_base_url` /
+`llm_api_key` JEV proxy settings. Enabled selection can incur model usage.
+
+| Endpoint | Access | Contract |
+|----------|--------|----------|
+| `POST /api/harness/select-agent` | Strict loopback only | Request `{machineId,agentId,text}`, where `agentId` is the main model's proposal. Success data is `{mode,agentId,machineId,reason}`; `mode` is `jev`, `fallback` or `disabled`. No Harness task is sent by this endpoint. |
+
+The selector caches successful existing `agents.list` responses in RAM: at most
+32 candidates, valid for 30 seconds for the same paired machine and Harness server
+instance. No extra discovery or recap RPC is issued. It accepts delegated task
+text of at most 2,000 bytes and metadata (`name`, `recap`, `workspace`, `packageId`,
+`runtime`, `state`, `engine`) of at most 1,000 serialized JSON bytes per candidate.
+Oversized data is not truncated into an incomplete candidate set.
+
+Selection is synchronous with a default 1,500 ms budget before dispatch.
+`timeout_ms` is configurable up to 3,000 ms; the
+helper's selector HTTP timeout is four seconds. Only one JEV selection runs at a
+time, with no queue. A missing or stale snapshot, oversized input, missing proxy
+credentials, busy selector, provider error, timeout, invalid result or abstention
+falls back to the main model's proposed ID. Disabling the flag bypasses JEV.
+The proxy receives bounded delegated task text and candidate metadata, not full
+transcripts or conversation history. Metadata remains untrusted input; this does
+not guarantee that JEV has enough context to recover the original user intent.
+
+The helper rechecks the paired machine and server instance after selection; an
+identity change refuses dispatch instead of sending to a different connection.
+Once delivery is reserved, its target never changes during retry or uncertain
+receipt reconciliation. Store `dispatch` remains bound to its prepared agent;
+`answer` and `stop` remain bound to their explicit targets. They do not invoke
+selection. Harness-only voice focus routing and the Harness wire contract are
+unchanged. Diagnostic logs contain mode, selected/proposed IDs, reason and latency,
+without task text, recaps or credentials. Local/mock validation does not establish
+real-provider selection accuracy or physical-device behavior.
+
+## Overlapping input compatibility
+
+Receipt progress distinguishes `queued` from `delivered`/`started`; queued does not
+claim execution has begun. OS admission serialization waits only for the prior RPC,
+not remote terminal completion. Whether another input steers or queues inside a
+running Harness agent remains an app/runtime behavior, not an OS guarantee.
+
+For a result proven to belong to one input, the app must propagate the existing
+request `idempotencyKey` on summary, tool and question events when turns can overlap
+(or provide a matching device run ID). A merged result must not be attributed to an
+arbitrary input or duplicated under every input key.
+Some current app summaries omit that correlation; those ambiguous events are
+ignored after overlap rather than assigned to an arbitrary turn. This uses existing
+fields and does not invent a new Harness wire field. Local/mock tests cover OS
+correlation, duplicate protection and voice admission; live app steering and full
+overlap delivery remain unverified. This change does not deploy to devices.
+
+Reviewed against [OpenHarness PR #294](https://github.com/autonomous-ai/openharness/pull/294)
+at `7d42b3ee619bfe3743cfeae94a04a5ccc0c6cef3`. Its Device adapter supports native
+steering/queueing and optional `receipt.input` status. This OS change does not yet
+interpret `receipt.input`; receipt progress above reports delivery state only.
+The [grouped-result contract](https://github.com/autonomous-ai/openharness/blob/7d42b3ee619bfe3743cfeae94a04a5ccc0c6cef3/docs/autonomous-device-result-correlation.md)
+defines `turn.correlation.v2` / `turn.result` with explicit input membership,
+immutable result IDs, durable result storage and a deduplicated TTS outbox. Neither
+this OS change nor that Harness revision implements or advertises this capability.
+Group completion requires both implementations, shared contract fixtures and joint
+engine/device validation before mutual enablement. Ambiguous overlapping results
+currently leave their routes unresolved; this is not a complete merged-result flow.

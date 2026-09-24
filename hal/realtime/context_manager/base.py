@@ -308,6 +308,13 @@ class ContextManagerBase(ABC):
         rt_mem: list[str] = self.load_realtime_memory()
         add("realtime_mem", "# REALTIME MEMORY\n\n" + "\n\n".join(rt_mem) if rt_mem else "")
 
+        if self._provider == "gemini":
+            # Recent memory contains spoken receipts, not proof of tool execution.
+            # Restate routing after that context so Gemini does not imitate a
+            # promise-only answer instead of making the required function call.
+            add("routing", (RESOURCES_DIR / "routing_prompt_gemini.md").read_text(
+                encoding="utf-8").strip())
+
         result: str = "\n\n".join(sections)
         total: int = len(result)
         breakdown: str = "  ".join(f"{label}={c}c(~{c // 4}t)" for label, c in sizes)

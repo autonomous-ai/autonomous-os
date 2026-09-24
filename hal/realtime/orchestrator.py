@@ -19,6 +19,7 @@ import logging
 import threading
 import time
 from collections.abc import Generator
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -41,6 +42,7 @@ from hal.realtime.context_manager import (
     OpenClawContextManager,
 )
 from hal.realtime.enums import AgentGateway
+from hal.realtime.find_intent import is_find_request
 from hal.realtime.models import (
     FunctionCallOutput,
     FunctionCallResultInput,
@@ -57,7 +59,16 @@ from hal.realtime.models.signal import (
 )
 from hal.realtime.models.output import ExecutionOutput, InterruptedOutput, UserSpeechOutput
 from hal.realtime.summarizer import RealtimeSummarizer
-from hal.realtime.voice_agent.base import VoiceAgentBase
+from hal.realtime.voice_agent.base import AudioTurnSessionChanged, VoiceAgentBase
+
+
+@dataclass(frozen=True)
+class AudioTurnBinding:
+    """One capture's agent and provider socket; never follows a reconnect."""
+
+    agent: VoiceAgentBase
+    session: object
+
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +79,10 @@ INITIAL_CONNECT_RETRY_MAX_DELAY_S: float = 60.0
 # park threshold has tens of seconds of margin below the server's idle cut, so a
 # coarse poll is enough and keeps the thread cheap.
 IDLE_PARK_POLL_S: float = 5.0
+# How long prepare_turn() waits for a prewarm() resume already in flight. Above
+# a normal handshake (~1-2s) so a prewarm is never abandoned for a second
+# synchronous connect; bounded so a hung proxy still falls back to the main agent.
+PREWARM_JOIN_TIMEOUT_S: float = 4.0
 # Upper bound on how long prepare_turn()'s in-flight marker suppresses parking.
 # voice_service can prepare a turn and then abandon it (wake word never
 # confirmed) without ever calling stream_output, which would otherwise pin the
@@ -78,6 +93,24 @@ DELEGATE_TOOL_NAME: str = "delegate_to_main"
 DELEGATE_TOOL_DESCRIPTION: str = (
     "Call this for requests requiring the main system: device or desktop actions, "
     "music, scheduling, memory, skills, real-time facts, or other non-conversational work. "
+    "Clearly addressed reports of headache, fatigue, dizziness, stuffiness or "
+    "difficulty concentrating require main's wellbeing skill, even without a "
+    "question or action verb. A trailing 'okay' does not erase a symptom report. "
+    "Questions about current room air, CO2, temperature, humidity or ventilation, "
+    "and discomfort follow-ups such as 'Could it be because the room is too airtight?' "
+    "also delegate for environment context. Do not substitute generic advice, "
+    "a cause, a relief promise or a medical disclaimer for delegation. "
+    "Hand off immediately without speech, including urgent symptom reports; "
+    "main decides whether sensor checks are appropriate. General educational "
+    "questions unrelated to current discomfort or room conditions remain direct. "
+    "Digital work also requires main even without naming Harness or an agent: "
+    "building or editing software, models or CAD parts, engineering simulations, "
+    "media or music creation, slides, spreadsheets and data analysis. When DEVICE "
+    "IDENTITY identifies Lamp, main defaults to harness-use for digital work and "
+    "selects an available suitable agent. Do not choose agents, invent Store "
+    "operations or claim app readiness yourself. Music playback and physical "
+    "device actions keep their existing skill routes; general knowledge questions "
+    "remain direct answers. "
     "Any request naming Harness, a Mac agent, Codex, Claude, a project/worktree/session, "
     "or asking an agent to use a browser must go to the main runtime's harness-use "
     "skill. This includes general web research such as asking agent temp to find "
@@ -93,6 +126,13 @@ DELEGATE_TOOL_DESCRIPTION: str = (
     "Research, analysis, comparison, brainstorming, planning an idea, and any "
     "request for a report, summary or document also delegate: these are "
     "multi-step work with a delivered document, not a single live fact. "
+    "Sending, forwarding or sharing anything through a channel or connector — a "
+    "message, a photo or camera capture, a picture from the web, a file, a link, "
+    "or a recap of this conversation via Telegram, email, Slack or any other "
+    "channel — and any question about whether or where you CAN deliver such "
+    "things, also delegate: only the main system holds the channels. Never claim "
+    "you can or cannot send, never say it was sent, never look up or describe "
+    "the picture instead of sending it. "
     "Clearly heard answers, corrections, and stop requests for a known pending task "
     "also delegate, even without an action verb. Use conversation context to recognize "
     "the task, but forward ONLY the current user's faithfully understood words in "
@@ -184,9 +224,12 @@ EMOTION_TOOL_EMOTIONS: list[str] = [
 ]
 EMOTION_TOOL_DESCRIPTION: str = (
     "Set the device's physical face (LED + servo) to match the emotional tone "
-    "of the reply you are ABOUT TO SPEAK. This is FIRE-AND-FORGET and is the ONE "
-    "exception to the binary tool rule: it does NOT delegate and does NOT replace "
+    "of the reply you are ABOUT TO SPEAK. This is FIRE-AND-FORGET: "
+    "it does NOT delegate and does NOT replace "
     "speech — call it IN PARALLEL with speaking, then immediately speak your reply. "
+    "For a request requiring the main agent, a brief spoken acknowledgment and "
+    "this emotion call never replace delegate_to_main: call delegate_to_main "
+    "immediately in the same turn, whether or not you speak an acknowledgment. "
     "Never wait for it, never mention it, never speak the emotion name or any "
     "marker syntax aloud. Calling it is optional; only call it when an emotion "
     "clearly fits your reply. Available emotions: " + ", ".join(EMOTION_TOOL_EMOTIONS) + "."
@@ -454,6 +497,11 @@ class RealtimeOrchestrator:
         # rebuild the session AFTER that turn so the next turn drops the context
         # the provider re-bills on a long-lived session. See _maybe_idle_reset.
         self._last_turn_monotonic: float = 0.0  # end-of-turn timestamp; 0 = none yet
+        # When the CURRENT session connected; 0 = none yet. Idle checks measure
+        # from the later of this and the last turn: a session that connected a
+        # second ago (privacy-switch unmute, reconnect) is not idle, however
+        # long ago the last turn ended.
+        self._session_connected_monotonic: float = 0.0
         self._idle_reset_pending: bool = False
         # Set when Gemini proactively rebuilt before the current turn after a
         # long idle. That session is already fresh, so the generic post-turn
@@ -630,6 +678,7 @@ class RealtimeOrchestrator:
             self._idle_parked = False
             self._park_resume_failed = False
             self._last_activity_monotonic = time.monotonic()
+            self._session_connected_monotonic = self._last_activity_monotonic
             self._consecutive_silent = 0
             self._idle_reset_pending = False
             self._turns_since_recycle = 0
@@ -774,6 +823,27 @@ class RealtimeOrchestrator:
             self._turns_since_recycle = 0
             self._idle_reset_pending = False
 
+    def prewarm(self) -> bool:
+        """Resume a parked session in the background as soon as speech starts.
+
+        Wake-word turns defer every realtime I/O until the STT final confirms
+        the phrase, so the parked-session resume (~2s handshake, device-measured
+        lamp-4ace 22/09/2026) otherwise runs serially AFTER capture. Starting it
+        here overlaps the handshake with the user's own sentence; prepare_turn()
+        joins it. No-op unless parked. A turn that is then never dispatched just
+        leaves an idle session the park watchdog closes again.
+        """
+        if not getattr(self, "_idle_parked", False) or self.rebuilding:
+            return False
+        return self._rebuild_in_background("idle-park-prewarm", "rt-prewarm")
+
+    def _idle_since_monotonic(self) -> float:
+        """Start of the current session's idle gap: last turn end or connect."""
+        return max(
+            self._last_turn_monotonic,
+            getattr(self, "_session_connected_monotonic", 0.0),
+        )
+
     def prepare_turn(self) -> None:
         """Prepare the realtime session before the caller streams turn audio."""
         # A new capture starts a new logical turn. Clear any marker left by a
@@ -785,6 +855,13 @@ class RealtimeOrchestrator:
         provider: str = config.REALTIME_PROVIDER.strip().lower()
         agent = getattr(self, "_agent", None)
         if getattr(self, "_idle_parked", False):
+            # A prewarm() started the resume while the user was still speaking;
+            # join it instead of falling back for "rebuild in flight".
+            if self.rebuilding:
+                self._rebuild_done.wait(timeout=PREWARM_JOIN_TIMEOUT_S)
+                if not self._idle_parked:
+                    self._skip_post_idle_recycle = True
+                    return
             # The idle watchdog closed the transport; connect a fresh session
             # now, before any audio is streamed. Identical to the pre-turn idle
             # recycle below (a parked session is idle by definition), so the
@@ -805,13 +882,15 @@ class RealtimeOrchestrator:
         # activityEnd can all be rejected with 1008. Fire-and-forget expression
         # calls intentionally skip their Gemini acknowledgement to avoid a
         # duplicate reply, so replace that session before the next capture.
+        # A handoff also quarantines the session: late provider output
+        # must not start a response/grace belonging to the next user capture.
         if (
             provider == "gemini"
             and agent is not None
             and agent.requires_fresh_session
         ):
             logger.info(
-                "[realtime] Rebuilding Gemini session after unresolved tool call before streaming audio"
+                "[realtime] Rebuilding Gemini session after unresolved tool or handoff before streaming audio"
             )
             if self._rebuild_now(
                 "gemini-unresolved-tool-call", discard_old_on_failure=True
@@ -831,7 +910,10 @@ class RealtimeOrchestrator:
         threshold = config.REALTIME_GEMINI_PRE_TURN_RECYCLE_S
         if threshold <= 0 or self._last_turn_monotonic <= 0.0:
             return
-        idle = time.monotonic() - self._last_turn_monotonic
+        # Session idle, not user idle: after an unmute the session is seconds
+        # old even when the last turn is minutes old. Rebuilding it anyway cost
+        # a ~10s reconnect the turn fell back through (device 2026-09-23).
+        idle = time.monotonic() - self._idle_since_monotonic()
         if idle < threshold:
             return
         logger.info(
@@ -1028,6 +1110,7 @@ class RealtimeOrchestrator:
 
         try:
             self._agent.connect()
+            self._session_connected_monotonic = time.monotonic()
             logger.info(
                 "[realtime] Realtime orchestrator started (provider=%s)", provider
             )
@@ -1091,14 +1174,51 @@ class RealtimeOrchestrator:
                 logger.exception("Failed to disconnect realtime agent")
         logger.info("Realtime orchestrator stopped")
 
-    def append_audio(self, frame: npt.NDArray[np.float32]) -> None:
+    def bind_audio_turn(self) -> AudioTurnBinding:
+        """Bind after prepare_turn; a lost binding requires full audio replay."""
+        with self._lifecycle_lock:
+            agent = self._agent
+            if not self.available or agent is None:
+                raise AudioTurnSessionChanged("No ready session for audio turn")
+            session = agent.audio_session
+            if session is None:
+                raise AudioTurnSessionChanged("Provider transport is not connected")
+            agent.validate_audio_session(session)
+            return AudioTurnBinding(agent=agent, session=session)
+
+    def _validate_audio_turn(self, turn: AudioTurnBinding) -> VoiceAgentBase:
+        if self._agent is not turn.agent or not self._started.is_set():
+            raise AudioTurnSessionChanged("Audio turn orchestrator session changed")
+        turn.agent.validate_audio_session(turn.session)
+        return turn.agent
+
+    def append_audio(self, frame: npt.NDArray[np.float32], *, turn: AudioTurnBinding | None = None) -> None:
         """Queue a single audio frame to the model (non-blocking)."""
         self._last_activity_monotonic = time.monotonic()
+        if turn is not None:
+            self._validate_audio_turn(turn).append_audio(frame, session=turn.session)
+            return
         if self._agent is not None:
             self._agent.append_audio(frame)
 
-    def commit_audio(self) -> None:
+    def end_live_audio(self) -> bool:
+        """Queue the paused live uplink boundary on the current transport only."""
+        with self._lifecycle_lock:
+            agent = self._agent
+            if agent is None or not agent.available:
+                return False
+            session = agent.audio_session
+            if session is None:
+                return False
+            return agent.end_audio_stream(session=session)
+
+    def commit_audio(self, *, turn: AudioTurnBinding | None = None) -> None:
         """Queue commit signal (non-blocking)."""
+        if turn is not None:
+            agent = self._validate_audio_turn(turn)
+            self._mark_turn_start()
+            agent.commit_audio(session=turn.session)
+            return
         self._mark_turn_start()
         if self._agent is not None:
             self._agent.commit_audio()
@@ -1122,7 +1242,9 @@ class RealtimeOrchestrator:
         reset_s = config.REALTIME_SESSION_IDLE_RESET_S
         if reset_s <= 0 or self._last_turn_monotonic <= 0.0:
             return
-        idle = time.monotonic() - self._last_turn_monotonic
+        # A session connected after the last turn holds no accumulated
+        # context to drop, so it is measured from its connect too.
+        idle = time.monotonic() - self._idle_since_monotonic()
         if idle >= reset_s:
             logger.info(
                 "[realtime] %.0fs idle (>= %.0fs) — will recycle session after this "
@@ -1132,17 +1254,22 @@ class RealtimeOrchestrator:
             )
             self._idle_reset_pending = True
 
-    def flush_output(self) -> None:
+    def flush_output(self, *, turn: AudioTurnBinding | None = None) -> None:
         """Discard buffered outputs from a prior turn before committing a new one.
 
         Prevents a stale response (from an earlier, possibly noise-triggered turn)
         being read and spoken on the current turn — see VoiceAgentBase.flush_output.
         """
+        if turn is not None:
+            self._validate_audio_turn(turn).flush_output()
+            return
         if self._agent is not None:
             self._agent.flush_output()
 
     def stream_output(
         self,
+        *, turn: AudioTurnBinding | None = None,
+        stop_event: threading.Event | None = None,
     ) -> Generator[OutputBase | DelegateSignal | RejectSignal | LookReplaySignal, None, None]:
         """Yield outputs from the model one by one as they arrive.
 
@@ -1158,6 +1285,8 @@ class RealtimeOrchestrator:
         """
         self.execution_completed = False
         self.execution_turn_id = ""
+        if turn is not None:
+            self._validate_audio_turn(turn)
         if self._agent is None:
             return
         execution_agent = self._agent
@@ -1165,7 +1294,14 @@ class RealtimeOrchestrator:
         self._looked_this_turn = False  # reset the per-turn `look` image-send guard
         produced = False  # did this turn yield any real output (vs stay silent)?
         replay_pending = False  # look-replay signalled — the turn continues
-        for output in execution_agent.receive(stop_on_done=True):
+        receive_kwargs: dict[str, Any] = {"stop_on_done": True}
+        if stop_event is not None:
+            receive_kwargs["stop_event"] = stop_event
+        for output in execution_agent.receive(**receive_kwargs):
+            if stop_event is not None and stop_event.is_set():
+                return
+            if turn is not None:
+                self._validate_audio_turn(turn)
             if isinstance(output, MainAgentFallbackOutput):
                 # This is a local fail-safe, not a provider function call: there
                 # is no call ID to acknowledge. Preserve the user's request even
@@ -1176,6 +1312,7 @@ class RealtimeOrchestrator:
                     message=output.transcript,
                     transcript=output.transcript,
                     user_turn_id=output.user_turn_id,
+                    handoff_context=output.handoff_context,
                 )
                 break
             if isinstance(output, ExecutionOutput):
@@ -1195,6 +1332,13 @@ class RealtimeOrchestrator:
                 isinstance(output, FunctionCallOutput)
                 and output.name == LOOK_TOOL_NAME
             ):
+                # A find is a servo search, never a look — delegate it before
+                # any aim or capture (see _redirect_find_look).
+                redirect = self._redirect_find_look(output)
+                if redirect is not None:
+                    produced = True
+                    yield redirect
+                    break
                 # Fresh frame sent → the turn must be REPLAYED so the frame
                 # (queued by the Live API for the next turn) joins the answer —
                 # see _handle_look_call. Mirror the delegate flow: end_turn so
@@ -1341,6 +1485,7 @@ class RealtimeOrchestrator:
                 yield DelegateSignal(
                     message=delegate_msg, transcript=output.user_transcript,
                     user_turn_id=output.user_turn_id,
+                    handoff_context=output.handoff_context,
                 )
                 # Stop the turn here — once the model has delegated, it has nothing
                 # more to say, and waiting for turn_complete just blocks on the
@@ -1351,6 +1496,14 @@ class RealtimeOrchestrator:
                 break
             produced = True
             yield output
+
+        if turn is not None:
+            self._validate_audio_turn(turn)
+
+        # Session cancellation is not a silent/completed model turn and must
+        # not trigger lifecycle accounting or a post-turn rebuild.
+        if stop_event is not None and stop_event.is_set():
+            return
 
         # Capture the consumed terminal before any post-turn recycle swaps agents.
         self.execution_completed = (
@@ -1609,19 +1762,57 @@ class RealtimeOrchestrator:
                 "[realtime] emotion expression failed (emotion=%s): %s", emotion, e
             )
 
+    def _redirect_find_look(self, output: FunctionCallOutput) -> DelegateSignal | None:
+        """Hand a find/search request that reached `look` to the main agent.
+
+        The prompt already says a find is a servo search, not a look, but the
+        model can ignore it: "Find my mouse" went through `look` on 3.8
+        extended-thinking, the frame was persisted, and the main agent then got
+        the request with an unrelated pre-search [vision-image] (#481). Decided
+        here, before aim and capture, so no frame is taken or attached. Mirrors
+        the delegate_to_main branch: ack the call, end the turn, delegate.
+        Returns None (normal look) when the transcript is empty or not a find.
+        """
+        transcript: str = (output.user_transcript or "").strip()
+        if not transcript:
+            logger.info("[realtime] look: no transcript at call time — find guard skipped")
+            return None
+        if not is_find_request(transcript):
+            return None
+        logger.info(
+            "[realtime] look: find request %r — delegating without capture",
+            transcript[:100],
+        )
+        import hal.app_state as state
+
+        # No frame belongs to this request; drop any earlier one so the handoff
+        # cannot carry a stale [vision-image].
+        state.realtime_look_frame_path = None
+        state.realtime_look_frame_ts = 0.0
+        self._agent.send(
+            [
+                FunctionCallResultInput(
+                    call_id=output.call_id,
+                    output='{"result": "delegated"}',
+                )
+            ]
+        )
+        self._agent.end_turn()
+        return DelegateSignal(
+            message=transcript, transcript=transcript,
+            user_turn_id=output.user_turn_id,
+        )
+
     def _handle_look_call(self, output: FunctionCallOutput) -> bool:
         """Handle the model's `look` call. Returns True when a FRESH frame was
         sent and the turn must be REPLAYED (see LookReplaySignal), False when
         the turn should just continue (frame reused from context, or no camera).
 
-        Why replay: the Live API queues a frame sent MID-TURN for the NEXT
-        turn — the tool-ack → continue-turn flow made the model answer every
-        look from the PREVIOUS look's image (device-proven 2026-07-02; neither
-        ack delays nor client_content injection fix it). So on a fresh frame we
-        send the image, do NOT ack the tool call (the replayed audio activity
-        cancels the pending turn), and let the turn driver re-commit the user's
-        audio — the new turn picks up the queued frame and the model answers
-        about the CURRENT scene.
+        Extended Thinking sessions with observed interaction status continue
+        their async tool interaction after the fresh image. They must not replay
+        user activity, which would interrupt background work. Legacy sessions
+        retain audio replay: those previously answered from the preceding image
+        when given only a mid-turn frame and an acknowledgement.
 
         Reuse path (already looked this turn / within VISION_MIN_INTERVAL_S of
         the last send): the recent frame is genuinely in context — in the
@@ -1734,7 +1925,7 @@ class RealtimeOrchestrator:
             )
             return False
 
-        # Resolve the tool call BEFORE the frame goes out. Both the image and
+        # Legacy providers resolve the tool call BEFORE the frame goes out. Both the image and
         # the replayed audio below travel on `send_realtime_input`, which Gemini
         # refuses while a call it emitted is unanswered — so leaving this call
         # pending does not merely risk a 1008, it means the gate in
@@ -1750,9 +1941,9 @@ class RealtimeOrchestrator:
         # send_tool_response and clears the gate; trigger_response=False is the
         # fire-and-forget path, which deliberately tells Gemini nothing and
         # therefore leaves the session quarantined. The response it triggers is
-        # cancelled immediately after by end_turn() + skip_next_turn_done() in
-        # the caller — the payload tells the model to hold, and the replayed
-        # turn is what it actually answers.
+        # cancelled by replay only on the legacy path. Status-aware async
+        # sessions instead attach the frame to the tool result itself so it is
+        # available to the current interaction, not a later audio turn.
         # Tell the model whether the aim actually found the user, not just that
         # a frame is coming. Without it the model cannot tell a well-framed shot
         # from "wherever the camera happened to be pointing after failing to
@@ -1767,7 +1958,10 @@ class RealtimeOrchestrator:
         # the question in the pose people actually hold things in.
         found_user = bool(res is None or getattr(res, "aimed", False)
                           or getattr(res, "reason", "") != "subject not found")
+        continue_interaction = getattr(self._agent, "supports_look_continuation", False) is True
         ack: dict[str, Any] = {"result": "frame incoming; wait for the image"}
+        if continue_interaction:
+            ack["result"] = "Captured image attached; answer using this image."
         if not found_user:
             ack["found_user"] = False
             ack["note"] = (
@@ -1782,11 +1976,13 @@ class RealtimeOrchestrator:
                         call_id=output.call_id,
                         output=json.dumps(ack),
                         trigger_response=True,
+                        image=frame if continue_interaction else None,
                     )
                 ]
             )
-        with look_debug.stage("send_image"):
-            self._agent.send([ImageInput(image=frame)])
+        if not continue_interaction:
+            with look_debug.stage("send_image"):
+                self._agent.send([ImageInput(image=frame)])
         self._looked_this_turn = True
         # Stamp the SEND, not the call entry. `now` is taken before the aim, so
         # a 3s aim made the guard below expire 3s early — the replay landed at
@@ -1817,13 +2013,16 @@ class RealtimeOrchestrator:
             except Exception as e:
                 logger.debug("[realtime] look: monitor copy skipped: %s", e)
         logger.info(
-            "[realtime] look: captured frame %s in %.0fms → %s — replaying "
-            "turn so the frame joins it",
+            "[realtime] look: captured frame %s in %.0fms → %s — %s",
             getattr(frame, "shape", "?"),
             (time.monotonic() - now) * 1000,
             saved_path or "(persist failed)",
+            "continuing asynchronous interaction" if continue_interaction else "replaying turn",
         )
-        return True
+        # Extended Thinking keeps the tool interaction alive after its filler.
+        # Replaying user activity would interrupt that work. Legacy sessions
+        # without authoritative interaction status retain their replay path.
+        return not continue_interaction
 
     @staticmethod
     def _capture_frame(settle_s: float = 0.3) -> Any:

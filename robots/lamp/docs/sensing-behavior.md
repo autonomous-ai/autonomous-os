@@ -848,7 +848,15 @@ The whole suite is opt-in per device: the routeless `lifelike` capability (decla
 |------|-----------|---------|--------------|
 | Breathing LED | `light` | continuous (2 s tick) | Starts HAL's built-in `/led/effect` `breathing` (speed 0.3) using the current LED color read from HAL; falls back to the resting look (`ambientRestingColor`, currently `(0, 0, 0)`) when the LED is black — a dark resting look means the tick is skipped and the strip stays unlit. See [led-control.md § The resting look](led-control.md#the-resting-look-default-off). Stops the effect while paused or LED-locked. |
 | Micro-movements | `motion` | random 45–120 s | Plays one safe servo recording from `idle`, `curious`, `nod`. Servo only — never touches the LED. |
-| Mumble (self-talk) | `audio` | random 5–15 min | Speaks one random phrase from the `PhraseMumble` pool (`system/lib/i18n/phrases.go`, EN/VI/zh-CN/zh-TW, audio tags like `[sigh]`/`[whisper]`/`[chuckle]`). Uses `hal.SpeakCached` — the first render of each phrase hits the TTS provider, replays come from HAL's WAV cache, so idle mumbling costs no API calls. |
+| Mumble (self-talk) | `audio` | random 5–15 min | Picks from six shared `PhraseMumble` entries per language (`system/lib/i18n/phrases.go`, EN/VI/zh-CN/zh-TW): short vocalizations mixed with playful self-talk, such as “No need to rush.” and “I like little moments like this.” One entry uses `[chuckle]`; none uses sigh or whisper tags. Uses `hal.SpeakCached` — the first render of each phrase hits the TTS provider, replays come from HAL's WAV cache, so idle mumbling costs no API calls. |
+
+The shared wording is independent of robot type or body. The idle pool has no
+sensor or conversation context, so it contains no claims about lighting,
+quietness, listening, forgotten thoughts or sleepiness. Such
+sentences require a separate context-aware behavior; this loop does not infer
+those conditions. Cadence, pause/wake rules and random selection are unchanged
+(consecutive repeats remain possible). Audition the actual cached device voice
+before judging naturalness; text and punctuation cannot guarantee its tone.
 
 ### LED lock
 

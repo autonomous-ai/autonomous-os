@@ -18,8 +18,10 @@ HAL giữ snapshot gần nhất trong RAM. Worker môi trường của OS đọc
 Skill `environment` diễn giải số đo, tham khảo `wellbeing` để đưa gợi ý phù hợp.
 Web và MQTT vẫn chỉ đọc, không kích hoạt lượt agent.
 Chưa có kho lịch sử môi trường, dịch vụ hẹn kiểm tra lại, tự điều khiển actuator
-hay cảnh báo y tế. Lamp vẫn tắt phần cứng này và comment capability;
-worker chỉ chạy khi device khai báo capability.
+hay cảnh báo y tế. Chỉ hardware profile `pro`, `pro-respeaker-lite` và `pro-xvf3800` của Lamp khai
+báo capability `environment` tùy chọn và bật SEN63C trên OrangePi
+`orangepi_sun60`, bus `0`. Standard tắt cả hai; SEN55/SCD41 và board thiếu
+entry tương ứng vẫn tắt trong cả bốn profile. Worker yêu cầu capability được khai báo.
 
 ## Đấu dây và lắp đặt
 
@@ -52,8 +54,9 @@ SDA/SCL hỗ trợ logic 3,3 V. Dùng điện trở kéo lên 3,3 V với host 3
 5 V cấp nguồn cảm biến, không cấp cho GPIO host. Địa chỉ I2C là `0x69`,
 tốc độ bus tối đa 100 kHz. Cần xác định board thực tế, sơ đồ chân header,
 pin multiplexing, bus khả dụng và khả năng cấp nguồn trước khi đấu dây.
-HAL không chọn chân header hay cấu hình tốc độ bus. Khi lắp, giữ thông
-thoáng cửa hút/xả khí và tránh nhiệt từ host.
+HAL không chọn chân header; SEN55 cần cấu hình tốc độ bus ở cấp board
+(phần dưới mô tả xử lý Sunxi riêng cho SEN63C). Khi lắp, giữ thông thoáng
+cửa hút/xả khí và tránh nhiệt từ host.
 
 Kiểm tra device ngày 2026-09-11 đã xác nhận mapping bus phía host, nhưng
 lệnh đọc tên SEN55 tại `0x69` không nhận ACK địa chỉ (driver Sunxi trả
@@ -64,10 +67,18 @@ không thay đổi cấu hình trên device.
 
 ## Bật trong HAL
 
-Dòng khai báo tùy chọn `environment` trong `ROBOT.md` của Lamp đang được comment.
-HAL chưa mount API hoặc đọc cấu hình dây nối cho đến khi bỏ comment dòng này.
-Khai báo chuẩn bị sẵn dùng driver `composite`, `routes: [environment]` và
-`required: false`.
+`ROBOT.md` gốc của Lamp giữ `environment` ở dạng comment; `sen63c.json` gốc
+giữ `orangepi_sun60` tắt trên bus `0`. Vì vậy Standard không thu nhận số đo
+môi trường, không ghi clock bus cho SEN63C, không đủ capability để chọn skill
+`environment`; UI không polling sensor.
+
+Các file `profile.json` trong `overrides/pro/`, `overrides/pro-respeaker-lite/`
+và `overrides/pro-xvf3800/` đặt
+`capabilities: {"environment": true}`. Renderer chung bật khai báo capability
+sẵn có (driver `composite`, `routes: [environment]`, `required: false`) và
+copy `device/sen63c.json` của override ra gốc package. HAL sau đó mount API
+và nạp các component đã bật. Thiếu SEN63C trên một trong ba profile Pro thì
+component báo `error` và thử lại; sensor tùy chọn không chặn khởi động.
 
 HAL duyệt driver component đã đăng ký và đọc JSON riêng theo device/board:
 `sen55.json`, `scd41.json`, `sen63c.json`. Cờ `enabled` điều khiển từng
@@ -75,8 +86,9 @@ component; entry tắt hoặc thiếu không truy cập hardware. Không có dan
 chọn component riêng; file `environment.json` cũ bị bỏ qua. Mỗi component bật
 có worker độc lập.
 
-Để thay SEN55 + SCD41 bằng SEN63C, đặt hai entry cũ thành `"enabled": false`,
-đặt SEN63C thành `"enabled": true` với dây nối đã xác nhận, rồi restart HAL.
+SEN63C là component mặc định trên OrangePi trong cả ba profile Pro. Để dùng SEN55 + SCD41 thay thế,
+trước hết đặt SEN63C thành `"enabled": false`, rồi bật các entry thay thế với
+dây nối đã xác nhận và restart HAL.
 Hai component bật không được cùng sở hữu một chỉ số: SEN55 + SEN63C hoặc
 SCD41 + SEN63C bị báo lỗi cấu hình thay vì âm thầm ghi đè dữ liệu. Component
 tắt không tham gia kiểm tra trùng này. Thêm hardware sau này cần driver,
@@ -86,6 +98,15 @@ vẫn dùng chung.
 (`start`, `read`, `close`), timing mặc định và các key chỉ số hỗ trợ.
 Setup và `build-orangepi` giải nén toàn bộ archive profile device, nên file
 JSON sensor mới không cần nhánh cài đặt riêng theo loại sensor.
+Khi nâng cấp từ bản cũ, cần cập nhật cả gói HAL (gồm sửa clock) lẫn gói
+profile device. Setup, build image và OTA áp override phần cứng đã chọn lên
+package gốc mới giải nén. Cập nhật device thay profile và restart HAL cùng os-server.
+
+`/etc/autonomous/hardware-profile` thiếu, rỗng hoặc `standard` chọn Standard,
+kể cả máy từng được bật SEN63C bằng mặc định chung trước đây. Không tự chuyển
+máy sang Pro. Với phần cứng Pro, chọn rõ `pro`, `pro-respeaker-lite` hoặc `pro-xvf3800` rồi cài lại
+gói device; chỉ cập nhật HAL không đổi capability hay JSON sensor. Xem
+[override phần cứng](../../../../docs/vi/bootstrap-ota.md#override-phần-cứng-tùy-chọn).
 
 Cấu hình SEN55 thuộc device tại `robots/<device>/sen55.json`, dùng map `boards`
 như `mpr121.json`. Board mục tiêu là OrangePi (`orangepi_sun60`); Lamp có entry tắt
@@ -94,8 +115,8 @@ entry của board đang chọn thì cảm biến tắt. Entry tắt có thể b�
 Khi bật, `bus` phải là số nguyên không âm.
 Cấu hình sai, kể cả trường không được hỗ trợ, bị từ chối khi khởi động.
 
-Để bật sau khi xác nhận dây nối, bỏ comment capability trong `ROBOT.md`,
-sửa entry đúng board rồi khởi động lại HAL. Mẫu sau có placeholder,
+Để bật SEN55 sau khi xác nhận dây nối, trước hết tắt SEN63C để tránh trùng
+chỉ số, sửa entry SEN55 của board thực tế rồi restart HAL. Mẫu sau có placeholder,
 chưa phải JSON có thể nạp trực tiếp:
 
 ```text
@@ -143,8 +164,10 @@ Chưa kiểm chứng dây nối hay số đo SCD41 trên hardware thật.
 
 ## Component kết hợp SEN63C
 
-`robots/lamp/sen63c.json` dùng cùng map `boards`, mặc định tắt với `bus`,
-`sda_pin`, `scl_pin` là null. Xác nhận dây trước khi bật; ghi chú chân SEN55
+`robots/lamp/sen63c.json` dùng cùng map `boards`, tắt SEN63C cho
+`orangepi_sun60` trên bus `0`. Cả ba override Pro cung cấp JSON thay thế bật
+entry này. `sda_pin`, `scl_pin` vẫn là null; board khác thiếu entry tương ứng
+(kể cả Raspberry Pi) vẫn tắt ngay cả với Pro. Xác nhận dây cho từng máy; ghi chú chân SEN55
 ở trên không xác nhận dây SEN63C. Driver dùng I2C `0x6B`, kiểm tra product type
 SEN63C, CRC từng word và đọc PM1/PM2.5/PM4/PM10, nhiệt độ, độ ẩm, `co2_ppm`
 đo thật. VOC/NOx giữ null trong sample chung. CO₂ có thể chưa có trong 22–24
@@ -155,7 +178,43 @@ Mặc định `poll_interval_s: 1`, `retry_interval_s: 5`, `stale_after_s: 5`,
 true/false tường minh cấu hình ASC CO₂. Đây là phần riêng với warm-up và ngưỡng
 thay đổi của OS. Không gửi lệnh forced recalibration hay lưu bền vững. Xem
 [tài liệu driver SEN63C của Sensirion](https://sensirion.github.io/python-i2c-sen63c/api.html).
-Chưa kiểm chứng dây nối và số đo SEN63C trên hardware thật.
+Bus I2C phía host phải chạy ở **100 kHz hoặc thấp hơn**, theo
+[datasheet SEN6x của Sensirion, mục 4.4](https://sensirion.com/resource/datasheet/SEN6x).
+Bus OrangePi Sun60 có thể mặc định ở 400 kHz: trên device đã kiểm tra, tốc độ
+này gây lỗi CRC khi đọc product type; chuyển bus 0 về 100 kHz đã khôi phục
+phản hồi nhận dạng và số đo hợp lệ. Không bỏ kiểm tra CRC để nhận gói dữ liệu
+hỏng. Kết quả này xác nhận bus của device đó, không xác nhận dây của các máy khác.
+
+Trước khi mở sensor, mỗi lần khởi tạo driver SEN63C đều gọi helper clock I2C
+chung cho bus đã cấu hình. Với adapter có `name` bắt đầu bằng `SUNXI TWI`, HAL
+đọc `/sys/class/i2c-adapter/i2c-N/device/info` và trường `twi->freqency`
+(đúng cách viết của kernel). Nếu tốc độ lớn hơn `100000` Hz, HAL hạ xuống
+`100000` qua thuộc tính `device/freq` của controller, rồi đọc lại để xác nhận
+không vượt `100000`. Tốc độ đã đạt yêu cầu được giữ nguyên. HAL cần quyền đọc
+các thuộc tính này và ghi `freq` khi phải hạ clock. Dữ liệu controller thiếu/sai
+định dạng, ghi thất bại hoặc đọc lại vẫn vượt giới hạn đều chặn truy cập sensor
+và hiện trong `last_error` của component; worker khởi tạo lại driver theo cơ chế
+retry hiện có để thử lại.
+
+Bước chuẩn bị này chạy mỗi lần khởi tạo driver, gồm khi HAL khởi động lúc boot
+hoặc phục hồi sau lỗi. Cài HAL mới qua setup hoặc OTA vì vậy mang theo bản sửa,
+không cần cài riêng drop-in systemd. Component tắt và simulation không khởi tạo
+driver phần cứng, không ghi clock. Loại adapter khác được giữ nguyên: cần cấu
+hình bus tối đa 100 kHz bằng cơ chế được board/kernel hỗ trợ. Trường `bus` trong
+JSON sensor chọn adapter, không đặt tốc độ. Dây nối, pin-mux, nguồn và bus đúng
+vẫn cần xác nhận theo từng board. Hạ clock controller tác động mọi ngoại vi dùng
+chung bus vật lý đó.
+
+Sau khi cài HAL mới, có thể xóa workaround riêng trên device trước đây tại
+`/etc/systemd/system/hal.service.d/20-sen63c-i2c.conf`; reload systemd sau khi xóa.
+Restart HAL rồi kiểm tra `device/info` của controller đã chọn và
+`/environment/status`: clock không vượt `100000`, sample mới và không có lỗi.
+Trên OrangePi Sun60 đã thử, đường chạy tự động được kiểm chứng bằng cách gỡ
+drop-in, đặt lại 400 kHz khi HAL đã dừng rồi khởi động HAL mới: driver ghi log
+hạ xuống 100 kHz và đọc lại số đo hợp lệ. MPR121 trên cùng bus đọc trạng thái
+thành công 100/100 lần khi SEN63C đang chạy (trung bình 0.823 ms, tối đa 5.040 ms).
+Kiểm tra này xác nhận giao tiếp; chưa thử thao tác chạm vật lý và reboot toàn
+board trong lần kiểm chứng đó.
 
 Log vòng đời HAL dùng key `[sen55]`, `[scd41]` và `[sen63c]`: tắt/khởi động, mẫu hợp lệ
 đầu tiên, bắt đầu đo, lỗi thử lại và dừng hiển thị ở INFO (lỗi có thể dùng
@@ -241,9 +300,10 @@ component ở `status.components`; vẫn hỗ trợ snapshot một sensor kiểu
 chỉ đọc, không có ngưỡng tốt/xấu hay lưu lịch sử. Event OS → agent do worker
 độc lập bên dưới tạo, không do trình duyệt làm mới.
 
-Với capability đang comment của Lamp, card hiện `N/A` và không polling. Nếu
-khai báo capability nhưng giữ `enabled: false`, card hiển thị trạng thái đã tắt
-và số đo `N/A`. Hiển thị UI không bật thu nhận hay event agent.
+Chỉ profile Pro khai báo capability, nên Standard hiện `N/A` mà không polling.
+Trên Pro, số đo SEN63C OrangePi hiện khi còn mới; thiếu phần cứng thì hiện lỗi
+và `N/A` trong khi worker thử lại. Tắt mọi component hoặc dùng board thiếu entry tương ứng sẽ
+hiện trạng thái đã tắt và `N/A`. Hiển thị UI không bật thu nhận hay event agent.
 
 ## Đọc qua MQTT
 
@@ -256,8 +316,9 @@ kiểm tra `state`, `stale`, `sample`, `last_error` trong `data`.
 
 Thiếu capability trả `status: "failure"`,
 `error: "environment capability not declared"`. Lỗi kết nối HAL, HTTP khác 200
-hoặc status JSON không hợp lệ cũng trả failure. Lamp hiện vẫn comment capability
-nên trả lỗi thiếu capability. Đây là request/reply, không stream hay event tự
+hoặc status JSON không hợp lệ cũng trả failure. Chỉ profile Pro khai báo
+capability nên thiếu phần cứng trên Pro được báo trong snapshot; Standard trả
+failure do thiếu capability. Đây là request/reply, không stream hay event tự
 động, không gọi agent. Xem [giao thức MQTT](../../../../docs/vi/mqtt_vi.md)
 để biết payload và quy tắc phản hồi.
 
@@ -399,14 +460,45 @@ Skill tham khảo mục environmental-care của `skills/wellbeing/SKILL.md`
 đã đọc, không chuyển lượt qua lại giữa các skill. Hỏi về phòng và hỗ trợ khi
 khó chịu không cần camera, danh tính, log hoạt động hay bộ đếm uống nước.
 
+Câu hỏi hoặc nhận xét thông thường về cảm giác trong phòng (nóng, lạnh, bí,
+khô hoặc có vẻ có khói), cùng câu hỏi tiếp nối, dùng
+`skills/environment/reference/room-comfort.md`: đọc status một lần hoặc dùng
+snapshot hiện tại, rồi trả lời một câu ngắn, thân mật, không đọc số, đơn vị,
+tên sensor hay tag cảm xúc. Khi hỏi rõ số đo, vẫn trả giá trị được yêu cầu.
+Dùng số đo phù hợp còn hợp lệ để quyết định, không lặp lại lời than khi chưa
+có căn cứ. Kiểm tra độ mới và trạng thái nguồn theo từng chỉ số, không chỉ
+snapshot chung.
+
+Ngưỡng diễn đạt do người dùng chọn: nhiệt độ trên 27°C là nóng, dưới 19°C là
+lạnh; độ ẩm dưới 35% là khô, trên 65% là oi dính; CO₂ đo thật trên 1000 ppm
+là bí/nặng; PM2.5 trên 35 µg/m³ là nhiều bụi. So sánh nghiêm ngặt: bằng ngưỡng
+không kích hoạt nhãn. Đây là quy tắc diễn đạt, không phải giới hạn sức khỏe
+hay ngưỡng sự kiện OS; bụi cao không chứng minh có khói. Số đo bình thường
+chỉ cho phép nhận xét có phạm vi như “Trong này có vẻ không nóng,” không nói
+“không khí an toàn” hoặc “do bạn thôi.” Không bịa xu hướng, nguồn gây ra hay
+thiết bị sẵn có. Khi câu hỏi thông thường về phòng thiếu số đo phù hợp còn
+dùng được, chỉ nói “Not sure. I can't feel the air right now.” hoặc bản tương
+đương theo ngôn ngữ đang dùng: “Chưa rõ. Giờ mình không cảm nhận được không khí.”
+Đây là ngoại lệ hai câu cố định, không thêm lời khuyên.
+
+Nhận xét lúc khởi động và update tự động giữ nguyên quy tắc thời điểm, im
+lặng và snapshot. Diễn giải ý nghĩa có căn cứ trước số, kèm tối đa một hành
+động hữu ích. Triệu chứng cá nhân không kèm câu hỏi về phòng vẫn theo luồng
+wellbeing bên dưới; khó thở hoặc khói/phơi nhiễm do người dùng báo được ưu
+tiên trước việc đọc sensor và quy tắc trả lời ngắn. Số đo từng phần không
+chứng nhận phòng an toàn, sạch hay xác định nguyên nhân triệu chứng.
+
 Khi người dùng nói mệt, nhức đầu, chóng mặt, bí bách hoặc khó tập trung,
-wellbeing phản hồi người dùng trước. Môi trường là phần tùy chọn: capability
+wellbeing bắt buộc đọc reference discomfort, kể cả câu không chuẩn ngữ pháp
+như “I'm headache, tired, what happen?”. Không tự suy ra việc dùng màn hình,
+thời lượng hay nguyên nhân triệu chứng từ lời than. Capability
 thiếu/chưa biết thì không gọi công cụ môi trường; đọc lỗi, toàn null hoặc stale
 thì bỏ qua gợi ý môi trường. Không nhắc lỗi sensor hay yêu cầu setup hardware
-khi người dùng đang chia sẻ khó chịu. Chỉ giải thích thiếu dữ liệu nếu họ hỏi
-rõ về số đo phòng. Khi có capability, đọc status tối đa một lần có timeout
-(hoặc dùng snapshot hiện tại đã cung cấp) để thêm nhận xét phù hợp và một gợi ý
-thoải mái/thông gió có điều kiện. Số đo không xác định nguyên nhân triệu chứng
+khi người dùng đang chia sẻ khó chịu. Câu hỏi/nhận xét thông thường về cảm
+giác trong phòng dùng câu dự phòng khi thiếu dữ liệu ở trên. Khi có capability và không có dấu hiệu khẩn cấp, bắt buộc
+tham khảo environment và đọc status một lần có timeout (hoặc dùng snapshot
+hiện tại đã cung cấp) trước khi hoàn tất phản hồi. Việc thêm nhận xét phù hợp
+và một gợi ý thoải mái/thông gió có điều kiện vẫn là tùy chọn. Số đo không xác định nguyên nhân triệu chứng
 và không phủ nhận việc người dùng đang khó chịu.
 
 Reference discomfort có hướng dẫn ưu tiên triệu chứng/phơi nhiễm do người dùng
@@ -417,8 +509,9 @@ loại nồng độ tự động hay ngưỡng OS. Dữ liệu thật đến sau
 nhưng không ngầm tạo lịch kiểm tra, log wellbeing mới hoặc quyền điều khiển
 thiết bị.
 
-- **Hỏi về phòng:** đọc status một lần, báo số đo hữu ích; thiếu dữ liệu hoặc
-  dữ liệu cũ là chưa biết, không phải không ô nhiễm hay bằng chứng an toàn.
+- **Hỏi về phòng:** đọc status một lần hoặc dùng snapshot hiện tại, rồi trả lời
+  ngắn theo quy tắc trên; thiếu số đo phù hợp còn dùng được thì chỉ nói câu dự
+  phòng, không khẳng định không ô nhiễm hay an toàn.
 - **Khởi động:** chào ngay; có thể thêm một câu từ số đo đã cache đủ điều kiện.
   Nếu chưa có, snapshot đầu tiên đủ điều kiện có thể tạo update riêng sau lời
   chào, không chào lần nữa hay gọi API cho bản tin này. Bỏ số đo ban đầu đã cũ.

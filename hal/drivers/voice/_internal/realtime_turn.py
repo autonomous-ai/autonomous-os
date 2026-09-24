@@ -18,7 +18,9 @@ from hal import app_state as hal_app_state
 from hal import config as hal_config
 from hal import presets
 from hal.clock import device_now
+from hal.i18n import PROVIDER_ERROR_PHRASES_BY_LANG
 from hal.realtime.config import gemini_needs_idle_workaround
+from hal.realtime.voice_agent.base import AudioTurnSessionChanged
 from hal.realtime.models import AudioOutput as RTAudioOutput
 from hal.realtime.models import TextOutput as RTTextOutput
 from hal.realtime.models.signal import DelegateSignal, LookReplaySignal, RejectSignal
@@ -38,6 +40,36 @@ CLAUSE_ENDS = (",", ";", ":", "—", "，", "；", "：", "、")
 # is 9 characters and is exactly the greeting worth getting out early, while
 # every grunt this must reject is 5 or fewer.
 FIRST_CHUNK_MIN_CHARS = 8
+
+
+# Suppress only known provider apologies, not arbitrary mentions of errors.
+_SYSTEM_ERROR_TEXTS = tuple(
+    " ".join(phrase.lower().replace("’", "'").split()).rstrip(".!?")
+    for phrases in PROVIDER_ERROR_PHRASES_BY_LANG.values()
+    for phrase in phrases
+)
+_SYSTEM_ERROR_SENTENCE = re.compile(
+    r"(?<!\S)(?:" + "|".join(
+        re.escape(template).replace(r"\ ", r"\s+").replace("'", "['’]")
+        for template in _SYSTEM_ERROR_TEXTS
+    ) + r")(?:[.!?]+|$)", re.IGNORECASE,
+)
+
+
+def _filter_system_error_tts(text: str, *, log: bool = True) -> str:
+    def suppress(match):
+        if log:
+            logger.info("[realtime] Provider error suppressed from TTS: %r", match.group(0))
+        return ""
+
+    return _SYSTEM_ERROR_SENTENCE.sub(suppress, text).strip()
+
+
+def _pending_system_error_tts(text: str) -> bool:
+    # Hold a matching prefix before clause splitting can speak the apology.
+    normalized = " ".join(text.lower().replace("’", "'").split())
+    return bool(normalized) and any(template.startswith(normalized)
+                                    for template in _SYSTEM_ERROR_TEXTS)
 
 
 def split_first_chunk(buf: str) -> tuple[str, str]:
@@ -311,6 +343,7 @@ class RealtimeTurnResult(NamedTuple):
     rejected: bool = False
     # Observation only: the provider confirmed execution finished, not correctness.
     execution_completed: bool = False
+    handoff_context: str = ""
 
 
 def should_drop_realtime_rejection(rt: RealtimeTurnResult) -> bool:
@@ -470,6 +503,31 @@ def harness_followup_active() -> bool:
         return False
 
 
+def _commit_turn_output(realtime, audio_frames, audio_turn=None):
+    """Commit one session; replay a lost upload before any response is consumed."""
+    if audio_turn is None:
+        realtime.flush_output()
+        realtime.commit_audio()
+        logger.info("[realtime] Audio committed — streaming output")
+        return None, realtime.stream_output()
+    try:
+        realtime.flush_output(turn=audio_turn)
+        realtime.commit_audio(turn=audio_turn)
+    except AudioTurnSessionChanged:
+        if not realtime.recover_session("audio-upload-session-changed"):
+            raise
+        audio_turn = realtime.bind_audio_turn()
+        realtime.send_text(build_turn_context())
+        for frame in audio_frames:
+            realtime.append_audio(frame, turn=audio_turn)
+        realtime.flush_output(turn=audio_turn)
+        realtime.commit_audio(turn=audio_turn)
+    # A change after commit may have executed tools even without spoken output.
+    # Let the existing error/fallback path handle it; never blindly repeat tools.
+    logger.info("[realtime] Audio committed — streaming output")
+    return audio_turn, realtime.stream_output(turn=audio_turn)
+
+
 def run_realtime_turn(
     realtime,
     tts,
@@ -480,6 +538,9 @@ def run_realtime_turn(
     audio_is_speech: bool = True,
     interaction_id: str = "",
     wait_filler: "Optional[_WaitFiller]" = None,
+    save_history: bool = True,
+    audio_turn=None,
+    harness_followup: Optional[bool] = None,
 ) -> RealtimeTurnResult:
     """Commit the captured audio to the realtime agent and stream its reply.
 
@@ -500,12 +561,13 @@ def run_realtime_turn(
     foreign_suppressed = False  # reply came back in a script the device can't speak
     transcript = ""
     delegate_msg = ""
+    handoff_context = ""
     route = ROUTE_NOT_STARTED
     native = hal_config.REALTIME_NATIVE_AUDIO and tts is not None
     native_started = False  # cleanup guard: True between begin and end
     native_played = False    # did native audio actually play this turn (for handled)
 
-    if combined and harness_followup_active():
+    if combined and (harness_followup if harness_followup is not None else harness_followup_active()):
         logger.info("[realtime] Harness follow-up active — delegating without realtime reply")
         return RealtimeTurnResult(delegated=True, delegate_msg=combined, route=ROUTE_DELEGATED)
 
@@ -535,9 +597,7 @@ def run_realtime_turn(
             "[realtime] Entering realtime flow — committing audio (stt=%r)",
             combined[:100] if combined else "(empty)",
         )
-        # Fill the Gemini wait with `thinking` (cleared at first output).
-        # Delegated turns keep it — the main agent's wait is even longer.
-        _thinking_cue_start()
+        thinking_started = False
         # Audible half of the same wait (see _WaitFiller). Armed here rather
         # than per attempt so a 1011 retry does not restart the clock — from the
         # user's side it is one uninterrupted silence.
@@ -589,8 +649,10 @@ def run_realtime_turn(
                     )
                     if not realtime.recover_session("gemini-1011-replay"):
                         break
+                    if audio_turn is not None:
+                        audio_turn = realtime.bind_audio_turn()
                     for _frame in rt_audio_buffer:
-                        realtime.append_audio(_frame)
+                        realtime.append_audio(_frame, **({"turn": audio_turn} if audio_turn is not None else {}))
                     text_parts = []
                     sentence_buf = ""
                     first_sentence_sent = False
@@ -599,9 +661,6 @@ def run_realtime_turn(
                 # Drop any output still queued from a previous turn so this turn
                 # only reads its OWN response (stale async replies desync onto a
                 # later turn → "talks on its own" + double TTS).
-                realtime.flush_output()
-                realtime.commit_audio()
-                logger.info("[realtime] Audio committed — streaming output")
                 # Time-to-first-* for this turn. Without these two numbers the
                 # only measurable span was commit → first spoken sentence (3-6s
                 # on lamp-0c89), which mixes the model's own latency with how
@@ -612,7 +671,15 @@ def run_realtime_turn(
 
                 execution_completed = False
                 look_replay: bool = False
-                for output in realtime.stream_output():
+                audio_turn, outputs = _commit_turn_output(realtime, rt_audio_buffer, audio_turn)
+                if not thinking_started:
+                    # Start provider work before synchronous hardware feedback.
+                    # Keep emotion on this thread: a detached cue could finish
+                    # after reply/cancel and overwrite the next turn's emotion.
+                    # Retry/look replay is still the same user-visible wait.
+                    thinking_started = True
+                    _thinking_cue_start()
+                for output in outputs:
                     if not first_output_logged:
                         first_output_logged = True
                         logger.info(
@@ -630,6 +697,7 @@ def run_realtime_turn(
                     if isinstance(output, DelegateSignal):
                         delegated = True
                         delegate_msg = output.message
+                        handoff_context = output.handoff_context
                         # The wait is over — the main-agent hop that follows has
                         # its own filler (os-server fires one on the forwarded
                         # voice turn), so ours must not fire on top of it.
@@ -691,6 +759,12 @@ def run_realtime_turn(
                         if foreign_suppressed:
                             sentence_buf = ""
                             continue
+                        visible_text = strip_markers(sentence_buf)
+                        if _pending_system_error_tts(visible_text):
+                            continue
+                        filtered_text = _filter_system_error_tts(visible_text)
+                        if filtered_text != visible_text.strip():
+                            sentence_buf = filtered_text
                         # Nothing spoken yet: cut the opening at a clause
                         # boundary rather than making the user wait out a whole
                         # sentence. Only ever once per turn (see split_first_chunk).
@@ -710,11 +784,11 @@ def run_realtime_turn(
                                 first_sentence_sent = True
                                 _thinking_cue_clear()
                                 sentence_buf = rest
-                        # Flush complete sentences to TTS as they arrive
-                        if tts is not None and sentence_buf.rstrip().endswith(SENTENCE_ENDS):
-                            sentence: str = leak_filter.filter_text(
-                                strip_markers(sentence_buf)
-                            )
+                        # Trailing voice/HW tags are not spoken punctuation.
+                        # Keep the raw buffer until ready so split tags reassemble.
+                        sentence = strip_markers(sentence_buf)
+                        if tts is not None and sentence.rstrip().endswith(SENTENCE_ENDS):
+                            sentence = leak_filter.filter_text(sentence)
                             if sentence:
                                 if not first_sentence_sent:
                                     logger.info(
@@ -764,7 +838,7 @@ def run_realtime_turn(
                         "frame joins the replayed turn"
                     )
                     for _frame in rt_audio_buffer:
-                        realtime.append_audio(_frame)
+                        realtime.append_audio(_frame, **({"turn": audio_turn} if audio_turn is not None else {}))
                     text_parts = []
                     sentence_buf = ""
                     first_sentence_sent = False
@@ -789,7 +863,9 @@ def run_realtime_turn(
             # turn from the top): this is what gets forwarded as [REPLY], saved to
             # realtime memory, and shown in web chat — a leak here re-enters the
             # model's context next turn and self-reinforces.
-            transcript = clean_transcript(strip_markers("".join(text_parts)), reply_lang)
+            transcript = _filter_system_error_tts(
+                clean_transcript(strip_markers("".join(text_parts)), reply_lang), log=False,
+            ) if not native else clean_transcript(strip_markers("".join(text_parts)), reply_lang)
 
             # Native playback owns the speaker for the whole turn — release it
             # once all frames are in (records transcript for STT echo cancel).
@@ -832,7 +908,9 @@ def run_realtime_turn(
             else:
                 # Flush any remaining text that didn't end with a sentence boundary
                 # (ElevenLabs path only — native mode never fills sentence_buf).
-                remaining: str = leak_filter.filter_text(strip_markers(sentence_buf))
+                remaining: str = _filter_system_error_tts(
+                    leak_filter.filter_text(strip_markers(sentence_buf)),
+                )
                 if not native and remaining and tts is not None:
                     if not first_sentence_sent:
                         logger.info(
@@ -870,7 +948,7 @@ def run_realtime_turn(
                         transcript[:200] if transcript else "(empty)",
                     )
                     # Save turn to realtime memory
-                    if combined or transcript:
+                    if save_history and (combined or transcript):
                         realtime.save_turn(
                             user_text=combined or "(audio only)",
                             agent_text=transcript or "(audio only)",
@@ -957,6 +1035,7 @@ def run_realtime_turn(
         handled=handled,
         transcript=transcript,
         delegate_msg=delegate_msg,
+        handoff_context=handoff_context,
         route=route,
         rejected=rejected,
         execution_completed=execution_completed,

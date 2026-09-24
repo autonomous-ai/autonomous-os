@@ -457,6 +457,16 @@ const (
 	KindSystemReboot   = "system.reboot"   // cue-aware OS reboot via HAL
 	KindSystemShutdown = "system.shutdown" // cue- and servo-aware OS shutdown via HAL
 
+	// KindSystemOTAVersions reports per-component current vs published versions
+	// plus what bootstrap is installing right now — the cloud twin of the web
+	// Versions card (GET /api/system/ota-versions + /ota-updating).
+	KindSystemOTAVersions = "system.ota_versions"
+	// KindSystemSoftwareUpdate force-updates one component. Data:
+	// MQTTSoftwareUpdateData. The cloud twin of
+	// POST /api/system/software-update/:target; replies "success" (started)
+	// immediately, then publishes an unsolicited completion report.
+	KindSystemSoftwareUpdate = "system.software_update"
+
 	// KindSkillsInstall installs a role's skill bundle. Data: {"role":"<role>"}.
 	KindSkillsInstall = "skills.install"
 
@@ -1000,6 +1010,13 @@ type MQTTSkillsInstallData struct {
 	Role string `json:"role"`
 }
 
+// MQTTSoftwareUpdateData is the data block of system.software_update. Target is
+// one of os-server | bootstrap | web | hal | device | <agent CLI key> | agent
+// ("agent" resolves to the configured runtime's CLI).
+type MQTTSoftwareUpdateData struct {
+	Target string `json:"target"`
+}
+
 // MQTTSkillsSaveData is the Data payload for kind:"skills.save" — an authored
 // skill pushed from the backend instead of the web UI's form. Same three fields
 // as SkillDraft (which this maps onto); Name must be a slug matching
@@ -1223,6 +1240,9 @@ type RealtimeSetData struct {
 	Reasoning string `json:"reasoning,omitempty"` // gemini thinking_level OR openai reasoning_effort (gptlive / pipecat_v1: none)
 	APIKey    string `json:"api_key,omitempty"`   // optional override; empty → llm_api_key
 	BaseURL   string `json:"base_url,omitempty"`  // optional override; empty → llm_base_url-derived
+	// WebSearch toggles the in-session `web_search` tool (pipecat_v1 only —
+	// rejected for any other provider). nil = leave unchanged.
+	WebSearch *bool `json:"web_search,omitempty"`
 }
 
 // MQTTRealtimeSetCommand wraps the full realtime.set downlink envelope for unmarshalling.
@@ -1401,6 +1421,9 @@ type RealtimePublic struct {
 	Reasoning string `json:"reasoning"`
 	BaseURL   string `json:"base_url"` // resolved (may be llm-derived)
 	HasAPIKey bool   `json:"has_api_key"`
+	// WebSearch is the resolved in-session web-search toggle: present only for
+	// pipecat_v1 (the provider that has the knob), omitted otherwise.
+	WebSearch *bool `json:"web_search,omitempty"`
 }
 
 type ConfigPublicResponse struct {
