@@ -460,6 +460,15 @@ Skill tham khảo mục environmental-care của `skills/wellbeing/SKILL.md`
 đã đọc, không chuyển lượt qua lại giữa các skill. Hỏi về phòng và hỗ trợ khi
 khó chịu không cần camera, danh tính, log hoạt động hay bộ đếm uống nước.
 
+Câu hỏi thông thường về phòng, nhận xét lúc khởi động, update tự động và hỗ
+trợ khi khó chịu đều diễn giải ý nghĩa trước số: một tình trạng hoặc thay đổi
+có căn cứ bằng lời dễ hiểu, kèm tối đa một hành động hữu ích. Mặc định bỏ số;
+chỉ đưa giá trị khi được hỏi hoặc thực sự giúp quyết định, kèm giải thích.
+Không thêm ngưỡng hay cho phép kết luận mạnh hơn: tăng chưa chắc là mức xấu,
+nhiệt độ không xác định chất lượng không khí, và số đo từng phần không chứng
+nhận phòng an toàn hay sạch. Nếu chưa đủ căn cứ diễn giải, nói rõ giới hạn
+thay vì đọc hàng loạt số.
+
 Khi người dùng nói mệt, nhức đầu, chóng mặt, bí bách hoặc khó tập trung,
 wellbeing bắt buộc đọc reference discomfort, kể cả câu không chuẩn ngữ pháp
 như “I'm headache, tired, what happen?”. Không tự suy ra việc dùng màn hình,
@@ -481,7 +490,7 @@ loại nồng độ tự động hay ngưỡng OS. Dữ liệu thật đến sau
 nhưng không ngầm tạo lịch kiểm tra, log wellbeing mới hoặc quyền điều khiển
 thiết bị.
 
-- **Hỏi về phòng:** đọc status một lần, báo số đo hữu ích; thiếu dữ liệu hoặc
+- **Hỏi về phòng:** đọc status một lần, diễn giải ý nghĩa có căn cứ; thiếu dữ liệu hoặc
   dữ liệu cũ là chưa biết, không phải không ô nhiễm hay bằng chứng an toàn.
 - **Khởi động:** chào ngay; có thể thêm một câu từ số đo đã cache đủ điều kiện.
   Nếu chưa có, snapshot đầu tiên đủ điều kiện có thể tạo update riêng sau lời
