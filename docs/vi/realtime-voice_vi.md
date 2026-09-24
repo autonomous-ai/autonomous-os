@@ -863,6 +863,20 @@ lên của chế độ live dựa vào cờ này ở chế độ `cancelled` đ�
 nói: nó báo tham chiếu có *tới* hay không, chứ không báo việc khử có *hiệu quả*
 hay không — một khung ERLE 0,9 dB vẫn được tính là đã khử.
 
+### Tốc độ phát ElevenLabs v3
+
+Với yêu cầu ElevenLabs HTTP có model thực tế là `eleven_v3` (kể cả fallback
+từ `tts-1`), HAL gửi `speed=1.0` tới provider và áp dụng `tts_speed` trong
+`config.json` ở máy cục bộ qua đường `get_tts_speed` sẵn có. Bộ lọc ffmpeg
+`atempo` dạng streaming thay đổi thời lượng nhưng giữ cao độ, trước khi
+resample, phát loa và lấy tham chiếu AEC. Tốc độ `1.0` bỏ qua bộ lọc.
+ffmpeg đã có trong quy trình chuẩn bị thiết bị.
+
+Khóa WAV cache của v3 có dấu phân biệt để không dùng lại audio v3 đã tổng hợp
+theo chính sách tốc độ cũ. Thay đổi này điều chỉnh thời lượng phát, không giảm
+thời gian chờ byte đầu tiên (TTFB) từ provider. Các backend TTS khác giữ nguyên
+hành vi tốc độ hiện có.
+
 ### Vì sao không có cắt lời bằng giọng nói trên mic đã khử vọng
 
 Một bộ phát hiện cục bộ ("barge-in": dừng TTS khi người dùng nói đè lên) đã

@@ -74,8 +74,8 @@ if _sensing_device_env:
         AUDIO_SENSING_DEVICE = int(_sensing_device_env)
     except ValueError:
         AUDIO_SENSING_DEVICE = _sensing_device_env
-# TTS speed multiplier — 1.0=normal, 1.3=faster, max 4.0
-TTS_SPEED: float = float(os.environ.get("HAL_TTS_SPEED", "1.3"))
+# TTS speed multiplier — 1.0=normal, 1.2=faster, max 4.0
+TTS_SPEED: float = float(os.environ.get("HAL_TTS_SPEED", "1.2"))
 # TTS voice — one of: alloy, ash, coral, echo, fable, onyx, nova, sage, shimmer
 TTS_VOICE: str = os.environ.get("TTS_VOICE", "nova")
 # TTS instructions — style/vibe prompt for voice (e.g. "Speak warmly like a caring friend")

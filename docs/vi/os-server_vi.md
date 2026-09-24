@@ -466,9 +466,11 @@ Cần sensing có camera (InsightFace). Mặc định ảnh người đã đăng
 `GET /api/device/config` trả `tts_speed` hiệu lực; `PUT /api/device/config`
 nhận `{"tts_speed":1.2}`. Field tùy chọn nhận `0.25–4.0`; bỏ qua thì giữ
 nguyên giá trị đã lưu. Config đã lưu ưu tiên hơn `HAL_TTS_SPEED`, giữ fallback
-môi trường và mặc định cũ `1.3`. HAL đọc config khi boot và `/voice/start`
+môi trường và mặc định `1.2`. HAL đọc config khi boot và `/voice/start`
 qua `get_tts_speed()`; đổi tốc độ được đẩy live qua `/voice/tts/config {speed}`.
-Backend ElevenLabs vẫn giới hạn giá trị gửi đi trong `0.7–1.2`.
+ElevenLabs HTTP v3 gửi speed `1.0` và áp dụng tốc độ đã lưu ở HAL qua
+streaming giữ cao độ. Các model ElevenLabs khác vẫn giới hạn giá trị gửi đi
+trong `0.7–1.2`.
 
 ### Piper — TTS chạy trên thiết bị
 

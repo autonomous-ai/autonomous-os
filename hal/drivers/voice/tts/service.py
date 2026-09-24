@@ -2114,6 +2114,9 @@ class TTSService:
 
     def _tts_cache_key(self, text: str) -> str:
         h = hashlib.sha1()
+        revision = getattr(self._backend, "cache_revision", "")
+        if revision:
+            h.update(revision.encode("utf-8") + b"\x00")
         h.update(self._provider.encode("utf-8"))
         h.update(b"\x00")
         h.update((self._voice or "").encode("utf-8"))

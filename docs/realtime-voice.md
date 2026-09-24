@@ -894,6 +894,20 @@ as the user. Note what it does **not** say:
 it reports whether a reference *arrived*, not whether cancellation *worked*, so
 a frame with 0.9 dB of ERLE still counts as cancelled.
 
+### ElevenLabs v3 playback speed
+
+For ElevenLabs HTTP requests whose effective model is `eleven_v3` (including
+the `tts-1` fallback), HAL requests provider `speed=1.0` and applies
+`config.json`'s `tts_speed` locally through the existing `get_tts_speed` path.
+A streaming ffmpeg `atempo` filter changes duration while preserving pitch,
+before resampling, speaker output, and AEC reference capture. Speed `1.0`
+bypasses the filter. ffmpeg is already included in device provisioning.
+
+The v3 WAV cache key includes a discriminator so previously synthesized v3
+audio is not reused under this speed policy. This changes playback duration;
+it does not reduce provider time to first byte (TTFB). Other TTS backends keep
+their existing speed behavior.
+
 ### Why there is no voice-driven interrupt on the cancelled mic
 
 A local detector ("barge-in": stop TTS when the user talks over it) shipped

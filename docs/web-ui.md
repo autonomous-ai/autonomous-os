@@ -135,8 +135,8 @@ Defined at `.lm-root` in `index.css`:
 shows the provider range (`0.7–1.2×` for ElevenLabs, `0.25–4.0×` otherwise)
 in `0.05` steps. **Save Changes** persists speed through
 `PUT /api/device/config`; save before using **Test Voice**. Saved speed takes
-precedence over `HAL_TTS_SPEED` (default `1.3`); ElevenLabs clamps the outgoing
-speed to `0.7–1.2`.
+precedence over `HAL_TTS_SPEED` (default `1.2`); ElevenLabs HTTP v3 applies speed locally while requesting provider speed
+`1.0`; other ElevenLabs models clamp the outgoing speed to `0.7–1.2`.
 
 **AI Brain key/URL mirroring.** The panel fills a blank TTS or STT field from the
 AI Brain's key and base URL, so a first-time setup only asks for one credential.
