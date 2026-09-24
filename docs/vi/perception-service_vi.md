@@ -44,7 +44,9 @@ Khi dev một node, có thể gọi thẳng `dlserver:8001` với mã hóa tắt
 
 Các subsystem perception expose cho thiết bị: nhận dạng hành động, cảm xúc khuôn mặt,
 cảm xúc giọng nói (SER), ước lượng tư thế (kèm công thái học RULA), phát hiện vật thể
-và embedding người nói. Phát hiện khuôn mặt và phát hiện người chạy nội bộ để cấp dữ
+và embedding người nói. `/emotion-recognize` nhận `raw: true`, trả về argmax chưa
+qua gate cùng xác suất của mọi class; HAL dùng chế độ này và tự áp gate theo label
+trên thiết bị. Phát hiện khuôn mặt và phát hiện người chạy nội bộ để cấp dữ
 liệu cho các pipeline đó. Các request từ nhiều session đồng thời được gom lại (batch)
 trước khi gửi lên GPU — cấu hình `BATCH_SIZE` và `BATCH_TIMEOUT` cho từng model.
 Input được giới hạn kích thước (ảnh, audio) để chống tấn công DoS — xem
