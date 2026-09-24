@@ -1,6 +1,7 @@
 """Preserve Gemini interaction status dropped by older google-genai converters."""
 
 from contextvars import ContextVar
+from collections import Counter
 import json
 import logging
 import uuid
@@ -16,6 +17,7 @@ class _StatusWebSocket:
         self._current_receive = current_receive
         self._trace_id = uuid.uuid4().hex[:12]
         self._receive_seq = 0
+        self._endpoint_counts = Counter()
 
     def __getattr__(self, name):
         return getattr(self._socket, name)
@@ -31,6 +33,11 @@ class _StatusWebSocket:
             except (ValueError, TypeError, UnicodeError):
                 payload = None
             content = payload.get("serverContent") if isinstance(payload, dict) else None
+            if isinstance(payload, dict):
+                capture["endpoint_wire"] = {
+                    key: payload.get(key) for key in ("voiceActivity", "voiceActivityDetectionSignal")
+                }
+                capture["speech_state"] = content.get("speechState") if isinstance(content, dict) else None
             status = content.get("interactionStatus") if isinstance(content, dict) else None
             if isinstance(content, dict):
                 transcription = content.get("outputTranscription")
@@ -49,6 +56,36 @@ class _StatusWebSocket:
                     )
             capture["status"] = status if isinstance(status, str) else None
         return raw
+
+    def trace_endpoint(self, capture, message):
+        """Diagnose missing signals without changing SDK messages or VAD setup.
+
+        Counts belong to this socket, never a user interaction. Only enums and
+        offsets are logged; no audio, transcripts, credentials or full payloads.
+        """
+        wire = capture.get("endpoint_wire", {})
+        activity = wire.get("voiceActivity")
+        legacy = wire.get("voiceActivityDetectionSignal")
+        parsed = getattr(message, "voice_activity", None)
+        counts = self._endpoint_counts
+        counts["messages"] += 1
+        counts["wire_activity"] += int(isinstance(activity, dict))
+        counts["sdk_activity"] += int(parsed is not None)
+        counts["wire_legacy"] += int(isinstance(legacy, dict))
+        counts["wire_speech_state"] += int(capture.get("speech_state") is not None)
+        content = message.server_content
+        counts["input_transcriptions"] += int(getattr(content, "input_transcription", None) is not None)
+        if isinstance(activity, dict):
+            logger.info(
+                "[realtime][endpoint-wire] session=%s type=%s audio_offset=%s sdk_type=%s sdk_offset=%s",
+                self._trace_id, activity.get("type"), activity.get("audioOffset"),
+                getattr(parsed, "voice_activity_type", None), getattr(parsed, "audio_offset", None),
+            )
+        if (isinstance(activity, dict) or isinstance(legacy, dict)
+                or capture.get("speech_state") is not None
+                or getattr(content, "turn_complete", False)):
+            logger.info("[realtime][endpoint-coverage] session=%s counts=%s",
+                        self._trace_id, dict(counts))
 
 
 def install_interaction_status(session):
@@ -70,6 +107,11 @@ def install_interaction_status(session):
         token = current_receive.set(capture)
         try:
             message = await original_receive()
+            try:
+                session._ws.trace_endpoint(capture, message)
+            except Exception:
+                # Diagnostics must never abort a receive or alter playback.
+                logger.exception("[realtime] endpoint observation failed")
             status = capture.get("status")
             if status is not None and message.server_content is not None:
                 content = message.server_content.model_copy(
