@@ -628,7 +628,7 @@ async def mic_level_stream(request: Request):
             payload = json.dumps(
                 {
                     "level": round(level, 1),
-                    "threshold": vad_threshold,
+                    "threshold": float(getattr(vs, "vad_threshold", vad_threshold)) if vs else vad_threshold,
                     "active": active,
                     "muted": state._mic_muted,
                     # present = sound perception exists (noise bar should render,

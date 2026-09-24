@@ -1454,3 +1454,22 @@ Test local/mock không xác nhận độ chính xác provider hoặc hành vi th
 Xem [chọn agent Harness](harness_vi.md#chọn-agent-harness-bằng-jev).
 
 Activity follow-up voice: `POST /voice/followup/activity` của HAL nhận `{interaction_id, run_id, phase}` (`start`, `end`, `cancel`) chỉ cho interaction đã được voice gate cho phép. OS giữ trạng thái xử lý đến khi các yêu cầu TTS bất đồng bộ được tiếp nhận; HAL đợi phát xong audio của turn rồi mới đếm wake idle window. Terminal im lặng/lỗi và cancel giải phóng hold; metadata run có giới hạn 5 phút, kể cả để cancel sau khi xử lý xong. HTTP có timeout 250 ms. Xem [realtime voice](realtime-voice_vi.md).
+
+## Tương quan input Harness chồng nhau
+
+OS gắn response route với `idempotencyKey` hiện có trước dispatch. Event khớp device
+run ID và/hoặc key (`payload.idempotencyKey` hoặc `payload.receipt.idempotencyKey`);
+không fallback khi tương quan tường minh không khớp. Event legacy chỉ có agent ID
+cần đúng một route pending trên agent chưa từng overlap. Dấu overlap giữ theo agent
+suốt vòng đời tiến trình OS-server, kể cả route tương lai sau khi các lượt cũ xong,
+để duplicate mơ hồ đến muộn không hoàn tất nhầm lượt. Ưu tiên `fullText` của summary;
+agent đã overlap không dùng latest-recap fallback hay recovery qua `turn.done`.
+
+Voice Harness-only đồng thời chờ có thể hủy đến khi RPC dispatch/receipt trước trả
+về, không chờ task từ xa hoàn tất. Tối đa 64 delivery chưa rõ được giữ RAM; `Pending`
+hiện có hiển thị request cũ nhất, kiểm receipt/resolve chuyển sang request tiếp.
+Input mới không ghi đè delivery chưa rõ hay gửi lại mù quáng. Progress receipt phân
+biệt queued với delivered/started. App cần mang key hiện có hoặc run ID khớp trên
+event summary/tool/question khi overlap; thiếu tương quan thì bỏ qua. Không thêm
+field wire mới. Test local/mock bao phủ OS, chưa chứng minh steering app thật hay
+end-to-end overlap. Không tự deploy thiết bị.

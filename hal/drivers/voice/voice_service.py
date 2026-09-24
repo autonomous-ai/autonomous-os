@@ -39,10 +39,15 @@ from hal.realtime.orchestrator import (
 )
 from hal.realtime.utils import StreamingResampler, pcm16_bytes_to_float32, resample_float32
 from hal.drivers.voice._internal import config as voice_cfg
+from hal.drivers.voice._internal import live_playback
+from hal.drivers.voice._internal.live_gate import AdaptiveLiveGate
+from hal.drivers.voice._internal.live_reply import LiveReplyGuard
 from hal.drivers.voice._internal.audio_dsp import resample_to_stt, rms
 from hal.drivers.voice._internal.audio_recorder import ArecordStream
 from hal.drivers.voice._internal.realtime_turn import (
     _WaitFiller,
+    _filter_system_error_tts,
+    _pending_system_error_tts,
     ROUTE_DELEGATED,
     ROUTE_NOISE_DROPPED,
     split_first_chunk,
@@ -147,6 +152,12 @@ class VoiceService:
         )
         cleaned: str = VoiceService.RT_MARKER_RE.sub("", text)
         cleaned = re.sub(r"  +", " ", cleaned).strip()
+        # A provider silence marker can precede real text or an error, and
+        # can arrive split across events. Keep quoted/embedded mentions intact.
+        cleaned = re.sub(r"^(?:<\s*no\s+speech\s*>\s*)+", "", cleaned, flags=re.IGNORECASE)
+        partial = " ".join(cleaned.lower().split())
+        if partial and "<no speech>".startswith(partial):
+            return ""
         return cleaned
 
     def __init__(
@@ -166,6 +177,10 @@ class VoiceService:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._listening = False
+        self._live_gate = AdaptiveLiveGate() if live_playback.ENABLED else None
+        self._aec_live_replies = LiveReplyGuard() if getattr(self, "_live_gate", None) is not None else None
+        self._aec_live_diag_next = 0.0
+        self._aec_live_last_upload_ms = 0.0
         # Live (full-duplex) session state — see _live_session. The generation
         # counter exists because the output pump can still be blocked inside
         # receive() when its session ends and join() gives up before that: it
@@ -445,6 +460,12 @@ class VoiceService:
         """Unix ts of the last non-empty STT transcript (partial or final).
         0.0 until someone has spoken. See _last_transcript_ts above."""
         return self._last_transcript_ts
+
+    @property
+    def vad_threshold(self) -> float:
+        if getattr(self, "_live_gate", None) is not None:
+            return self._live_gate.threshold * 32768.0
+        return voice_cfg.RMS_THRESHOLD
 
     @property
     def mic_level(self) -> float:
@@ -849,6 +870,11 @@ class VoiceService:
                     )
                 mic_ctx = aec.wrap_mic(mic_ctx, device_rate, self._np)
                 with mic_ctx as mic:
+                    if getattr(self, "_live_gate", None) is not None:
+                        # Hardware AEC convergence belongs to the open device,
+                        # not each logical provider listening window.
+                        self._live_gate.reset()
+                        self._aec_live_played_start = live_playback.played_seconds()
                     logger.info(
                         "Listening for speech (RMS=%d, rate=%dHz, backend=%s)...",
                         voice_cfg.RMS_THRESHOLD,
@@ -1030,20 +1056,20 @@ class VoiceService:
             self._mic_level = energy
             self._mic_level_ts = time.time()
 
-            if (
-                energy >= voice_cfg.RMS_THRESHOLD
-                and self._webrtcvad_is_speech(data, device_rate)
-            ):
+            aec_live_entry = self._hardware_aec_live_entry()
+            if self._vad_entry_is_speech(data, device_rate, energy):
                 if speech_start is None:
                     speech_start = time.time()
                     speech_pre_buffer = [data]
                 else:
                     speech_pre_buffer.append(data)
                 # Wait for holdoff before connecting STT (avoid short noises).
-                if (time.time() - speech_start) >= voice_cfg.SPEECH_HOLDOFF_S:
+                held_s = (sum(len(frame) for frame in speech_pre_buffer) / device_rate
+                          if aec_live_entry else time.time() - speech_start)
+                if held_s >= (0.16 if aec_live_entry else voice_cfg.SPEECH_HOLDOFF_S):
                     # Run Silero on the accumulated buffer (needs multiple
                     # chunks for its LSTM).
-                    if self._silero_vad is not None:
+                    if not aec_live_entry and self._silero_vad is not None:
                         combined = self._np.concatenate(speech_pre_buffer)
                         if not self._silero_is_speech(combined, device_rate):
                             speech_start = None
@@ -1166,6 +1192,19 @@ class VoiceService:
     # ------------------------------------------------------------------
     # Live (full-duplex) session — the VAD is a doorbell, the model endpoints
     # ------------------------------------------------------------------
+    def _hardware_aec_live_entry(self) -> bool:
+        # Preserve STT wake-word validation when focus has not been granted.
+        return (isinstance(getattr(self, "_live_gate", None), AdaptiveLiveGate)
+                and hal_config.REALTIME_ENABLED
+                and (not hal_config.WAKEWORD_ENABLED or self._wakeword_focus.is_active()))
+
+    def _vad_entry_is_speech(self, data, rate, energy):
+        if self._hardware_aec_live_entry():
+            threshold = self._live_gate.idle_threshold(energy / 32768.0, len(data) / rate)
+            return energy >= threshold * 32768.0
+        return (energy >= voice_cfg.RMS_THRESHOLD
+                and self._webrtcvad_is_speech(data, rate))
+
     def _live_decision(self, pre_roll: list) -> str:
         """What this VAD trigger should become: "live", "turn" or "skip".
 
@@ -1184,7 +1223,7 @@ class VoiceService:
             logger.info("[live] music playing — not opening a live session")
             return "skip"
 
-        if pre_roll:
+        if pre_roll and not VoiceService._hardware_aec_live_entry(self):
             try:
                 pcm = self._np.frombuffer(b"".join(pre_roll), dtype=self._np.int16)
                 if not self._rt_noise_is_speech(pcm):
@@ -1282,7 +1321,53 @@ class VoiceService:
         if self._tts.realtime_speaking:
             self._tts.stop(preserve_main_queue=True)
 
-    def _live_out_pump(self, generation: int, harness_voice=None, cues=None, opener=None) -> None:
+    def _live_quiet_for(self, now, user_spoke_at, last_reply_end):
+        # Text/audio arriving from the provider is reply progress even before
+        # ElevenLabs has its first sentence or first playable audio chunk.
+        return now - max(user_spoke_at, last_reply_end,
+                         self._live_last_model_output)
+
+    def _live_idle_pending_speech(self, now, quiet_for, last_user_speech):
+        """Give a pending hardware-AEC utterance one bounded transcript window."""
+        timeout = voice_cfg.LIVE_IDLE_HANGUP_S
+        if quiet_for <= timeout:
+            self._live_idle_speech_deadline = 0.0
+            return False
+        if not voice_cfg.LIVE_IDLE_REQUIRES_TRANSCRIPT or getattr(self, "_live_gate", None) is None:
+            return False
+        deadline = self._live_idle_speech_deadline
+        if not deadline:
+            # Allow server endpointing plus delivery time after local speech.
+            recent_s = max(1.0, hal_config.LIVE_VAD_SILENCE_MS / 1000) + 1.0
+            if now - last_user_speech > recent_s:
+                return False
+            # Local noise may look like speech; it cannot renew this deadline.
+            self._live_idle_speech_deadline = deadline = now + timeout
+            logger.info("[live] idle hangup deferred for pending speech (max %.1fs)", timeout)
+        return now < deadline
+
+    def _aec_live_interrupt_reply(self, reason, key=None):
+        if reason == "local_speech":
+            # Energy can be residual speaker echo. Match the demo's duck mode:
+            # reduce volume reversibly, but only the provider may cancel a reply.
+            live_playback.duck(True)
+            logger.info("[live-aec] local speech candidate: duck only; awaiting provider interrupt")
+            return False
+        guard = getattr(self, "_aec_live_replies", None)
+        if guard is None:
+            return
+        before = self._tts_is_speaking()
+        affected = guard.cancel(self._tts.stop_realtime_reply, key=key)
+        if affected:
+            gate = getattr(self, "_live_gate", None)
+            if gate is not None:
+                gate.clear_duck()
+            live_playback.duck(False)
+        logger.info("[live-aec] interrupt requested reason=%s reply=%s affected=%s speaking_before=%s",
+                    reason, key, affected, before)
+        return affected
+
+    def _live_out_pump(self, generation: int, harness_voice=None, cues=None, opener=None, stop_event=None) -> None:
         """Play what the model says, for as long as the session lasts.
 
         Deliberately loops orchestrator.stream_output() rather than reading the
@@ -1347,8 +1432,24 @@ class VoiceService:
             if key in focus_held:
                 # Finish only after the final buffered sentence is admitted.
                 focus_refreshed.add(key)
+
+        live_replies = getattr(self, "_aec_live_replies", None)
+
+        def speak_live(text, iid, key, first=False):
+            def enqueue():
+                if not first or not self._tts.speak(text, turn_id=iid, realtime_reply=True):
+                    self._tts.speak_queue(text, turn_id=iid, realtime_reply=True)
+            if live_replies is None:
+                enqueue()
+                return True
+            return live_replies.play(key, enqueue)
         metrics = LiveVoiceMetrics()
-        history = LiveHistory(self._sensing_sender, harness_voice, self.strip_rt_markers)
+        # Apply the same suppression before OS/Main history sync as before TTS.
+        # Clean the assembled reply so templates split across events still match.
+        history = LiveHistory(
+            self._sensing_sender, harness_voice,
+            lambda text: _filter_system_error_tts(self.strip_rt_markers(text), log=False),
+        )
 
         def bind_opener(key):
             # The confirmed capture is the first input sent after the live
@@ -1374,20 +1475,38 @@ class VoiceService:
                     return
             metrics.complete(key, completed)
 
+        deferred_error_tail = None
+        fallback_sequence = 0
         while self._live_running and generation == self._live_generation:
+            fallback_sequence += 1
+            fallback_key = ("unkeyed", generation, fallback_sequence)
             native_started = False
             transcript = ""
             # False => Gemini was opened TEXT-only and OUR TTS speaks the reply.
             native = hal_config.REALTIME_NATIVE_AUDIO
             sentence_buf = ""
+            buffer_reply_key = ""
             first_sent = False
             speech_iid = ""
             buffer_mixed = False
             native_owner = ""
             try:
-                for out in self._realtime.stream_output():
+                output_options = {"stop_event": stop_event} if stop_event is not None else {}
+                for out in self._realtime.stream_output(**output_options):
                     if not (self._live_running and generation == self._live_generation):
                         break
+                    if (deferred_error_tail is not None
+                            and isinstance(out, (RejectSignal, DelegateSignal, RTInterruptedOutput))
+                            and (not out.user_turn_id or out.user_turn_id == deferred_error_tail[0])):
+                        deferred_error_tail = None
+                    if live_replies is not None:
+                        if sentence_buf and not live_replies.allowed(buffer_reply_key):
+                            sentence_buf = ""
+                            first_sent = False
+                        if isinstance(out, (RTAudioOutput, RTTextOutput)):
+                            key = getattr(out, "user_turn_id", "") or fallback_key
+                            if not live_replies.observe(key):
+                                continue
                     if isinstance(out, (UserSpeechOutput, RTAudioOutput, RTTextOutput, DelegateSignal, RejectSignal)):
                         bind_opener(getattr(out, "user_turn_id", "") or getattr(out, "turn_id", ""))
                     if isinstance(out, UserSpeechOutput):
@@ -1518,6 +1637,20 @@ class VoiceService:
                         # The first output transcript also sends an audio reset;
                         # that is not evidence of a user asking us to stop.
                         if out.reason == "server_interrupt":
+                            if getattr(self, "_live_gate", None) is not None:
+                                logger.info(
+                                    "[live-aec] interrupt received: tts_speaking=%s realtime=%s native=%s buffered_chars=%d",
+                                    self._tts_is_speaking(), bool(self._tts and self._tts.realtime_speaking),
+                                    native_started, len(sentence_buf),
+                                )
+                                if self._aec_live_interrupt_reply("provider", out.user_turn_id or None):
+                                    sentence_buf = ""
+                                    first_sent = False
+                                    if native_started:
+                                        self._tts.native_play_end(transcript)
+                                        native_started = False
+                                    transcript = ""
+                                    logger.info("[live-aec] provider interrupt: stop requested; confirm playback state in live-aec")
                             if opener is not None:
                                 opener["consumed"] = True
                             rejected_inputs.add(out.user_turn_id)
@@ -1550,29 +1683,43 @@ class VoiceService:
                             response_inputs.add(out.user_turn_id)
                         if cues is not None:
                             cues.finish(out.user_turn_id)
-                        owner = metrics.owner(out.user_turn_id)
-                        if native_started and owner != native_owner:
-                            self._tts.set_native_playback_owner(owner)
-                            native_owner = owner
-                        if not native_started:
-                            native_started = self._tts is not None and (
-                                self._tts.native_play_begin(
-                                    self._realtime.output_sample_rate, owner=owner,
+                        def write_native():
+                            nonlocal native_started, native_owner
+                            owner = metrics.owner(out.user_turn_id)
+                            if native_started and owner != native_owner:
+                                self._tts.set_native_playback_owner(owner)
+                                native_owner = owner
+                            if not native_started:
+                                native_started = self._tts is not None and (
+                                    self._tts.native_play_begin(
+                                        self._realtime.output_sample_rate, owner=owner,
+                                    )
                                 )
-                            )
-                            native_owner = owner
-                        if native_started:
-                            if opener is not None:
-                                opener["consumed"] = True
-                            self._tts.native_play_frame(out.audio)
-                            if opener is not None:
-                                if out.user_turn_id and out.user_turn_id == opener["key"]:
-                                    opener["replied"] = True
+                                native_owner = owner
+                            if native_started:
+                                if opener is not None:
+                                    opener["consumed"] = True
+                                self._tts.native_play_frame(out.audio)
+                                if opener is not None:
+                                    if out.user_turn_id and out.user_turn_id == opener["key"]:
+                                        opener["replied"] = True
+                        if live_replies is None:
+                            write_native()
+                        else:
+                            live_replies.play(out.user_turn_id or fallback_key, write_native)
                         if out.transcript:
                             history.output(out.user_turn_id, out.transcript)
                             transcript += out.transcript
                         continue
                     if isinstance(out, RTTextOutput):
+                        if deferred_error_tail is not None:
+                            owner, prefix = deferred_error_tail
+                            if out.user_turn_id == owner:
+                                sentence_buf = prefix + sentence_buf
+                                buffer_reply_key = owner
+                                speech_iid = metrics.interaction(owner)
+                            # Never attach a held fragment to a different turn.
+                            deferred_error_tail = None
                         if out.user_turn_id:
                             response_inputs.add(out.user_turn_id)
                         history.output(out.user_turn_id, out.text)
@@ -1584,6 +1731,7 @@ class VoiceService:
                         if not iid:
                             metrics.owner(out.user_turn_id)  # coverage only
                         if not sentence_buf:
+                            buffer_reply_key = out.user_turn_id or fallback_key
                             speech_iid = iid
                             buffer_mixed = False
                         elif iid != speech_iid:
@@ -1594,6 +1742,14 @@ class VoiceService:
                             speech_iid = ""
                         iid = speech_iid
                         sentence_buf += out.text
+                        visible = self.strip_rt_markers(sentence_buf)
+                        if _pending_system_error_tts(visible):
+                            continue
+                        filtered = _filter_system_error_tts(visible)
+                        if filtered != visible.strip():
+                            sentence_buf = filtered
+                        if not filtered:
+                            continue
                         if not first_sent:
                             head, rest = split_first_chunk(sentence_buf)
                             head = self.strip_rt_markers(head) if head else ""
@@ -1602,8 +1758,7 @@ class VoiceService:
                                     cues.finish(out.user_turn_id)
                                 if opener is not None:
                                     opener["consumed"] = True
-                                if not self._tts.speak(head, turn_id=iid, realtime_reply=True):
-                                    self._tts.speak_queue(head, turn_id=iid, realtime_reply=True)
+                                speak_live(head, iid, buffer_reply_key, first=True)
                                 if opener is not None:
                                     opener["consumed"] = True
                                     if iid == opener["interaction_id"]:
@@ -1619,12 +1774,14 @@ class VoiceService:
                                     cues.finish(out.user_turn_id)
                                 if opener is not None:
                                     opener["consumed"] = True
-                                self._tts.speak_queue(sentence, turn_id=iid, realtime_reply=True)
+                                speak_live(sentence, iid, buffer_reply_key)
                                 if opener is not None:
                                     if iid == opener["interaction_id"]:
                                         opener["replied"] = True
                             sentence_buf = ""
                         continue
+                if stop_event is not None and stop_event.is_set():
+                    break
                 if getattr(self._realtime, "execution_completed", False) is True:
                     refresh_focus(getattr(self._realtime, "execution_turn_id", ""))
                 if cues is not None:
@@ -1647,15 +1804,24 @@ class VoiceService:
                 # A stopped promoted session has handed its unanswered opener
                 # back to main. A late receive exit must not enqueue its old tail.
                 if (not native and sentence_buf.strip()
-                        and (opener is None or (self._live_running
-                             and generation == self._live_generation))):
-                    tail = self.strip_rt_markers(sentence_buf)
+                        and self._live_running and generation == self._live_generation
+                        and not (stop_event is not None and stop_event.is_set())):
+                    visible_tail = self.strip_rt_markers(sentence_buf)
+                    if (_pending_system_error_tts(visible_tail)
+                            and not getattr(self._realtime, "execution_completed", False)):
+                        # Receive timeout is not a provider terminal. Preserve
+                        # only attributed candidates until the next fragment.
+                        if isinstance(buffer_reply_key, str) and buffer_reply_key:
+                            deferred_error_tail = (buffer_reply_key, sentence_buf)
+                        tail = ""
+                    else:
+                        tail = _filter_system_error_tts(visible_tail)
                     if tail:
                         if cues is not None:
                             cues.finish(getattr(self._realtime, "execution_turn_id", ""))
                         if opener is not None:
                             opener["consumed"] = True
-                        self._tts.speak_queue(tail, turn_id=speech_iid, realtime_reply=True)
+                        speak_live(tail, speech_iid, buffer_reply_key)
                         if opener is not None:
                             if speech_iid == opener["interaction_id"]:
                                 opener["replied"] = True
@@ -1707,6 +1873,13 @@ class VoiceService:
         harness_voice = read_voice_mode() if harness_voice is None else harness_voice
         if bypass_realtime(harness_voice):
             return False
+        if getattr(self, "_live_gate", None) is not None:
+            self._live_gate.reset()
+            if not hasattr(self, "_aec_live_played_start"):
+                self._aec_live_played_start = live_playback.played_seconds()
+            self._aec_live_replies = LiveReplyGuard()
+            live_playback.duck(False)
+            logger.info("[live-aec] adaptive echo gate active; local duck enabled")
         next_mode_check = time.monotonic() + 0.5
         self._live_generation += 1
         generation = self._live_generation
@@ -1739,6 +1912,7 @@ class VoiceService:
                 logger.warning("[live] uplink dump could not be opened: %s", e)
                 uplink_dump = None
         last_user_speech = started
+        self._live_idle_speech_deadline = 0.0
         # When the device last had the floor. The model talking is NOT action
         # from the user, but hanging up mid-reply would be wrong, so the K
         # window runs from whichever came later: the user's last words, or the
@@ -1775,9 +1949,10 @@ class VoiceService:
         cues = LiveVoiceCues(
             addressed=lambda text: self._live_emotion_addressed(text, harness_voice),
         )
+        pump_stop = threading.Event()
         pump = threading.Thread(
             target=self._live_out_pump,
-            args=(generation, harness_voice, cues, opener),
+            args=(generation, harness_voice, cues, opener, pump_stop),
             daemon=True,
             name="live-out",
         )
@@ -1822,8 +1997,9 @@ class VoiceService:
                     if voice_cfg.LIVE_IDLE_REQUIRES_TRANSCRIPT
                     else last_user_speech
                 )
-                quiet_for = now - max(user_spoke_at, last_reply_end)
-                if quiet_for > voice_cfg.LIVE_IDLE_HANGUP_S:
+                quiet_for = self._live_quiet_for(now, user_spoke_at, last_reply_end)
+                pending_speech = self._live_idle_pending_speech(now, quiet_for, last_user_speech)
+                if quiet_for > voice_cfg.LIVE_IDLE_HANGUP_S and not pending_speech:
                     logger.info(
                         "[live] no user action for %.0fs — hanging up, VAD resumes",
                         quiet_for,
@@ -1843,16 +2019,59 @@ class VoiceService:
                     # The frame is already lost. Substitute rather than splice.
                     data = self._np.zeros_like(data)
                 # Track playback edges even when capture overflowed.
-                data = self._live_uplink_frame(data)
+                if getattr(self, "_live_gate", None) is not None:
+                    raw_rms = rms(data, self._np)
+                    input_samples = len(data)
+                    # Pending synthesis is not audible playback. In particular,
+                    # a TTS error/retry must never mute the user's microphone.
+                    playback = self._tts_is_speaking() and live_playback.is_playing()
+                    output_level = live_playback.level()
+                    was_speaking = self._live_gate.speaking
+                    was_ducked = self._live_gate.duck
+                    played_seconds = max(0.0, live_playback.played_seconds() - self._aec_live_played_start)
+                    data = self._live_gate.process(
+                        data.reshape(-1), device_rate, playback, output_level,
+                        playback_seconds=played_seconds,
+                    )
+                    gated = self._live_gate.risk and not self._live_gate.speaking
+                    replay_ms = max(0, len(data) - input_samples) * 1000 / device_rate
+                    self._live_frames_during_playback += int(playback)
+                    self._live_frames_substituted += int(gated)
+                    tick = time.monotonic()
+                    if (tick >= self._aec_live_diag_next or replay_ms
+                            or was_ducked != self._live_gate.duck):
+                        self._aec_live_diag_next = tick + 1.0
+                        logger.info(
+                            "[live-aec] mic=%.0f out=%.0f threshold=%.0f noise=%.0f "
+                            "echo_db=%.1f playback=%s realtime=%s speech=%s gate=%s "
+                            "candidate=%s duck=%s prefix_ms=%.0f last_upload_ms=%.1f played_s=%.2f aec_ready=%s",
+                            raw_rms, output_level * 32768, self._live_gate.threshold * 32768,
+                            self._live_gate.noise * 32768, self._live_gate.coupling_db,
+                            playback, bool(self._tts and self._tts.realtime_speaking),
+                            self._live_gate.speaking, gated, self._live_gate.duck,
+                            live_playback.snapshot()['duck'], replay_ms, self._aec_live_last_upload_ms,
+                            played_seconds, played_seconds >= self._live_gate.AEC_WARMUP_S,
+                        )
+                    data = data.reshape(-1, 1)
+                    live_playback.duck(self._live_gate.duck)
+                    if self._live_gate.barge_in:
+                        # Local energy is a candidate, not a cancellation verdict.
+                        self._aec_live_interrupt_reply("local_speech")
+                    if self._live_gate.speaking and not was_speaking:
+                        logger.info("[live-aec] speech confirmed threshold=%.0f duck=%s",
+                                    self._live_gate.threshold * 32768, self._live_gate.duck)
+                else:
+                    data = self._live_uplink_frame(data)
                 self._live_frames += 1
 
                 energy = rms(data, self._np)
-                self._mic_level = energy
+                self._mic_level = raw_rms if getattr(self, "_live_gate", None) is not None else energy
                 self._mic_level_ts = now
                 # Feeds ONLY the idle-hangup clock. Not an endpointer and not a
                 # gate — every frame goes up either way.
                 #
-                # RMS alone cannot carry this. In a noisy room the floor sits
+                # Hardware AEC uses its adaptive speech state directly. For other
+                # profiles, RMS alone cannot carry this. In a noisy room the floor sits
                 # above the threshold, so every frame reads as "the user is
                 # talking" and the session never hangs up — device-observed
                 # 2026-09-07 on intern-v2-6286, a ~10500 floor against a
@@ -1861,7 +2080,11 @@ class VoiceService:
                 # Silero confirms before the clock is actually refreshed,
                 # batched over a window rather than run per frame. Identical
                 # treatment to the turn path's silence clock.
-                if energy >= voice_cfg.RMS_THRESHOLD:
+                if getattr(self, "_live_gate", None) is not None:
+                    if self._live_gate.speaking:
+                        last_user_speech = now
+                        self._live_unprompted_replies = 0
+                elif energy >= voice_cfg.RMS_THRESHOLD:
                     silence_probe.append(data)
                     if len(silence_probe) >= max(
                         1, voice_cfg.SILENCE_VAD_WINDOW_FRAMES
@@ -1879,7 +2102,10 @@ class VoiceService:
                 )
                 if uplink_dump is not None:
                     uplink_dump.writeframes(uplink_frame)
+                upload_started = time.monotonic()
                 self._realtime.append_audio(self._to_realtime(uplink_frame))
+                if getattr(self, "_live_gate", None) is not None:
+                    self._aec_live_last_upload_ms = (time.monotonic() - upload_started) * 1000
         except Exception as e:
             logger.warning("[live] session error: %s", e)
         finally:
@@ -1889,10 +2115,18 @@ class VoiceService:
                     uplink_dump.close()
                 except Exception:
                     pass
+            if getattr(self, "_live_gate", None) is not None:
+                live_playback.duck(False)
+                self._live_gate.reset()
             self._live_running = False
             self._listening = False
+            # Release the queue reader before a following session can reuse it.
+            # A timed join alone left the old reader blocked for up to 8 seconds,
+            # allowing it to steal and discard the next session's first output.
+            pump_stop.set()
+            pump.join()
+            self._realtime.end_live_audio()
             self._realtime.set_live_active(False)
-            pump.join(timeout=2.0)
             self._live_stop_output()
             logger.info(
                 "[live] session END after %.0fs — %d frames, %d during playback, "

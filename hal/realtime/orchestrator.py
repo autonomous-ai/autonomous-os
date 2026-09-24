@@ -882,7 +882,7 @@ class RealtimeOrchestrator:
         # activityEnd can all be rejected with 1008. Fire-and-forget expression
         # calls intentionally skip their Gemini acknowledgement to avoid a
         # duplicate reply, so replace that session before the next capture.
-        # A spoken handoff also quarantines the session: late provider output
+        # A handoff also quarantines the session: late provider output
         # must not start a response/grace belonging to the next user capture.
         if (
             provider == "gemini"
@@ -890,7 +890,7 @@ class RealtimeOrchestrator:
             and agent.requires_fresh_session
         ):
             logger.info(
-                "[realtime] Rebuilding Gemini session after unresolved tool or spoken handoff before streaming audio"
+                "[realtime] Rebuilding Gemini session after unresolved tool or handoff before streaming audio"
             )
             if self._rebuild_now(
                 "gemini-unresolved-tool-call", discard_old_on_failure=True
@@ -1201,6 +1201,17 @@ class RealtimeOrchestrator:
         if self._agent is not None:
             self._agent.append_audio(frame)
 
+    def end_live_audio(self) -> bool:
+        """Queue the paused live uplink boundary on the current transport only."""
+        with self._lifecycle_lock:
+            agent = self._agent
+            if agent is None or not agent.available:
+                return False
+            session = agent.audio_session
+            if session is None:
+                return False
+            return agent.end_audio_stream(session=session)
+
     def commit_audio(self, *, turn: AudioTurnBinding | None = None) -> None:
         """Queue commit signal (non-blocking)."""
         if turn is not None:
@@ -1258,6 +1269,7 @@ class RealtimeOrchestrator:
     def stream_output(
         self,
         *, turn: AudioTurnBinding | None = None,
+        stop_event: threading.Event | None = None,
     ) -> Generator[OutputBase | DelegateSignal | RejectSignal | LookReplaySignal, None, None]:
         """Yield outputs from the model one by one as they arrive.
 
@@ -1282,7 +1294,12 @@ class RealtimeOrchestrator:
         self._looked_this_turn = False  # reset the per-turn `look` image-send guard
         produced = False  # did this turn yield any real output (vs stay silent)?
         replay_pending = False  # look-replay signalled — the turn continues
-        for output in execution_agent.receive(stop_on_done=True):
+        receive_kwargs: dict[str, Any] = {"stop_on_done": True}
+        if stop_event is not None:
+            receive_kwargs["stop_event"] = stop_event
+        for output in execution_agent.receive(**receive_kwargs):
+            if stop_event is not None and stop_event.is_set():
+                return
             if turn is not None:
                 self._validate_audio_turn(turn)
             if isinstance(output, MainAgentFallbackOutput):
@@ -1482,6 +1499,11 @@ class RealtimeOrchestrator:
 
         if turn is not None:
             self._validate_audio_turn(turn)
+
+        # Session cancellation is not a silent/completed model turn and must
+        # not trigger lifecycle accounting or a post-turn rebuild.
+        if stop_event is not None and stop_event.is_set():
+            return
 
         # Capture the consumed terminal before any post-turn recycle swaps agents.
         self.execution_completed = (

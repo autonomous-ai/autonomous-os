@@ -1485,3 +1485,23 @@ credentials. Local/mock tests do not establish provider accuracy or device behav
 See [Harness agent selection](harness.md#jev-harness-agent-selection).
 
 Voice follow-up activity: `POST /voice/followup/activity` on HAL accepts `{interaction_id, run_id, phase}` (`start`, `end`, `cancel`) only for a locally authorized voice interaction. OS holds processing through asynchronous TTS admission, then HAL waits for owned playback before starting the wake idle window. Silent/error terminals and cancellation release the hold; run metadata is bounded to five minutes, including cancellation after processing ends. Delivery uses a 250 ms timeout. See [realtime voice](realtime-voice.md).
+
+## Correlating overlapping Harness inputs
+
+OS binds each response route to the existing dispatch `idempotencyKey` before
+sending. Events match the device run ID and/or key (`payload.idempotencyKey` or
+`payload.receipt.idempotencyKey`); explicit mismatches never fall back. Agent-only
+legacy events require a unique pending route on an agent that has never overlapped.
+Overlap is sticky for that agent for the OS-server process lifetime, including
+future routes after siblings finish. This prevents late ambiguous duplicates from
+completing the wrong turn. Summary `fullText` is preferred; latest-recap fallback
+and bounded `turn.done` recovery are disabled for agents that have overlapped.
+
+Concurrent Harness-only voice input waits cancellably for the previous dispatch/
+receipt RPC, not remote terminal completion. Up to 64 unresolved deliveries stay
+in RAM; existing `Pending` exposes the oldest, and receipt/resolve advances it.
+New inputs do not overwrite uncertain delivery or blindly resend. Receipt progress
+reports queued separately from delivered/started. The app must carry the existing
+key or matching run ID on overlapping summary/tool/question events; missing
+correlation is ignored. No new wire field is introduced. Local/mock tests cover OS
+behavior, not live app steering or end-to-end overlap. No device deployment is implied.

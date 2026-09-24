@@ -20,7 +20,10 @@ type VoiceTransport interface {
 }
 type VoiceCallbacks struct {
 	OnDispatch func(agentID, runID string)
-	OnResponse func(agentID, runID, text string)
+	// OnDispatchRequest registers delivery correlation before input can reach
+	// the remote engine. When provided it takes precedence over OnDispatch.
+	OnDispatchRequest func(agentID, runID string, frame Frame)
+	OnResponse        func(agentID, runID, text string)
 }
 type VoicePending struct {
 	IdempotencyKey string `json:"idempotencyKey"`
@@ -49,9 +52,44 @@ type voiceQuestionSet struct {
 	RequestID string          `json:"requestId"`
 	Questions []VoiceQuestion `json:"questions"`
 }
+
+// voiceOperationLock serializes wire operations, not remote engine turns.
+type voiceOperationLock struct {
+	once  sync.Once
+	token chan struct{}
+}
+
+func (l *voiceOperationLock) init() { l.once.Do(func() { l.token = make(chan struct{}, 1) }) }
+func (l *voiceOperationLock) TryLock() bool {
+	l.init()
+	select {
+	case l.token <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+func (l *voiceOperationLock) Lock(ctx context.Context) error {
+	l.init()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case l.token <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			l.Unlock()
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+func (l *voiceOperationLock) Unlock() { <-l.token }
+
 type VoiceController struct {
 	mu         sync.Mutex
-	op         sync.Mutex
+	op         voiceOperationLock
 	focusMu    sync.Mutex
 	focusWake  chan struct{}
 	startOnce  sync.Once
@@ -62,6 +100,7 @@ type VoiceController struct {
 	state      VoiceModeState
 	seen       map[string]bool
 	order      []string
+	pending    []*VoicePending
 	question   *voiceQuestionSet
 	answers    map[string]string
 }
@@ -343,29 +382,19 @@ func (v *VoiceController) ready(ctx context.Context, s VoiceModeState) error {
 	if e := v.connected(s.MachineID); e != nil {
 		return e
 	}
-	// An uncertain earlier delivery must not block a new user turn.
-	// Do not reconcile or retry the old mutation automatically here.
-	/*
-		if v.State().Pending != nil {
-			if _, e := v.receipt(ctx); e != nil {
-				return e
-			}
-			if v.State().Pending != nil {
-				return errors.New("Previous Harness delivery is unresolved; inspect its receipt or resolve it without retrying")
-			}
-		}
-	*/
+	// Earlier uncertain deliveries remain inspectable without blocking a new turn.
 	return nil
 }
 func (v *VoiceController) Submit(ctx context.Context, text, runID string, generation uint64) error {
+	if err := v.op.Lock(ctx); err != nil {
+		return err
+	}
+	defer v.op.Unlock()
 	s, duplicate, e := v.begin(runID, generation)
 	if duplicate || e != nil {
 		return e
 	}
-	if !v.op.TryLock() {
-		return errors.New("Harness voice operation is busy; please repeat")
-	}
-	defer v.op.Unlock()
+
 	text = strings.TrimSpace(text)
 	if text == "" || len(text) > 16384 {
 		return errors.New("Voice text must contain 1 to 16384 UTF-8 bytes")
@@ -430,6 +459,10 @@ func (v *VoiceController) Submit(ctx context.Context, text, runID string, genera
 	return v.dispatch(ctx, s, runID, Frame{"type": "question.answer", "questionRequestId": q.RequestID, "answers": answers})
 }
 func (v *VoiceController) Answer(ctx context.Context, questionID string, answers map[string]string, runID string, focusRevision string) error {
+	if err := v.op.Lock(ctx); err != nil {
+		return err
+	}
+	defer v.op.Unlock()
 	s, duplicate, e := v.begin(runID, v.State().Generation)
 	if duplicate || e != nil {
 		return e
@@ -437,10 +470,7 @@ func (v *VoiceController) Answer(ctx context.Context, questionID string, answers
 	if focusRevision == "" || focusRevision != s.FocusRevision {
 		return errors.New("Harness app focus changed; refresh the question")
 	}
-	if !v.op.TryLock() {
-		return errors.New("Harness voice operation is busy")
-	}
-	defer v.op.Unlock()
+
 	if e = v.ready(ctx, s); e != nil {
 		return e
 	}
@@ -493,7 +523,12 @@ func (v *VoiceController) dispatch(ctx context.Context, s VoiceModeState, runID 
 		v.mu.Unlock()
 		return errors.New("Harness voice mode changed; please repeat")
 	}
-	v.state.Pending = p
+	if len(v.pending) >= 64 {
+		v.mu.Unlock()
+		return errors.New("Too many unconfirmed Harness deliveries; inspect or resolve their receipts")
+	}
+	v.pending = append(v.pending, p)
+	v.state.Pending = v.pending[0]
 	v.question = nil
 	v.answers = nil
 	v.mu.Unlock()
@@ -501,7 +536,9 @@ func (v *VoiceController) dispatch(ctx context.Context, s VoiceModeState, runID 
 	f["agentId"] = s.AgentID
 	f["idempotencyKey"] = key
 	f["focusRevision"] = s.FocusRevision
-	if v.callbacks.OnDispatch != nil {
+	if v.callbacks.OnDispatchRequest != nil {
+		v.callbacks.OnDispatchRequest(s.AgentID, runID, f)
+	} else if v.callbacks.OnDispatch != nil {
 		v.callbacks.OnDispatch(s.AgentID, runID)
 	}
 	result, e := v.transport.Request(ctx, f)
@@ -538,8 +575,7 @@ func (v *VoiceController) dispatch(ctx context.Context, s VoiceModeState, runID 
 	}
 	v.mu.Lock()
 	if known {
-		v.state.Pending = nil
-		v.state.Error = ""
+		v.removePendingLocked(key)
 	} else {
 		v.state.Error = "Harness delivery is unconfirmed; inspect the receipt before sending again"
 	}
@@ -570,8 +606,7 @@ func (v *VoiceController) receipt(ctx context.Context) (Frame, error) {
 	if knownVoiceReceipt(f) {
 		v.mu.Lock()
 		if v.state.Pending != nil && v.state.Pending.IdempotencyKey == s.Pending.IdempotencyKey {
-			v.state.Pending = nil
-			v.state.Error = ""
+			v.removePendingLocked(s.Pending.IdempotencyKey)
 		}
 		v.mu.Unlock()
 	}
@@ -594,7 +629,22 @@ func (v *VoiceController) Resolve(resolution, key string) error {
 	if resolution != "do_not_retry" || v.state.Pending == nil || v.state.Pending.IdempotencyKey != key {
 		return errors.New("Resolve requires do_not_retry and the current pending idempotency key")
 	}
+	v.removePendingLocked(key)
+	return nil
+}
+
+// removePendingLocked removes only the reconciled delivery and exposes the oldest.
+func (v *VoiceController) removePendingLocked(key string) {
+	for i, p := range v.pending {
+		if p.IdempotencyKey == key {
+			v.pending = append(v.pending[:i], v.pending[i+1:]...)
+			break
+		}
+	}
 	v.state.Pending = nil
 	v.state.Error = ""
-	return nil
+	if len(v.pending) > 0 {
+		v.state.Pending = v.pending[0]
+		v.state.Error = "Harness delivery is unconfirmed; inspect the receipt before sending again"
+	}
 }

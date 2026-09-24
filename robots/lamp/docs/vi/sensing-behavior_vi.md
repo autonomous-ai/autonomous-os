@@ -807,7 +807,15 @@ Toàn bộ suite là opt-in theo từng device: capability routeless `lifelike` 
 |------|-----------|------|-----------|
 | Breathing LED | `light` | liên tục (tick 2 giây) | Bật effect `breathing` có sẵn của HAL qua `/led/effect` (speed 0.3) với màu LED hiện tại đọc từ HAL; fallback về resting look (`ambientRestingColor`, hiện là `(0, 0, 0)`) khi LED đang tắt (đen) — resting look tối nghĩa là skip tick và strip ở yên không sáng. Xem [led-control_vi.md § Resting look](led-control_vi.md#resting-look-mặc-định-tắt). Dừng effect khi paused hoặc LED đang bị lock. |
 | Micro-movements | `motion` | ngẫu nhiên 45–120 giây | Phát một servo recording an toàn trong bộ `idle`, `curious`, `nod`. Chỉ servo — không đụng vào LED. |
-| Mumble (tự lẩm bẩm) | `audio` | ngẫu nhiên 5–15 phút | Nói một câu ngẫu nhiên từ pool `PhraseMumble` (`system/lib/i18n/phrases.go`, EN/VI/zh-CN/zh-TW, có audio tag như `[sigh]`/`[whisper]`/`[chuckle]`). Dùng `hal.SpeakCached` — lần render đầu của mỗi câu mới gọi TTS provider, các lần sau phát lại từ WAV cache của HAL, nên lẩm bẩm lúc idle không tốn API. |
+| Mumble (tự lẩm bẩm) | `audio` | ngẫu nhiên 5–15 phút | Chọn trong sáu mục `PhraseMumble` dùng chung mỗi ngôn ngữ (`system/lib/i18n/phrases.go`, EN/VI/zh-CN/zh-TW): xen âm ngắn với lời tự nói có chút tinh nghịch, như “Cứ thong thả thôi.” và “Mình thích những lúc thế này.” Một mục dùng `[chuckle]`; không có tag thở dài hay thì thầm. Dùng `hal.SpeakCached` — lần render đầu của mỗi câu mới gọi TTS provider, các lần sau phát lại từ WAV cache của HAL, nên lẩm bẩm lúc idle không tốn API. |
+
+Câu từ dùng chung, không phụ thuộc loại robot hay cơ thể. Pool idle không có
+ngữ cảnh sensor hay hội thoại, nên không nhận xét ánh sáng,
+độ yên tĩnh, việc đang nghe, quên suy nghĩ hay buồn ngủ. Những câu đó cần hành vi
+riêng có kiểm tra ngữ cảnh; loop này không suy ra các điều kiện đó. Nhịp phát,
+quy tắc pause/wake và cách chọn ngẫu nhiên giữ nguyên (vẫn có thể lặp liên tiếp).
+Cần nghe giọng thực tế được cache trên device để đánh giá độ tự nhiên; chữ và
+dấu câu không bảo đảm được ngữ điệu.
 
 ### LED lock
 
