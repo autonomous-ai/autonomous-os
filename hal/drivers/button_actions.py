@@ -329,6 +329,10 @@ def single_click_action(source: str = "button", announce: bool = True, chime: bo
     announce=False skips the cue (caller fires announce_listening_cue later).
     chime=False skips the ack ping (caller already chimed at gesture start).
     unmute_output=False leaves speaker restoration to the privacy switch."""
+    # A touch proves someone is at the device, even when the gesture itself is
+    # refused below. Runs before the wake: presence only records the moment and
+    # leaves the strip to sleep until the wake emotion takes over.
+    state.note_user_activity(source)
     # Stopping movement is safe even with the hardware mic kill switch off: it
     # does not wake or unmute the microphone, but still lets the user cancel an
     # active follow session with the same direct-attention gesture.
@@ -445,6 +449,7 @@ def head_pat_action(source: str = "touch"):
     (the device already talking), drop silently so petting mid-speech doesn't
     truncate her sentence. After the phrase actually plays, ping the OS server
     so the agent records the petting moment (silent — NO_REPLY)."""
+    state.note_user_activity(source)
     text = _random_head_pat_phrase()
     logger.info("%s head pat -- %r", source, text)
     if not _tts_available() or not text:
@@ -492,6 +497,7 @@ def mic_toggle_action(source: str = "touch"):
     Respect the configured hardware switch when present. The mic-muted LED
     reflects the resulting state, and both routes below repaint it themselves.
     """
+    state.note_user_activity(source)
     # The HW kill switch is the authority when configured. Devices without one
     # report None and fall through; touch gestures cannot override a muted
     # physical switch. Guarding here as well as in unmute_mic
