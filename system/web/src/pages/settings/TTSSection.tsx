@@ -220,8 +220,9 @@ export function TTSSection({
       : "elevenlabs");
 
   const speedMin = ttsProvider === "elevenlabs" ? 0.7 : 0.25;
-  const speedMax = ttsProvider === "elevenlabs" ? 1.2 : 4.0;
-  // Show the backend's effective rate without changing a saved legacy value
+  const speedMax = ttsProvider === "elevenlabs" ? 1.5 : 4.0;
+  // HTTP v3 applies tempo locally, so its slider can exceed the provider cap.
+  // Show the selectable rate without changing a saved legacy value
   // when the user edits another setting. Only a slider action changes it.
   const effectiveSpeed = Math.max(speedMin, Math.min(speedMax, ttsSpeed));
 
