@@ -190,7 +190,7 @@ class GeminiLiveAgent(VoiceAgentBase):
     @property
     @override
     def requires_fresh_session(self) -> bool:
-        """Whether unresolved tools or a spoken handoff require a new session."""
+        """Whether unresolved tools or a handoff require a new session."""
         return getattr(self, "_requires_fresh_session", False) or bool(
             self._pending_tool_calls
         )
@@ -1616,11 +1616,14 @@ class GeminiLiveAgent(VoiceAgentBase):
                     if fc.name in {"delegate_to_main", "reject_turn", "end_conversation"}:
                         _outcome_received = True
                         _routing_received = True
-                    if (_requires_outcome and fc.name == "delegate_to_main"
-                            and _spoken_response.strip()):
+                    if (fc.name == "delegate_to_main"
+                            and isinstance(fc.args, dict)
+                            and isinstance(fc.args.get("message"), str)
+                            and fc.args["message"].strip()):
                         # Publish quarantine BEFORE the tool: its consumer may
-                        # release the next capture immediately. Late filler/ACK
-                        # output must not start a grace in that new capture.
+                        # release the next capture immediately. Even a silent
+                        # handoff can produce late spoken output after its ACK;
+                        # it must not become the next capture's response.
                         self._requires_fresh_session = True
                     self._recv_queue.put(
                         OutputEvent(

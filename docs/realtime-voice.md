@@ -1035,6 +1035,16 @@ In particular, `_async_commit` suppresses `activityEnd` while quarantined too.
 Completing an old activity bracket is not safe when Gemini is waiting for the
 tool result; the replacement session starts its next activity cleanly.
 
+A valid `delegate_to_main` handoff also marks the session for replacement
+**before** publishing the tool event, even if Gemini has said nothing yet.
+The successful `delegated` acknowledgement clears the pending call but does
+not clear this replacement requirement. The next `prepare_turn()` rebuilds
+before streaming new capture. This prevents delayed post-handoff speech
+(including provider-generated system-error apologies) from leaking into the
+next live session with an empty turn ID. Empty/invalid delegation messages do
+not set this flag. Rebuilding adds connection overhead after a handoff; this
+is not an error-text filter and does not fix upstream tool execution errors.
+
 The model is told (`resources/system_prompt*.md`, "Expression Exception") to
 never wait for, announce, or speak the emotion aloud. Note this is distinct from
 the non-realtime path, where the agent emits a `[HW:/emotion:…]` text marker that

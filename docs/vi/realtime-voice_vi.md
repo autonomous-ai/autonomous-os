@@ -1000,6 +1000,15 @@ chỉ chặn audio từ mic:
 tất activity bracket cũ không an toàn khi Gemini còn chờ tool result; session
 thay thế sẽ bắt đầu activity kế tiếp một cách sạch sẽ.
 
+Một handoff `delegate_to_main` hợp lệ cũng đánh dấu session cần thay mới
+**trước khi** phát sự kiện tool, kể cả khi Gemini chưa nói câu nào.
+Ack `delegated` thành công xoá pending call nhưng không xoá yêu cầu thay
+session. `prepare_turn()` kế tiếp rebuild trước khi gửi audio thu mới.
+Cách này ngăn lời nói đến muộn sau handoff (kể cả câu xin lỗi hệ thống do
+provider sinh) lọt sang phiên live tiếp theo với turn ID rỗng. Message
+delegate rỗng/không hợp lệ không bật cờ này. Rebuild tốn thêm thời gian kết
+nối sau handoff; đây không phải bộ lọc câu lỗi hay sửa lỗi thực thi tool upstream.
+
 Model được dặn (`resources/system_prompt*.md`, mục "Expression Exception") không
 chờ, không thông báo, không đọc tên cảm xúc thành tiếng. Lưu ý điều này khác
 path không-realtime: ở đó agent phát marker text `[HW:/emotion:…]` rồi lớp Go

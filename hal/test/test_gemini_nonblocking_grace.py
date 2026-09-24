@@ -318,7 +318,7 @@ def test_continuation_after_filler_waits_for_outcome_and_late_routing(
 
 @pytest.mark.parametrize('delegate', [False, True])
 @pytest.mark.parametrize('spoken', [False, True])
-def test_spoken_handoff_quarantines_before_consumer_can_start_next_capture(
+def test_handoff_quarantines_before_consumer_can_start_next_capture(
         monkeypatch, delegate, spoken):
     from hal.realtime import response_outcome
 
@@ -348,7 +348,29 @@ def test_spoken_handoff_quarantines_before_consumer_can_start_next_capture(
     agent._recv_queue = ObservedQueue()
     _receive(agent)
     assert boundaries
-    assert all(value is spoken for value in boundaries)
+    assert all(value is (spoken or delegate) for value in boundaries)
+
+
+@pytest.mark.parametrize('model', ['gemini-3.8-live-extended-thinking', 'gemini-3.1-flash-live-preview'])
+def test_silent_delegate_quarantine_survives_successful_tool_ack(model):
+    from hal.realtime.models import FunctionCallResultInput
+    agent = _agent([_tool(), _terminal()], model=model)
+    events = _receive(agent)
+    assert [call.name for call in _calls(events)] == ['delegate_to_main']
+    asyncio.run(agent._async_send_input(FunctionCallResultInput(
+        call_id='c1', output='{"result":"delegated"}',
+    )))
+    assert not agent._pending_tool_calls
+    assert agent.requires_fresh_session
+    assert agent._session.tool_responses[-1].name == 'delegate_to_main'
+
+
+def test_empty_delegate_does_not_quarantine_session_for_handoff():
+    tool = _tool()
+    tool.tool_call.function_calls[0].args = {'message': ' '}
+    agent = _agent([tool, _terminal()])
+    _receive(agent)
+    assert not getattr(agent, '_requires_fresh_session', False)
 
 
 @pytest.mark.parametrize("generation", [False, True])
