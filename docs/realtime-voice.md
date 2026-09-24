@@ -2210,11 +2210,15 @@ execution; timeout, synthetic done and interruption alone are not completion
 proof. Without a successful terminal the task remains incomplete. Server
 interruption records a targeted `server_barge_in` boundary for stale-playback tracking.
 
-Snapshots identify `mode=live` and whether a speech endpoint is known. A real
-server endpoint is timed when HAL receives it (`server_vad`), not at acoustic
-speech end. Gemini transcript-only turns remain eligible for execution metrics
+Snapshots identify `mode=live` and whether a speech endpoint is known. Gemini's
+activity receive timestamp remains available to voice cues (`server_vad_receive`)
+but is not accepted as acoustic speech end for KPI-1. Raw/SDK endpoint counts
+and offsets are traced without changing VAD configuration. Gemini transcript-only
+or receive-only turns remain eligible for execution metrics
 but are excluded from latency KPI-1 with `speech_endpoint_unavailable` and null
-latencies. Unowned output is not assigned to the newest utterance. Session-close
+latencies. Valid earlier endpoints delivered late can amend playback latency.
+Unowned output is not assigned to the newest utterance; LIVE look fillers pin
+the exact provider-turn owner for the aim operation. Session-close
 `voice_metrics_live_coverage` counters expose this missing coverage; these hooks
 do not alter noise filtering, uplink or routing settings. See
 [voice metrics](voice-metrics.md#live-session-coverage) for the event contract.
@@ -3085,7 +3089,7 @@ Gemini delegation ordering: for work requiring main (including music, specific m
 
 In Live ON, an accepted `reject_turn` also installs a persistent rejection barrier before publishing the tool to its consumer. The barrier survives receive-loop boundaries and the tool ACK: provider audio/text from that rejected turn cannot become a new unowned reply or trigger main fallback. A fresh provider speech-start event or nonempty input transcript releases it; protocol terminals and empty transcription-finished metadata do not. Reconnect resets the barrier. This protects turn ownership independently of response language; it does not prevent the remote backend from generating an error after an ACK.
 
-Both turn-based and Live ON text-to-TTS paths suppress the known provider apologies “I’m sorry, there was a system error.”, “Rất tiếc, đã xảy ra lỗi hệ thống.”, “Rất tiếc, đã xảy ra lỗi hệ thống, vui lòng thử lại sau nhé.”, “Rất tiếc, đã có lỗi hệ thống xảy ra.” and “Rất tiếc, đã xảy ra lỗi hệ thống trong quá trình xử lý yêu cầu của bạn.” before ElevenLabs enqueue. Matching streamed prefixes are held until they can be filtered or diverge into a normal sentence; missing final punctuation is supported. Leading `<no speech>` markers are removed before filtering even when attached to a sentence; incomplete marker prefixes are withheld from TTS. Quoted or embedded mentions remain intact. An attributed error prefix remains buffered across receive timeouts until it resolves; it is never attached to another turn and is discarded on cancellation. The same filter cleans the assembled Live reply before OS/Main history sync. An error-only reply sends no `voice_agent_handled` notification or `[HANDLED]/[REPLY]` exchange; a mixed reply syncs only the remaining valid text. Existing history entries are not deleted. Raw provider logs remain available for diagnosis. Ordinary apologies, quoted error messages, routing and native audio playback are unchanged. This is an explicit English/Vietnamese template filter, not a universal multilingual classifier.
+Both turn-based and Live ON text-to-TTS paths suppress the known provider apologies “I’m sorry, there was a system error.”, “Rất tiếc, đã xảy ra lỗi hệ thống.”, “Rất tiếc, đã xảy ra lỗi hệ thống, vui lòng thử lại sau nhé.”, “Rất tiếc, đã có lỗi hệ thống xảy ra.” and “Rất tiếc, đã xảy ra lỗi hệ thống trong quá trình xử lý yêu cầu của bạn.” before ElevenLabs enqueue. Matching streamed prefixes are held until they can be filtered or diverge into a normal sentence; missing final punctuation is supported. Leading `<no speech>` and `{pause}` markers are removed before filtering even when attached to a sentence; incomplete marker prefixes are withheld from TTS, including across receive timeouts for the same turn. A marker-only reply produces neither TTS nor Main history sync (for example input `với`, output `{pause}`). Quoted or embedded mentions remain intact. An attributed error prefix remains buffered across receive timeouts until it resolves; it is never attached to another turn and is discarded on cancellation. The same filter cleans the assembled Live reply before OS/Main history sync. An error-only reply sends no `voice_agent_handled` notification or `[HANDLED]/[REPLY]` exchange; a mixed reply syncs only the remaining valid text. Existing history entries are not deleted. Raw provider logs remain available for diagnosis. Ordinary apologies, quoted error messages, routing and native audio playback are unchanged. This is an explicit English/Vietnamese template filter, not a universal multilingual classifier.
 
 Gemini tool acknowledgements retain the original function name alongside the call ID and return both in `FunctionResponse`. Missing `name` violates the provider contract and reproduced a spoken system-error response after a successful `look` capture on Gemini 3.8. The name is retained until the acknowledgement succeeds and cleared on session reset. Image transport and audio replay remain unchanged.
 

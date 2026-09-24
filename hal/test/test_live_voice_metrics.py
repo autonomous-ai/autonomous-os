@@ -140,6 +140,36 @@ def test_transcript_only_turn_counts_execution_without_fake_latency(monkeypatch,
     assert terminal["outcome"] == "completed"
 
 
+def test_gemini_receive_time_is_not_speech_end_for_kpi(monkeypatch, kpi):
+    _pump(monkeypatch, kpi, [([
+        UserSpeechOutput(turn_id="u1", endpoint_at=kpi.clock(), method="server_vad_receive"),
+        TextOutput(text="Done.", user_turn_id="u1"),
+    ], "u1", True)])
+    kpi.close_all()
+    row = kpi.one(voice_metrics.EVENT_INTERACTION)
+    assert row["ack_kind"] == "realtime_tts"
+    assert row["ack_latency_ms"] is None
+    assert row["exclusion_reason"] == "speech_endpoint_unavailable"
+    coverage = kpi.one("voice_metrics_live_coverage")
+    assert coverage["endpoint_receive_only_observations"] == 1
+
+
+def test_look_filler_pins_old_owner_and_unknown_never_uses_newest(monkeypatch, kpi):
+    from hal.drivers.tracking.aim import _say, filler_ownership
+    import requests
+
+    payloads = []
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: payloads.append(kwargs["json"]))
+    metrics = LiveVoiceMetrics()
+    old = metrics.speech("old", kpi.clock(), "local_vad")
+    with filler_ownership(voice_metrics.provider_interaction("old")):
+        new = metrics.speech("new", kpi.clock(), "local_vad")
+        _say("look_searching")
+    _say("look_found")
+    assert payloads == [{"pool": "look_searching", "owner": old}, {"pool": "look_found"}]
+    assert voice_metrics.current_interaction() == new
+
+
 def test_known_endpoint_native_playback_and_duplicate_input_share_one_turn(monkeypatch, kpi):
     at = kpi.clock()
     _pump(monkeypatch, kpi, [([

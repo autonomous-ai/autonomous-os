@@ -77,13 +77,64 @@ interaction, independently of receive-loop timeouts. Interaction snapshots carry
 coverage by path. Delegation carries the same interaction ID through OS routing;
 provider rejection of non-user speech excludes that task.
 
-A genuine server speech-end event uses its monotonic **receive time** with
-`speech_end_method=server_vad`. This includes the delay before HAL receives the
-server event; it is not the acoustic endpoint. Gemini transcript-only evidence
-can start an eligible execution task, but cannot supply a speech endpoint:
-KPI-1 records `eligible=false`, `exclusion_reason=speech_endpoint_unavailable`
-and null ack/answer latencies. KPI-3 eligibility is independent of that exclusion.
-An endpoint received after playback cannot retroactively create a latency sample.
+Gemini `ACTIVITY_END` currently supplies HAL's monotonic **receive time** to
+existing voice cues. It is labelled `server_vad_receive` and is **not** a KPI-1
+speech endpoint: network delay and server silence confirmation would otherwise
+shorten the measured wait. This change does not alter those cues or VAD.
+Transcript-only and receive-only observations retain
+`exclusion_reason=speech_endpoint_unavailable` with null ack/answer latency.
+KPI-3 eligibility is independent. A real timestamp delivered late can amend a
+missing-endpoint verdict only if it precedes or equals the first owned playback;
+HAL retains the original ack/answer playback timestamps, including owned fillers.
+Invalid, nonfinite, future or after-ack endpoints never become zero latency.
+
+The installed google-genai 2.12.1 converter preserves `voiceActivity` and
+`audioOffset`; a real-SDK regression test covers this. The [SDK contract](https://googleapis.github.io/python-genai/genai.html#genai.types.VoiceActivity)
+defines the offset on the input audio stream, not as a HAL monotonic timestamp.
+HAL does not yet map captured frames to that stream timeline (preroll, gated
+prefix replay, dropped sends and reconnects matter). Logging an offset is not
+sufficient to turn it into a KPI sample. The [Live API reference](https://ai.google.dev/api/live)
+does not guarantee ordering of input transcription. `explicit_vad_signal` is
+not a documented request for server endpoint notifications and is not enabled.
+An [open SDK issue](https://github.com/googleapis/python-genai/issues/2981)
+reports missing activity events on 3.8; it is corroboration, not proof about
+our device or an upstream diagnosis confirmed by Google.
+
+`[endpoint-wire]` logs signal type/offset before and after SDK conversion;
+`[endpoint-coverage]` logs cumulative counts per socket, including zero activity
+signals and legacy fields. Neither logs audio or adds transcript content.
+`[voice-metrics] live ownership` joins the provider key to the interaction ID.
+These observations distinguish absent wire signals from conversion loss, then
+join to the existing actual-playback ack log. They do not request manual VAD,
+change mic uploads, wake gating, cancellation, delegation or LIVE OFF.
+
+**Unresolved measurement coverage:** the reported lamp-0c4e cohort on 2026-09-24
+14:15–15:00 has 87 deduplicated interactions: 44 missing endpoints, 13 interrupted,
+and 30 noise/rejected/no-transcript, with zero eligible samples. KPI-1 is N/A.
+This patch does not manufacture endpoints for those 44 turns. A passive local
+speech detector is a possible alternative, but must be calibrated on timestamped
+capture and explicitly labelled as an estimate; the adaptive RMS/duck gate is
+not a speech classifier and cannot identify the addressed speaker in room noise.
+Do not use transcript arrival, STT close, TTS start or last-audio-sent instead.
+
+Read-only device verification at 15:19 confirmed google-genai 2.12.1 maps wire
+`voiceActivity.type`/`audioOffset` to SDK `voice_activity_type`/`audio_offset`.
+The deployed handler ignores the offset and stamps `time.monotonic()` on END.
+The 14:15–15:00 server log contains 18 ack lines, all `latency_ms=None`, and
+77 `provider_transcript` plus 3 `provider_delegate` interaction creation lines.
+These are raw log counts, not the deduplicated 87-row cohort above. Historical
+logs lack raw activity tracing, so they cannot prove the server omitted END.
+
+After authorized deployment, collect wire/SDK counts and interaction rows for
+known utterances; correlate first writes and cancellations using the same owner.
+Verify idle/noise, valid filler, barge-in, suppressed-before-write, delayed old
+output, delegation and LIVE OFF. Report missing endpoint coverage and eligible
+`no_ack` alongside latency. Local tests cannot establish device endpoint coverage
+or acoustic accuracy. The ack point remains the first successful stream write;
+ALSA/speaker buffering requires acoustic loopback to measure. The existing
+10-second reporting timer starts at interaction creation, which can be transcript
+observation; amendments may follow, so it is not a guaranteed 10-second window
+after acoustic speech end.
 
 Realtime execution is completed only by a successful provider terminal correlated
 to that interaction. Receive timeouts, synthetic done signals and interruption
@@ -106,11 +157,11 @@ terminal, even if that terminal arrives after the interruption.
 At session close, `voice_metrics_live_coverage` logs `observed_interactions`,
 `completed_interactions` and any `unkeyed_user_observations`,
 `unowned_output_chunks`, `unowned_completions`,
-`unowned_interruptions` counters.
+`unowned_interruptions`, `endpoint_receive_only_observations` counters.
 Read these alongside KPI results: Gemini's transcript stream has no stable input
 IDs, so late or unowned output is never retrospectively assigned to the newest
 utterance. Missing endpoints are coverage loss, not KPI-1 passes or failures.
-These hooks leave turn-path definitions, noise gates and routing flags unchanged.
+LIVE look fillers carry the exact provider turn binding, pinned for the aim operation; missing/ambiguous ownership remains unclaimed. These hooks leave turn-path definitions, noise gates and routing flags unchanged.
 Interruption metadata does not issue an extra playback stop, discard buffered
 text, reopen native audio, or change provider turn scheduling. Measurement errors
 are caught without interrupting speech or delegation. When queued segments share
@@ -504,6 +555,9 @@ WITH rows AS (
     param(data.event_params, 'interaction_id')     AS interaction_id,
     param(data.event_params, 'eligible')           AS eligible,
     param(data.event_params, 'outcome')            AS outcome,
+    param(data.event_params, 'exclusion_reason')   AS exclusion_reason,
+    param(data.event_params, 'speech_endpoint_known') AS endpoint_known,
+    SAFE_CAST(param(data.event_params, 'task_revision') AS INT64) AS revision,
     param(data.event_params, 'amends_event_id')    AS amends,
     SAFE_CAST(param(data.event_params, 'ack_latency_ms') AS INT64) AS ack_ms,
     event_timestamp
@@ -517,19 +571,23 @@ i AS (
   SELECT * EXCEPT(rn) FROM (
     SELECT *, ROW_NUMBER() OVER (
       PARTITION BY interaction_id
-      ORDER BY IF(amends != '', 1, 0) DESC, event_timestamp DESC
+      ORDER BY COALESCE(revision, 0) DESC, IF(amends != '', 1, 0) DESC, event_timestamp DESC
     ) AS rn
     FROM rows
   ) WHERE rn = 1
-),
-eligible AS (SELECT * FROM i WHERE eligible = 'true')
+)
 SELECT
-  COUNT(*) AS eligible_samples,
-  COUNTIF(outcome = 'acknowledged' AND ack_ms <= 3000) AS acknowledged_within_3s,
-  CASE WHEN COUNT(*) = 0 THEN NULL      -- no eligible samples => N/A
-       ELSE ROUND(100 * COUNTIF(outcome = 'acknowledged' AND ack_ms <= 3000) / COUNT(*), 2)
+  COUNT(*) AS observed_interactions,
+  COUNTIF(endpoint_known = 'true') AS endpoint_known_interactions,
+  COUNTIF(endpoint_known = 'false') AS endpoint_unknown_interactions,
+  COUNTIF(exclusion_reason = 'speech_endpoint_unavailable') AS endpoint_excluded_interactions,
+  COUNTIF(eligible = 'true') AS eligible_samples,
+  COUNTIF(eligible = 'true' AND outcome = 'no_ack') AS no_ack,
+  COUNTIF(eligible = 'true' AND outcome = 'acknowledged' AND ack_ms <= 3000) AS acknowledged_within_3s,
+  CASE WHEN COUNTIF(eligible = 'true') = 0 THEN NULL      -- no eligible samples => N/A
+       ELSE ROUND(100 * COUNTIF(eligible = 'true' AND outcome = 'acknowledged' AND ack_ms <= 3000) / COUNTIF(eligible = 'true'), 2)
   END AS kpi1_pct
-FROM eligible;
+FROM i;
 ```
 
 ```sql

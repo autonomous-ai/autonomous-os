@@ -154,11 +154,19 @@ class VoiceService:
         cleaned = re.sub(r"  +", " ", cleaned).strip()
         # A provider silence marker can precede real text or an error, and
         # can arrive split across events. Keep quoted/embedded mentions intact.
-        cleaned = re.sub(r"^(?:<\s*no\s+speech\s*>\s*)+", "", cleaned, flags=re.IGNORECASE)
-        partial = " ".join(cleaned.lower().split())
-        if partial and "<no speech>".startswith(partial):
+        cleaned = re.sub(r"^(?:(?:<\s*no\s+speech\s*>|\{\s*pause\s*\})\s*)+",
+                         "", cleaned, flags=re.IGNORECASE)
+        if VoiceService._pending_rt_silence_marker(cleaned):
             return ""
         return cleaned
+
+    @staticmethod
+    def _pending_rt_silence_marker(text: str) -> bool:
+        partial = " ".join(text.lower().split())
+        partial = re.sub(r"^\{\s*", "{", partial)
+        return bool(partial) and any(
+            marker.startswith(partial) for marker in ("<no speech>", "{pause}")
+        )
 
     def __init__(
         self,
@@ -1807,7 +1815,8 @@ class VoiceService:
                         and self._live_running and generation == self._live_generation
                         and not (stop_event is not None and stop_event.is_set())):
                     visible_tail = self.strip_rt_markers(sentence_buf)
-                    if (_pending_system_error_tts(visible_tail)
+                    if ((_pending_system_error_tts(visible_tail)
+                         or self._pending_rt_silence_marker(sentence_buf))
                             and not getattr(self._realtime, "execution_completed", False)):
                         # Receive timeout is not a provider terminal. Preserve
                         # only attributed candidates until the next fragment.

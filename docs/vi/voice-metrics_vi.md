@@ -76,13 +76,59 @@ interaction HAL, độc lập với timeout của vòng nhận. Snapshot interac
 xử lý. Delegate mang nguyên interaction ID qua OS; provider từ chối tiếng không
 phải của người dùng thì task đó bị loại.
 
-Event kết thúc tiếng nói thật từ server dùng **thời điểm nhận** trên đồng hồ
-monotonic, với `speech_end_method=server_vad`. Mốc này bao gồm độ trễ trước khi
-HAL nhận event server, không phải điểm kết thúc âm học. Chỉ có transcript Gemini
-vẫn đủ tạo task thực thi hợp lệ, nhưng không đủ xác định điểm kết thúc tiếng nói:
-KPI-1 ghi `eligible=false`, `exclusion_reason=speech_endpoint_unavailable`,
-latency ack/answer là null. Eligibility KPI-3 độc lập với exclusion này.
-Endpoint tới sau playback không được dùng để tạo ngược mẫu latency.
+Gemini `ACTIVITY_END` hiện chuyển **thời điểm nhận** monotonic của HAL cho
+voice cue hiện hữu. Mốc này mang nhãn `server_vad_receive`, **không** là endpoint
+KPI-1: độ trễ mạng và thời gian server xác nhận im lặng sẽ làm latency đo được
+ngắn giả. Không đổi cue hoặc VAD. Chỉ có transcript/thời điểm nhận thì giữ
+`exclusion_reason=speech_endpoint_unavailable`, latency ack/answer null; eligibility
+KPI-3 độc lập. Endpoint thật tới muộn được amendment nếu timestamp trước hoặc
+bằng playback đầu tiên thuộc lượt đó. HAL giữ timestamp playback ack/answer gốc,
+kể cả filler đúng owner. Timestamp sai, NaN/Inf, tương lai hoặc sau ack không
+được đổi thành latency 0.
+
+Converter google-genai 2.12.1 giữ `voiceActivity` và `audioOffset`; test đi qua
+SDK thật xác minh điều này. [SDK contract](https://googleapis.github.io/python-genai/genai.html#genai.types.VoiceActivity)
+định nghĩa offset trên luồng input audio, không phải đồng hồ monotonic của HAL.
+HAL chưa ánh xạ frame capture vào timeline này: cần xét preroll, prefix phát lại,
+frame không gửi và reconnect. Ghi offset ra log chưa đủ để tính KPI.
+[Live API reference](https://ai.google.dev/api/live) không bảo đảm thứ tự input
+transcription. Không bật `explicit_vad_signal`: đây không phải cấu hình được tài
+liệu xác nhận để xin server gửi endpoint. [Issue SDK đang mở](https://github.com/googleapis/python-genai/issues/2981)
+báo 3.8 thiếu activity event, nhưng không phải bằng chứng cho device của chúng ta
+hay kết luận nguyên nhân đã được Google xác nhận.
+
+`[endpoint-wire]` ghi type/offset trước và sau SDK; `[endpoint-coverage]` ghi bộ
+đếm cộng dồn theo socket, kể cả khi không có activity và có trường legacy.
+Không ghi audio hay thêm nội dung transcript. `[voice-metrics] live ownership`
+liên kết provider key với interaction ID để nối log ack sau playback thật.
+Các trace giúp phân biệt server không gửi với SDK làm mất tín hiệu; không bật
+manual VAD, đổi mic upload, wake gating, cancel, delegation hay LIVE OFF.
+
+**Độ phủ chưa giải quyết:** cohort lamp-0c4e được cung cấp ngày 24/09/2026,
+14:15–15:00 có 87 interaction sau dedup: 44 thiếu endpoint, 13 bị ngắt lời,
+30 noise/rejected/no-transcript; không có mẫu đủ điều kiện. KPI-1 là N/A.
+Patch không tạo endpoint giả cho 44 lượt này. Detector tiếng nói cục bộ chỉ quan
+sát là phương án khác, nhưng cần hiệu chuẩn trên capture có timestamp và ghi rõ
+là ước lượng. RMS/duck hiện tại không phải speech classifier, không phân biệt
+người đang nói với thiết bị trong phòng ồn. Không thay bằng transcript arrival,
+STT close, TTS start hay last-audio-sent.
+
+Kiểm tra chỉ đọc trên device lúc 15:19 xác nhận google-genai 2.12.1 ánh xạ wire
+`voiceActivity.type`/`audioOffset` sang SDK `voice_activity_type`/`audio_offset`.
+Handler đang deploy bỏ qua offset, lấy `time.monotonic()` khi nhận END.
+Server log 14:15–15:00 có 18 dòng ack, tất cả `latency_ms=None`; 77 dòng tạo
+interaction bằng `provider_transcript`, 3 bằng `provider_delegate`. Đây là số
+dòng log thô, không phải cohort 87 dòng sau dedup ở trên. Log cũ chưa trace raw
+activity nên không chứng minh được server đã không gửi END.
+
+Sau khi được phép deploy, thu bộ đếm wire/SDK và interaction của câu nói xác định;
+đối chiếu first write/cancel theo cùng owner. Kiểm tra im lặng/ồn, filler hợp lệ,
+barge-in, suppress trước write, output cũ tới muộn, delegate và LIVE OFF. Báo độ
+phủ thiếu endpoint cùng `no_ack` đủ điều kiện và latency. Test local không chứng
+minh độ phủ hay độ chính xác âm học trên device. Ack vẫn là first successful
+stream write; phần đệm ALSA/loa cần acoustic loopback để đo. Timer báo cáo
+10 giây hiện bắt đầu khi tạo interaction (có thể lúc nhận transcript); amendment
+có thể tới sau, nên không bảo đảm cửa sổ 10 giây sau kết thúc tiếng nói âm học.
 
 Realtime chỉ ghi completed khi nhận terminal thành công của provider gắn đúng
 interaction. Timeout khi nhận, tín hiệu done tự tạo và ngắt lời không phải bằng
@@ -106,10 +152,10 @@ Khi đóng phiên, `voice_metrics_live_coverage` ghi `observed_interactions`,
 `completed_interactions` cùng các bộ đếm có phát sinh:
 `unkeyed_user_observations`,
 `unowned_output_chunks`, `unowned_completions`,
-`unowned_interruptions`.
+`unowned_interruptions`, `endpoint_receive_only_observations`.
 Đọc chúng cùng kết quả KPI: luồng transcript Gemini không có input ID ổn định,
 nên output tới muộn hoặc không có owner không được gán ngược cho câu nói mới nhất.
-Thiếu endpoint là mất độ phủ, không phải pass hay fail KPI-1. Các hook này giữ
+Filler look LIVE mang binding đúng provider turn, được giữ suốt thao tác aim; owner thiếu/mơ hồ giữ unclaimed. Thiếu endpoint là mất độ phủ, không phải pass hay fail KPI-1. Các hook này giữ
 nguyên định nghĩa đường turn, bộ lọc tiếng ồn và cờ routing.
 Metadata ngắt lời không thêm lệnh dừng playback, bỏ text trong bộ đệm, mở lại
 audio native hay đổi lịch xử lý turn của provider. Lỗi đo lường được bắt để
@@ -660,3 +706,8 @@ Mặc định loại lượt smoke. Binary dự phòng trên device:
 100 lượt / 85 hoàn tất, lượt chỉ có OS, chống đếm trùng HAL/OS. Go integration
 test kiểm tra binding khi queue và lỗi not-ready. Build os-server Linux ARM64
 pass. Không tạo giả AA event cho dữ liệu lịch sử bị thiếu.
+
+Truy vấn KPI-1 trong bản EN trả cùng lúc `observed_interactions`,
+`endpoint_known_interactions`, `endpoint_unknown_interactions`, `endpoint_excluded_interactions`, `eligible_samples`,
+`no_ack` và `kpi1_pct`. Dedup ưu tiên `task_revision` rồi amendment/thời gian;
+`no_ack` hợp lệ vẫn trong mẫu số, không có mẫu hợp lệ trả NULL (N/A).
