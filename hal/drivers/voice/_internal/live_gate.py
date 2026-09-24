@@ -30,7 +30,8 @@ class AdaptiveLiveGate:
         self._time = 0.0
         self._dt = 0.02
         self._tail_until = 0.0
-        self._above = self._below = self._duck_quiet = 0.0
+        self._above = self._below = 0.0
+        self._unduck_at = None
         self._envelope = deque()
         self._prefix = deque()
         self._prefix_samples = 0
@@ -53,6 +54,11 @@ class AdaptiveLiveGate:
     @property
     def output_envelope(self):
         return max((value for _, value in self._envelope), default=0.0)
+
+    def clear_duck(self):
+        """Release attenuation after provider interruption without losing speech."""
+        self.duck = False
+        self._unduck_at = None
 
     def idle_threshold(self, rms, duration=None):
         """Track ambient only: ignore samples above the existing speech threshold.
@@ -143,7 +149,7 @@ class AdaptiveLiveGate:
             self._envelope.popleft()
         envelope = self.output_envelope
 
-        if risk:
+        if playback:
             self.threshold = max(self.PLAYBACK_FLOOR, self.noise * 5,
                                  envelope * 10 ** ((self.coupling_db + 8) / 20))
             need = 0.24
@@ -154,9 +160,9 @@ class AdaptiveLiveGate:
         # Count VAD even during warm-up, but latch admission at its onset.
         # A rejected echo burst must end before a later burst can be admitted;
         # crossing the warm-up deadline is not itself a fresh speech onset.
-        warming_up = risk and playback_seconds < self.AEC_WARMUP_S
+        warming_up = playback and playback_seconds < self.AEC_WARMUP_S
         was_speaking = self.speaking
-        if risk and not self._vad_speaking and envelope > 0.003:
+        if playback and not self._vad_speaking and envelope > 0.003:
             ratio = 20 * math.log10(max(rms, 1e-9) / envelope)
             if above:
                 self._burst_peak = max(ratio, self._burst_peak if self._burst_peak is not None else ratio)
@@ -181,18 +187,24 @@ class AdaptiveLiveGate:
             self._barge_allowed = not warming_up
             self.speech_started = self._barge_allowed
             self._burst_peak = None
-            if risk and self._barge_allowed:
+            if playback and self._barge_allowed:
                 self.barge_in = True
                 self.duck = True
-                self._duck_quiet = 0.0
+                self._unduck_at = self._time + 1.5
         elif self._vad_speaking and self._below + 1e-9 >= 0.5:
             self._vad_speaking = False
             self._barge_allowed = False
         self.speaking = self._vad_speaking and self._barge_allowed
         if self.duck:
-            self._duck_quiet = 0.0 if above else self._duck_quiet + self._dt
-            if self._duck_quiet + 1e-9 >= 1.5 or not risk:
-                self.duck = False
+            if not risk:
+                self.clear_duck()
+            elif self._unduck_at is not None and self._time + 1e-9 >= self._unduck_at:
+                # Match the demo's timer: first check 1.5 s after onset, then
+                # every 400 ms until VAD releases after 500 ms of quiet.
+                if self._vad_speaking:
+                    self._unduck_at = self._time + 0.4
+                else:
+                    self.clear_duck()
 
         if warming_up or (risk and self._vad_speaking and not self._barge_allowed):
             self._clear_prefix()

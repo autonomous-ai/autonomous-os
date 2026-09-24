@@ -18,6 +18,7 @@ from hal import app_state as hal_app_state
 from hal import config as hal_config
 from hal import presets
 from hal.clock import device_now
+from hal.i18n import PROVIDER_ERROR_PHRASES_BY_LANG
 from hal.realtime.config import gemini_needs_idle_workaround
 from hal.realtime.voice_agent.base import AudioTurnSessionChanged
 from hal.realtime.models import AudioOutput as RTAudioOutput
@@ -41,10 +42,17 @@ CLAUSE_ENDS = (",", ";", ":", "—", "，", "；", "：", "、")
 FIRST_CHUNK_MIN_CHARS = 8
 
 
-# Suppress only this known provider apology, not arbitrary mentions of errors.
-_SYSTEM_ERROR_TEXT = "i'm sorry, there was a system error"
+# Suppress only known provider apologies, not arbitrary mentions of errors.
+_SYSTEM_ERROR_TEXTS = tuple(
+    " ".join(phrase.lower().replace("’", "'").split()).rstrip(".!?")
+    for phrases in PROVIDER_ERROR_PHRASES_BY_LANG.values()
+    for phrase in phrases
+)
 _SYSTEM_ERROR_SENTENCE = re.compile(
-    r"(?<!\S)I['’]m sorry,\s+there was a system error(?:[.!?]+|$)", re.IGNORECASE,
+    r"(?<!\S)(?:" + "|".join(
+        re.escape(template).replace(r"\ ", r"\s+").replace("'", "['’]")
+        for template in _SYSTEM_ERROR_TEXTS
+    ) + r")(?:[.!?]+|$)", re.IGNORECASE,
 )
 
 
@@ -58,9 +66,10 @@ def _filter_system_error_tts(text: str, *, log: bool = True) -> str:
 
 
 def _pending_system_error_tts(text: str) -> bool:
-    # Hold a matching prefix so streaming cannot speak "I'm sorry," first.
+    # Hold a matching prefix before clause splitting can speak the apology.
     normalized = " ".join(text.lower().replace("’", "'").split())
-    return bool(normalized) and _SYSTEM_ERROR_TEXT.startswith(normalized)
+    return bool(normalized) and any(template.startswith(normalized)
+                                    for template in _SYSTEM_ERROR_TEXTS)
 
 
 def split_first_chunk(buf: str) -> tuple[str, str]:

@@ -163,6 +163,10 @@ class VoiceAgentBase(ABC):
         if self.available:
             self._send_queue.put(InputEvent(input=AudioInput(audio=audio)))
 
+    def end_audio_stream(self, *, session: object) -> bool:
+        """Providers opt in to ending a paused live uplink without committing a turn."""
+        return False
+
     def commit_audio(self, *, session: object | None = None) -> None:
         """Queue a commit signal (non-blocking)."""
         if session is not None:
@@ -266,11 +270,15 @@ class VoiceAgentBase(ABC):
         """
         self._recv_timeout_override_s = seconds
 
-    def receive(self, *, stop_on_done: bool = True) -> Generator[OutputBase, None, None]:
+    def receive(
+        self, *, stop_on_done: bool = True, stop_event: threading.Event | None = None,
+    ) -> Generator[OutputBase, None, None]:
         """Sync generator — yields OutputBase items from _recv_queue.
 
         When stop_on_done=True (default), stops at the first TurnDoneEvent.
         When stop_on_done=False, skips TurnDoneEvents and keeps yielding across turns.
+        stop_event is checked at most every 100 ms of queue wait; cancellation
+        does not complete a turn.
         """
         # Tracks whether this generator ran to a NORMAL end (turn done or
         # silence timeout). A look replay abandons the generator mid-turn
@@ -283,6 +291,8 @@ class VoiceAgentBase(ABC):
         turn_started: float = time.monotonic()
         try:
             while True:
+                if stop_event is not None and stop_event.is_set():
+                    return
                 recv_timeout: float = (
                     self._recv_timeout_override_s
                     or app_config.REALTIME_RECV_QUEUE_TIMEOUT_S
@@ -295,7 +305,26 @@ class VoiceAgentBase(ABC):
                 # its bounded fallback (including handoff context) at expiry.
                 queue_timeout = min(recv_timeout, progress_remaining + 0.1) if progress_remaining > 0 else recv_timeout
                 try:
-                    event = self._recv_queue.get(timeout=queue_timeout)
+                    if stop_event is None:
+                        event = self._recv_queue.get(timeout=queue_timeout)
+                    else:
+                        # Poll only cancellation. Keep the original queue-wait
+                        # deadline so each poll is not a new receive timeout.
+                        deadline = time.monotonic() + queue_timeout
+                        while True:
+                            if stop_event.is_set():
+                                return
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                raise queue.Empty
+                            try:
+                                event = self._recv_queue.get(timeout=min(0.1, remaining))
+                                break
+                            except queue.Empty:
+                                if stop_event.is_set():
+                                    return
+                                if time.monotonic() >= deadline:
+                                    raise
                 except queue.Empty:
                     if time.monotonic() < max(
                         getattr(self, "_progress_deadline_at", 0.0),
