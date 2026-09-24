@@ -2386,9 +2386,10 @@ câu trả lời dài vài phút không bao giờ bị nhầm thành vòng lặp
 luôn nghe căn phòng thật mà không có chuyển tiếp nhân tạo. Giảm âm lượng loa làm
 giảm rõ rệt khả năng xảy ra trong lúc chờ.
 
-Hai profile `pro-respeaker-lite` và `pro-xvf3800` cũng dùng VAD phía server
-giống demo hardware: độ nhạy bắt đầu/kết thúc `high`, prefix **100 ms**, và
-thời gian im lặng **500 ms**. Dùng các biến `HAL_LIVE_VAD_*` sẵn có; mặc định
+Hai profile `pro-respeaker-lite` và `pro-xvf3800` giữ độ nhạy VAD phía server
+bắt đầu/kết thúc `high` và prefix **100 ms** như demo hardware, nhưng dùng
+thời gian im lặng **1000 ms** thay vì **500 ms** của demo để cho phép nghỉ
+lâu hơn giữa câu, đổi lại phản hồi có thể bắt đầu muộn hơn. Dùng các biến `HAL_LIVE_VAD_*` sẵn có; mặc định
 của profile AEC phần mềm không đổi. Chỉ đồng bộ bộ gate echo cục bộ chưa đủ
 để đồng bộ cách server nhận giọng nói.
 

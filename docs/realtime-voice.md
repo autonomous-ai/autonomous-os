@@ -2447,9 +2447,10 @@ that a single answer running for minutes is never mistaken for a loop. The cure 
 so the model always hears the true room with no artificial transitions. Lower
 speaker volume makes it markedly less likely in the meantime.
 
-The `pro-respeaker-lite` and `pro-xvf3800` profiles also match the hardware
-demo server VAD: start/end sensitivity `high`, prefix padding **100 ms**, and
-silence duration **500 ms**. These use the existing `HAL_LIVE_VAD_*` settings;
+The `pro-respeaker-lite` and `pro-xvf3800` profiles retain the hardware
+demo server VAD start/end sensitivity `high` and prefix padding **100 ms**,
+but use silence duration **1000 ms** instead of the demo's **500 ms** to allow
+longer pauses within a sentence, at the cost of a later response. These use the existing `HAL_LIVE_VAD_*` settings;
 software-AEC profile defaults are unchanged. Matching the local echo gate alone
 does not match server speech detection.
 
