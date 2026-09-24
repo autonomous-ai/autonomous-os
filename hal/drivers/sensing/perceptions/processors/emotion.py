@@ -343,8 +343,13 @@ class RemoteEmotionRecognizer:
     def recognize(self, face_crop: cv2.typing.MatLike) -> dict[str, Any] | None:
         """Send a face crop to the emotion-recognize endpoint.
 
-        Returns dict with keys: emotion, confidence, valence, arousal.
-        Returns None if unavailable or no detection above threshold.
+        Returns dict with keys: emotion, confidence, valence, arousal,
+        probabilities (when the server sent per-class probabilities, i.e. a
+        raw-mode response), all_detections (the full candidate list from the
+        server), and gate ("hal" when this method applied the device-side
+        gate, "server" when an older server already gated before responding).
+        Returns None if unavailable, no detection was returned, or the
+        reading failed the device gate.
         """
         if not self._url:
             return None
@@ -411,8 +416,11 @@ class RemoteEmotionRecognizer:
             else:
                 detections = resp.json().get("detections", [])
             if not detections:
-                # Endpoint applies the threshold server-side; empty here means
-                # no face detection cleared the confidence bar (a "fail").
+                # Empty here means the model returned nothing for this crop.
+                # A non-raw server would additionally drop a below-threshold
+                # detection here, but with raw: true the server skips its own
+                # gate and hands back everything the model produced — an empty
+                # list only happens when there was no detection to return.
                 if self._debug is not None:
                     _ = self._debug.save_failure(
                         "no-detection",
@@ -604,10 +612,12 @@ class EmotionPerception(Perception[FaceDetectionData]):
         if result is None:
             # A failure folder (http error / no-detection / request error) was
             # already written inside recognize() with the precise reason.
-            # An empty response is NOT evidence of Neutral — the service gates
-            # the argmax per label and falls back to Neutral's own (low)
-            # probability, so this is "no confirmed reading", and it counts
-            # against any label trying to claim the window.
+            # An empty response is NOT evidence of Neutral — the gate that
+            # rejected the argmax was either ours (emotion_gating, against a
+            # raw-mode server) or the server's own (an older server that
+            # ignores raw and gates before responding), so this is "no
+            # confirmed reading", and it counts against any label trying to
+            # claim the window.
             self._record_attempt(face.person_id, _NO_READING)
             return
 
