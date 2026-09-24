@@ -882,7 +882,7 @@ class RealtimeOrchestrator:
         # activityEnd can all be rejected with 1008. Fire-and-forget expression
         # calls intentionally skip their Gemini acknowledgement to avoid a
         # duplicate reply, so replace that session before the next capture.
-        # A spoken handoff also quarantines the session: late provider output
+        # A handoff also quarantines the session: late provider output
         # must not start a response/grace belonging to the next user capture.
         if (
             provider == "gemini"
@@ -890,7 +890,7 @@ class RealtimeOrchestrator:
             and agent.requires_fresh_session
         ):
             logger.info(
-                "[realtime] Rebuilding Gemini session after unresolved tool or spoken handoff before streaming audio"
+                "[realtime] Rebuilding Gemini session after unresolved tool or handoff before streaming audio"
             )
             if self._rebuild_now(
                 "gemini-unresolved-tool-call", discard_old_on_failure=True

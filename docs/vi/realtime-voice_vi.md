@@ -1000,6 +1000,20 @@ chỉ chặn audio từ mic:
 tất activity bracket cũ không an toàn khi Gemini còn chờ tool result; session
 thay thế sẽ bắt đầu activity kế tiếp một cách sạch sẽ.
 
+Một handoff `delegate_to_main` hợp lệ cũng đánh dấu session cần thay mới
+**trước khi** phát sự kiện tool, kể cả khi Gemini chưa nói câu nào.
+Ack `delegated` thành công xoá pending call nhưng không xoá yêu cầu thay
+session. `prepare_turn()` kế tiếp rebuild trước khi gửi audio thu mới.
+Cách này ngăn lời nói đến muộn sau handoff (kể cả câu xin lỗi hệ thống do
+provider sinh) lọt sang phiên live tiếp theo với turn ID rỗng. Message
+delegate rỗng/không hợp lệ không bật cờ này. Rebuild tốn thêm thời gian kết
+nối sau handoff; đây không phải bộ lọc câu lỗi hay sửa lỗi thực thi tool upstream.
+
+Khi receive timeout, `[realtime][transport]` ghi trạng thái kết nối/luồng gửi,
+số input đang chờ, tuổi lần gửi audio thành công cuối, số tool pending và số
+frame bị giữ vì tool. Đây là metadata, không ghi âm. `last_upload_ms` của
+luồng thu live chỉ đo thời gian đưa vào hàng đợi, chưa chứng minh đã gửi ra socket.
+
 Model được dặn (`resources/system_prompt*.md`, mục "Expression Exception") không
 chờ, không thông báo, không đọc tên cảm xúc thành tiếng. Lưu ý điều này khác
 path không-realtime: ở đó agent phát marker text `[HW:/emotion:…]` rồi lớp Go
@@ -2259,11 +2273,97 @@ thúc.
 | Env | Mặc định | Ý nghĩa |
 |-----|----------|---------|
 | `HAL_LIVE_MODE` | `false` | Chế độ live cho toàn tiến trình. Ép `HAL_REALTIME_TURN_DETECTION=server_vad` khi giá trị đó là `off` |
-| `HAL_LIVE_UPLINK_DURING_PLAYBACK` | `mute` | `mute` (không cắt lời, dùng được ngay) hoặc `cancelled` (song công thật, cần sửa AEC) |
+| `HAL_AEC_ENABLED` | `true` | Software AEC; đặt `false` cùng live mode chọn đường thích nghi dùng chung cho audio đã được phần cứng xử lý |
+| `HAL_LIVE_UPLINK_DURING_PLAYBACK` | `mute` | Trên đường software AEC: `mute` gửi im lặng khi loa phát; `cancelled` chỉ gửi frame đã được AEC xử lý; `always` gửi mọi frame, kể cả vọng còn sót. Đường thích nghi áp dụng bộ chặn riêng |
 | `HAL_LIVE_PLAYBACK_TAIL_S` | `0.35` | Đuôi âm học sau lần ghi reference cuối hoặc lúc quan sát TTS kết thúc, kể cả khi không có AEC |
-| `HAL_LIVE_IDLE_HANGUP_S` | `15` | Cúp máy sau khoảng này khi **người dùng** không có hành động nào, tính từ mốc muộn hơn: lời cuối của người dùng hoặc thời điểm thiết bị nói xong |
+| `HAL_LIVE_IDLE_HANGUP_S` | `15` | Cúp máy sau khoảng này không có hoạt động người dùng, phát loa hay tiến độ text/audio từ provider; tính từ mốc mới nhất, kể cả output trước khi TTS bắt đầu |
 | `HAL_LIVE_MAX_UNPROMPTED_REPLIES` | `3` | Trần cứng cho số câu trả lời liên tiếp của model mà không có tiếng người dùng xen giữa — cắt vòng lặp tự nói mà không cắt ngang một câu trả lời dài |
 | `HAL_LIVE_MAX_S` | `600` | Trần tuyệt đối cho một phiên |
+
+Đường live thích nghi dùng chung được chọn bởi `HAL_LIVE_MODE=true` và
+`HAL_AEC_ENABLED=false`. Không có cờ mới hay nhận diện tên phần cứng: tắt
+software AEC tường minh nghĩa là chọn đường dành cho audio đã được phần cứng
+xử lý. Software AEC mặc định `true` và giữ đường xử lý hiện có.
+Lamp `pro-respeaker-lite` và `pro-xvf3800` đều chọn đường dùng chung với live
+bật, software AEC tắt và `HAL_LIVE_UPLINK_DURING_PLAYBACK=always`; standard/pro
+giữ software AEC bật. Trên Lite, mic hội thoại và loa dùng ALSA card `Lite` ở
+16 kHz; sensing dùng `sndi2s4` qua `asound.conf` của profile.
+
+`live_gate.py` (`AdaptiveLiveGate`), `live_playback.py` và `live_reply.py`
+(`LiveReplyGuard`) triển khai đường dùng chung. Bộ chặn dùng quy tắc năng
+lượng RMS, không phải bộ phân loại tiếng nói. Mic tiếp tục thu nhưng gửi
+im lặng trong lúc loa phát cho đến khi xác nhận tiếng người tại thiết bị,
+sau đó gửi tối đa 300 ms audio đầu câu đã giữ lại trước các frame trực tiếp.
+Bộ chặn vọng được giữ thêm 300 ms sau khi loa ngừng phát.
+
+Khi mở phiên live, đường thích nghi dùng chung bỏ qua WebRTC VAD, kiểm tra Silero
+đầu vào và realtime noise guard chỉ khi realtime được bật, đồng thời kiểm tra
+wake-word tắt hoặc wake focus đã được cấp. Vẫn cần năng lượng liên tục trên
+ngưỡng nghỉ thích nghi trong ít nhất 160 ms để mở phiên. Nếu wake-word bật mà
+chưa có focus, vẫn phải xác nhận wake-word qua STT như trước. Đường software
+AEC giữ nguyên kiểm tra đầu vào hiện có.
+Trong phiên live thích nghi, đồng hồ ngắt phiên do im lặng cũng dùng
+trực tiếp trạng thái tiếng nói của bộ chặn thích nghi, không kiểm tra Silero lần nữa.
+
+Ngưỡng RMS lúc nghỉ là giá trị lớn hơn giữa −42 dBFS (khoảng 260 PCM16 RMS)
+và bốn lần nền nhiễu đang theo dõi, với thời gian xác nhận bắt đầu 160 ms.
+Khi loa phát, ngưỡng là giá trị lớn nhất giữa −27 dBFS (khoảng 1.464 PCM16 RMS),
+năm lần nền nhiễu và bao biên âm lượng loa trong 500 ms nhân hệ số ghép vọng
+đã học, cộng biên an toàn 8 dB. Xác nhận tiếng người khi loa phát cần 240 ms;
+500 ms dưới ngưỡng kết thúc tiếng nói cục bộ. Giống demo, ngắt lời cục bộ chờ
+3 giây audio loa cộng dồn để AEC ổn định. HAL đếm frame ghi thành công ra loa,
+không tính thời gian chờ TTS/mạng, từ đầu phiên live (mic được mở lại sau phiên).
+Không đặt lại bộ đếm ở mỗi câu. Trong thời gian chờ, audio khi loa phát/vọng
+bị chặn và không thể hạ loa. Một đợt vượt ngưỡng bắt đầu trong thời gian chờ
+vẫn không được chấp nhận khi loa phát qua mốc 3 giây: VAD theo dõi cùng đợt
+đó đến khi dưới ngưỡng đủ 500 ms, rồi mới nhận một đợt mới đủ 240 ms. Cách
+chốt quyền ngắt ngay lúc bắt đầu giống demo, tránh nhận nhầm tiếng vọng đầu
+phiên kéo dài thành nói chen ở khoảng 3,2 giây. Frame dưới ngưỡng khi loa
+phát cũng cập nhật nền nhiễu khi VAD chưa nhận tiếng nói, giống demo.
+Mic lúc nghỉ vẫn hoạt động.
+`live-aec` ghi `played_s` và `aec_ready`; đây là thời gian chờ cho phép,
+không phải phép đo AEC đã hội tụ hay độ trễ đầu cuối đo được.
+
+Bao biên âm loa được ước lượng sau giảm âm tạm thời và suy hao mixer ALSA,
+từ PCM gửi ra loa và giá trị dB thực tế đọc bằng `amixer`.
+Giống demo, mức tham chiếu đi theo quá trình giảm và khôi phục âm. Trạng thái mixer
+được đọc một lần khi khởi động ngoài luồng audio, rồi cập nhật qua các route
+điều khiển âm lượng. Nếu không đọc được dB, mức tham chiếu dùng gain bằng 1
+một cách bảo thủ; không suy gain từ phần trăm đã lưu hay thang softvol riêng
+của phần cứng. Khi biết suy hao, cách này tránh mức trước mixer đẩy ngưỡng
+tiếng người lên quá cao. Đây là ước lượng mức tham chiếu đầu ra, không phải
+đo áp suất âm trong phòng hay độ trễ audio chính xác.
+
+Chặn vọng chỉ bắt đầu sau khi ghi thành công ra loa và hết hiệu lực 250 ms
+sau lần ghi cuối, rồi đến khoảng đuôi vọng của bộ chặn. Chờ ElevenLabs tạo
+audio hoặc TTS lỗi/đang thử lại không được coi là loa đang phát để chặn mic.
+Marker Gemini `<no speech>` đứng riêng bị bỏ trước TTS, kể cả khi được gửi
+thành nhiều mảnh văn bản.
+
+Giảm âm tạm thời dùng `HAL_LIVE_DUCK_GAIN` (mặc định `0.12`, gain PCM tuyến tính,
+không phải phần trăm volume hệ thống), chuyển xuống trong 15 ms và lên trong 80 ms.
+Đặt trong `/opt/hal/.env` trên device rồi restart HAL. Giá trị hợp lệ lớn hơn
+0 và không quá 1; giá trị không hợp lệ dùng lại `0.12`.
+Cấu hình này chỉ áp dụng cho luồng live với AEC phần cứng. Mặc định lấy từ
+demo, chưa phải mức tối ưu đã đo cho mọi lamp hoặc phòng.
+File `.env` overlay của cả `pro-respeaker-lite` và `pro-xvf3800` đặt rõ
+`HAL_LIVE_DUCK_GAIN=0.12`; profile Standard/Pro dùng AEC phần mềm không đặt biến này.
+watchdog khôi phục gain khi tín hiệu điều khiển cũ quá 500 ms. Phát hiện năng
+lượng cục bộ chỉ hạ âm lượng, không hủy TTS hay bỏ các đoạn văn bản tiếp theo.
+Giống chế độ `duck` của demo, chỉ tín hiệu ngắt từ provider mới hủy phát và
+chặn các đoạn đến muộn của câu trả lời đó. Nếu không được xác nhận, gain
+khôi phục sau 1,5 giây dưới ngưỡng tiếng nói. Nếu Gemini đã sinh xong nhưng
+ElevenLabs còn phát, không đảm bảo provider sẽ gửi tín hiệu ngắt; hạ âm cục
+bộ chưa đảm bảo dừng hẳn trong trường hợp này.
+Native audio vẫn là cấu hình riêng, không tự bật khi chọn đường này; ElevenLabs
+vẫn được hỗ trợ. Ngưỡng báo qua SSE cập nhật theo bộ chặn thích nghi; log
+`live-aec` có giới hạn, báo trạng thái phiên đang hoạt động tối đa mỗi giây
+một lần. Triển khai lấy ý tưởng từ script test hardware, không phải thuật
+toán giống hệt hay cam kết độ trễ ngắt lời đã đo của script đó.
+
+Chỉ đổi `/etc/autonomous/hardware-profile` chưa áp dụng các file của profile.
+Chọn `pro-respeaker-lite` trước khi cài/cập nhật gói device; chỉ restart HAL
+sẽ nạp lại `/opt/hal/.env` và cấu hình ALSA đang có.
 
 ### Hạn chế đã biết: `mute` có thể tự kích hoạt
 
@@ -2285,14 +2385,18 @@ giảm rõ rệt khả năng xảy ra trong lúc chờ.
 
 ### Kết thúc một phiên
 
-Một phiên kết thúc sau `HAL_LIVE_IDLE_HANGUP_S` (K, mặc định 15 s) mà **người
-dùng không có hành động nào**, và mic được trả thẳng lại cho VAD, vốn sẽ mở phiên
-mới khi có tiếng nói thật tiếp theo. Hai chi tiết khiến việc này chạy đúng:
+Một phiên kết thúc sau `HAL_LIVE_IDLE_HANGUP_S` (K, mặc định 15 s) không có
+hoạt động người dùng, phát loa hay tiến độ text/audio từ provider. Mic được
+trả thẳng lại cho VAD, vốn mở phiên mới khi có tiếng nói thật tiếp theo.
+Hai chi tiết khiến việc này chạy đúng:
 
 - **Câu trả lời của model không phải hành động của người dùng**, nhưng đồng hồ
-  được *giữ* trong lúc thiết bị đang nói, nên một câu trả lời dài không bao giờ
-  bị cắt giữa chừng. Cửa sổ đếm từ mốc muộn hơn trong hai mốc: lời cuối của người
-  dùng, hoặc thời điểm thiết bị ngừng nói — đúng lúc lượt thuộc về người dùng.
+  được *giữ* trong lúc thiết bị đang nói và làm mới khi nhận text/audio hợp lệ
+  từ provider, kể cả text đến trước audio đầu tiên của ElevenLabs. Cửa sổ đếm
+  từ mốc mới nhất: hoạt động người dùng, kết thúc phát loa hoặc output model.
+  Chỉ suy nghĩ mà không có text/audio mới không được miễn timeout vô hạn.
+  `HAL_LIVE_MAX_S` và giới hạn câu trả lời không được yêu cầu vẫn áp dụng cho
+  mọi đường live.
 - **Chỉ RMS thì không gánh nổi đồng hồ này.** Trong phòng ồn, sàn nhiễu nằm trên
   `HAL_VAD_THRESHOLD`, nên mọi khung đều đọc thành "người dùng đang nói" và phiên
   không bao giờ cúp. Quan sát trên thiết bị 07/09/2026 tại `intern-v2-6286`: sàn

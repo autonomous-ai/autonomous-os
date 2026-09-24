@@ -1035,6 +1035,21 @@ In particular, `_async_commit` suppresses `activityEnd` while quarantined too.
 Completing an old activity bracket is not safe when Gemini is waiting for the
 tool result; the replacement session starts its next activity cleanly.
 
+A valid `delegate_to_main` handoff also marks the session for replacement
+**before** publishing the tool event, even if Gemini has said nothing yet.
+The successful `delegated` acknowledgement clears the pending call but does
+not clear this replacement requirement. The next `prepare_turn()` rebuilds
+before streaming new capture. This prevents delayed post-handoff speech
+(including provider-generated system-error apologies) from leaking into the
+next live session with an empty turn ID. Empty/invalid delegation messages do
+not set this flag. Rebuilding adds connection overhead after a handoff; this
+is not an error-text filter and does not fix upstream tool execution errors.
+
+On receive timeout, `[realtime][transport]` logs connection/sender state,
+queued input count, age of the last successful audio send, pending tools and
+tool-gated frames. These are transport metadata, not recorded audio. The live
+capture loop's `last_upload_ms` measures enqueue time, not a successful wire send.
+
 The model is told (`resources/system_prompt*.md`, "Expression Exception") to
 never wait for, announce, or speak the emotion aloud. Note this is distinct from
 the non-realtime path, where the agent emits a `[HW:/emotion:…]` text marker that
@@ -2317,11 +2332,99 @@ and gets them back the moment a session ends.
 | Env | Default | Meaning |
 |-----|---------|---------|
 | `HAL_LIVE_MODE` | `false` | Whole-process live mode. Forces `HAL_REALTIME_TURN_DETECTION=server_vad` when that is `off` |
-| `HAL_LIVE_UPLINK_DURING_PLAYBACK` | `mute` | `mute` (no barge-in, ships today) or `cancelled` (true full duplex, needs the AEC fix) |
+| `HAL_AEC_ENABLED` | `true` | Software AEC; setting `false` together with live mode selects the shared adaptive path for hardware-processed audio |
+| `HAL_LIVE_UPLINK_DURING_PLAYBACK` | `mute` | On the software-AEC path: `mute` silences playback-time input; `cancelled` passes only AEC-cancelled frames; `always` passes every frame, including residual echo. The adaptive path applies its own gate |
 | `HAL_LIVE_PLAYBACK_TAIL_S` | `0.35` | Acoustic tail after the last reference write or observed TTS end, including without AEC |
-| `HAL_LIVE_IDLE_HANGUP_S` | `15` | Hang up after this long with no action **from the user**, measured from whichever came later: the user's last words or the moment the device stopped speaking |
+| `HAL_LIVE_IDLE_HANGUP_S` | `15` | Hang up after this long without user activity, playback or provider text/audio progress; measured from the latest of those events, including output before TTS starts |
 | `HAL_LIVE_MAX_UNPROMPTED_REPLIES` | `3` | Hard ceiling on consecutive model replies with no user speech between them — breaks a self-talk loop without cutting one long answer short |
 | `HAL_LIVE_MAX_S` | `600` | Absolute ceiling on one session |
+
+The shared adaptive live path is selected by `HAL_LIVE_MODE=true` and
+`HAL_AEC_ENABLED=false`. No extra flag or hardware-name detection is involved:
+explicitly disabling software AEC opts into the path for already hardware-
+processed audio. Software AEC defaults to `true` and retains its existing path.
+Lamp `pro-respeaker-lite` and `pro-xvf3800` both select the shared path with
+live mode on, software AEC off and `HAL_LIVE_UPLINK_DURING_PLAYBACK=always`;
+standard/pro keep software AEC on. On Lite, voice capture and playback use ALSA
+card `Lite` at 16 kHz; sensing uses `sndi2s4` through the profile's `asound.conf`.
+
+`live_gate.py` (`AdaptiveLiveGate`), `live_playback.py` and `live_reply.py`
+(`LiveReplyGuard`) implement the shared path. The gate uses an RMS energy
+heuristic, not a speech classifier. It leaves capture running and substitutes
+silence during playback until local speech is
+confirmed, then sends up to 300 ms of buffered onset audio before live frames.
+It holds the echo gate for 300 ms after playback ends.
+
+For live entry, the shared adaptive path bypasses WebRTC VAD, the Silero entry
+check and the realtime noise guard only when realtime is enabled and wake-word
+checking is disabled or wake focus is already granted. Sustained energy above
+the adaptive idle threshold for at least 160 ms still gates entry. With wake
+checking enabled and no focus, the existing STT wake-word confirmation remains
+required. The software-AEC path retains its existing entry checks.
+Inside an adaptive live session, the idle-hangup clock also uses the
+adaptive gate's speech state directly, without a second Silero check.
+
+The idle RMS threshold is the larger of −42 dBFS (about 260 PCM16 RMS) and
+four times the tracked noise floor, with a 160 ms onset. During playback the
+threshold is the maximum of −27 dBFS (about 1,464 PCM16 RMS), five times the
+noise floor, and the 500 ms output envelope multiplied by a learned echo
+coupling factor plus an 8 dB margin. Playback onset confirmation takes 240 ms;
+500 ms below threshold ends local speech. Like the demo, local barge-in waits
+for 3 seconds of cumulative speaker audio for AEC warm-up. HAL counts frames
+successfully written to the speaker, excluding TTS/network wait, from the live
+session start (capture is reopened after a session). It does not restart this
+clock for each sentence. During warm-up playback/tail audio is gated and cannot
+duck the speaker. A burst that starts during warm-up remains unaccepted even
+when playback crosses 3 seconds: local VAD tracks the same burst until 500 ms
+below threshold, then requires a new 240 ms onset. This matches the demo's
+onset-time permission latch, avoiding false ducking at approximately 3.2 seconds
+from sustained startup echo. Below-threshold playback frames also update the
+noise floor when local VAD is not speaking, as in the demo. Idle mic audio remains available. `live-aec`
+reports `played_s` and `aec_ready`; these indicate the time allowance, not a
+measurement of AEC convergence. These are not measured end-to-end latencies.
+
+The output envelope is estimated after temporary ducking and ALSA mixer
+attenuation, using the PCM sent to the speaker and actual `amixer` dB readback.
+Like the demo, the reference follows the duck ramp. Mixer
+state is read once at startup outside the audio path and updated by volume-
+control routes. Without a dB readback, the reference conservatively uses unity
+gain; it does not infer gain from saved percentages or a hardware-specific
+softvol curve. This avoids a pre-mixer level inflating the speech threshold
+when attenuation is known. It estimates the output reference, not measured
+acoustic sound pressure or exact audio latency.
+
+Echo gating starts only after a successful speaker write and expires 250 ms
+after the last write, followed by the gate's acoustic tail. Pending ElevenLabs
+synthesis and failed/retrying TTS are not playback and must not mute capture.
+A standalone Gemini `<no speech>` marker is discarded before TTS, including
+when it arrives split across text events.
+
+Playback ducking uses `HAL_LIVE_DUCK_GAIN` (default `0.12`, linear PCM gain,
+not the system volume percentage) with 15 ms down / 80 ms up ramps.
+Set it in the device's `/opt/hal/.env` and restart HAL. Valid values are
+greater than zero and at most one; invalid values fall back to `0.12`.
+This setting applies only to the hardware-AEC live path. The default comes
+from the demo and is not a measured optimum for every lamp or room.
+Both `pro-respeaker-lite` and `pro-xvf3800` profile `.env` overlays explicitly
+ship `HAL_LIVE_DUCK_GAIN=0.12`; Standard/Pro software-AEC profiles do not set it.
+A 500 ms stale
+control watchdog restores gain. Local energy detection only ducks playback;
+it does not cancel TTS or discard subsequent text. This matches the demo's
+`duck` mode: only a provider interruption cancels playback and suppresses late
+fragments of that reply. Without confirmation, gain returns after 1.5 seconds
+below the speech threshold. If Gemini has already finished generating, an
+interruption event is not guaranteed during remaining ElevenLabs playback;
+local ducking alone does not guarantee a complete stop in that case.
+Native audio remains a separate setting and
+is not enabled by selecting this path; ElevenLabs remains supported. The threshold
+reported through SSE follows the adaptive gate, and bounded `live-aec` logs
+report active-session state at most once per second. This implementation is
+inspired by the standalone hardware test, not an identical algorithm or a
+claim of its measured interruption latency.
+
+Changing `/etc/autonomous/hardware-profile` alone does not apply its files.
+Select `pro-respeaker-lite` before installing/updating the device package;
+a HAL restart alone reloads the existing `/opt/hal/.env` and ALSA configuration.
 
 ### Known limitation: `mute` can self-trigger
 
@@ -2342,14 +2445,17 @@ speaker volume makes it markedly less likely in the meantime.
 
 ### Ending a session
 
-A session ends after `HAL_LIVE_IDLE_HANGUP_S` (K, default 15 s) with **no action
-from the user**, and the mic goes straight back to the VAD, which opens a new
-session on the next real speech. Two details make this behave:
+A session ends after `HAL_LIVE_IDLE_HANGUP_S` (K, default 15 s) without user
+activity, playback or provider text/audio progress. The mic goes straight back
+to the VAD, which opens a new session on the next real speech. Two details
+make this behave:
 
 - **The model's reply is not user action**, but the clock is *held* while the
-  device is speaking, so a long answer is never cut off mid-sentence. The window
-  runs from whichever came later: the user's last words, or the moment the
-  device stopped talking — which is exactly when it becomes the user's turn.
+  device is speaking and refreshed by accepted provider text/audio output,
+  including text arriving before ElevenLabs produces its first audio. The
+  window starts at the latest user activity, playback end or model output.
+  Thinking without new text/audio does not grant an indefinite exemption.
+  `HAL_LIVE_MAX_S` and the unprompted-reply limit still apply to every live path.
 - **RMS alone cannot carry this clock.** In a noisy room the floor sits above
   `HAL_VAD_THRESHOLD`, so every frame reads as "the user is talking" and the
   session never hangs up. Device-observed 2026-09-07 on `intern-v2-6286`: a
