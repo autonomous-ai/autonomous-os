@@ -327,10 +327,19 @@ optional `error`, and an optional `data` payload.
 
 `tts.set` accepts optional `speed` in `0.25–4.0`, for example,
 `{"cmd":"data","kind":"tts.set","data":{"speed":1.2}}`. Omitting it
-preserves saved speed; without one, `HAL_TTS_SPEED` applies (default `1.3`).
+preserves saved speed; without one, `HAL_TTS_SPEED` applies (default `1.2`).
 The command acknowledges `starting` then `success` or `failure`, saving and
 reapplying HAL settings even when unchanged. The `info` uplink includes effective
-`tts_speed`. ElevenLabs clamps the outgoing speed to `0.7–1.2`.
+`tts_speed`. ElevenLabs HTTP v3 applies speed locally with provider speed `1.0`;
+other ElevenLabs models clamp the outgoing speed to `0.7–1.2`.
+
+`tts.preview` accepts the same optional `speed` range (`0.25–4.0`) for the
+preview utterance only. For example:
+`{"cmd":"data","kind":"tts.preview","data":{"text":"Hello","voice":"Rachel","speed":1.5}}`.
+It does not save config or change the speed of subsequent normal speech.
+Omitted/null speed uses the runtime setting. Invalid speed returns `failure`
+before synthesis; valid requests acknowledge `starting`, then `success` or
+`failure`. Success means HAL accepted playback, not that playback finished.
 
 **Receive:** `{"cmd": "data", "kind": "<kind>", "data": { ... }}`
 
@@ -340,7 +349,7 @@ reapplying HAL settings even when unchanged. The `info` uplink includes effectiv
 | `buddy.pair.revoke` | Revoke the current Buddy pairing and disconnect its WebSocket | _(none; optional `data` ignored)_ |
 | `buddy.status` | Query the current Buddy pairing and connection snapshot; also emitted on changes | _(none; optional `data` ignored)_ |
 | `tts.set` | Persist TTS voice/provider/language/speed config | `provider`, `voice`, `language`, optional `speed` |
-| `tts.preview` | One-shot TTS preview (no config write) | `text` (required), optional `provider`/`voice`/`language` |
+| `tts.preview` | One-shot TTS preview (no config write) | `text` (required), optional `provider`/`voice`/`language`/`speed` |
 | `wakeword.gate` | Set the top-level wake-word gate (async; acks `starting`) | `enabled` (required boolean) |
 | `timezone.set` | Apply the device's IANA timezone (async; acks `starting`) | `timezone` (required, e.g. `Asia/Ho_Chi_Minh`) |
 | `oauth.set` | Store/replace an OAuth token for a provider | `provider`, `access_token`, optional `refresh_token`/`token_type`/`expires_at`/`scopes`/`user_email`/`client_id` |

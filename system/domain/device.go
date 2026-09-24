@@ -1382,13 +1382,15 @@ type AgentRuntimeSetAck struct {
 }
 
 // MQTTTTSPreviewData is the nested data payload for cmd:"data", kind:"tts.preview".
-// Text is required; Provider/Voice/Language are optional overrides — empty
+// Text is required; Speed is an optional per-utterance rate (0.25–4.0).
+// Provider/Voice/Language are optional overrides — empty
 // fields make HAL fall back to the device's current TTS config.
 type MQTTTTSPreviewData struct {
-	Text     string `json:"text"`
-	Provider string `json:"provider,omitempty"`
-	Voice    string `json:"voice,omitempty"`
-	Language string `json:"language,omitempty"`
+	Speed    *float64 `json:"speed,omitempty"`
+	Text     string   `json:"text"`
+	Provider string   `json:"provider,omitempty"`
+	Voice    string   `json:"voice,omitempty"`
+	Language string   `json:"language,omitempty"`
 }
 
 // MQTTTTSPreviewCommand wraps the full tts.preview downlink envelope for unmarshalling.

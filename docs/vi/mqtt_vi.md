@@ -317,10 +317,18 @@ metadata device/version chuẩn cộng với `kind`, `status` (`success|failure`
 
 `tts.set` nhận `speed` tùy chọn trong `0.25–4.0`, ví dụ
 `{"cmd":"data","kind":"tts.set","data":{"speed":1.2}}`. Bỏ qua thì giữ
-giá trị đã lưu; nếu chưa lưu, dùng `HAL_TTS_SPEED` (mặc định `1.3`). Lệnh ack
+giá trị đã lưu; nếu chưa lưu, dùng `HAL_TTS_SPEED` (mặc định `1.2`). Lệnh ack
 `starting` rồi `success` hoặc `failure`; lưu và áp dụng lại HAL kể cả khi
-setting không đổi. Uplink `info` có `tts_speed` hiệu lực. ElevenLabs giới hạn
-tốc độ gửi đi trong `0.7–1.2`.
+setting không đổi. Uplink `info` có `tts_speed` hiệu lực. ElevenLabs HTTP v3
+áp dụng tốc độ ở HAL và gửi provider speed `1.0`; các model ElevenLabs khác
+giới hạn tốc độ gửi đi trong `0.7–1.2`.
+
+`tts.preview` nhận `speed` tùy chọn trong `0.25–4.0` cho riêng câu nghe thử:
+`{"cmd":"data","kind":"tts.preview","data":{"text":"Hello","voice":"Rachel","speed":1.5}}`.
+Không lưu config hoặc đổi tốc độ của câu nói bình thường tiếp theo. Bỏ qua/null
+thì dùng tốc độ runtime. Speed không hợp lệ trả `failure` trước khi tổng hợp;
+yêu cầu hợp lệ trả `starting`, rồi `success` hoặc `failure`. `success` chỉ xác
+nhận HAL nhận yêu cầu phát, không đảm bảo audio đã phát xong.
 
 **Nhận:** `{"cmd": "data", "kind": "<kind>", "data": { ... }}`
 
@@ -330,7 +338,7 @@ tốc độ gửi đi trong `0.7–1.2`.
 | `buddy.pair.revoke` | Thu hồi pairing Buddy hiện tại và ngắt WebSocket | _(không; bỏ qua `data` tùy chọn)_ |
 | `buddy.status` | Đọc snapshot pairing/kết nối Buddy; cũng tự phát khi thay đổi | _(không có; `data` tùy chọn được bỏ qua)_ |
 | `tts.set` | Lưu cấu hình TTS voice/provider/language/speed | `provider`, `voice`, `language`, `speed` (tùy chọn) |
-| `tts.preview` | Preview TTS một lần (không ghi config) | `text` (bắt buộc), tùy chọn `provider`/`voice`/`language` |
+| `tts.preview` | Preview TTS một lần (không ghi config) | `text` (bắt buộc), tùy chọn `provider`/`voice`/`language`/`speed` |
 | `wakeword.gate` | Bật/tắt wake-word gate top-level (bất đồng bộ; ack `starting`) | `enabled` (boolean bắt buộc) |
 | `timezone.set` | Áp dụng múi giờ IANA của device (bất đồng bộ; ack `starting`) | `timezone` (bắt buộc, ví dụ `Asia/Ho_Chi_Minh`) |
 | `oauth.set` | Lưu/thay token OAuth cho một provider | `provider`, `access_token`, tùy chọn `refresh_token`/`token_type`/`expires_at`/`scopes`/`user_email`/`client_id` |
