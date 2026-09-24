@@ -1051,7 +1051,8 @@ class TTSService:
         return False
 
     def speak(self, text: str, interruptible: bool = False, realtime_feedback: bool = False,
-              turn_id: str = "", realtime_reply: bool = False) -> bool:
+              turn_id: str = "", realtime_reply: bool = False,
+              speed: Optional[float] = None) -> bool:
         """Synthesize and play text. Returns True if started, False if busy or unavailable.
         If interruptible=True, a subsequent speak() call can stop this one.
         realtime_feedback=True feeds this text to the realtime agent on completion
@@ -1076,7 +1077,8 @@ class TTSService:
         # audible while the TTS provider itself is rate-limited. Dynamic
         # agent replies never match — the cache only ever holds warm-listed
         # fixed phrases. speak_cached mirrors this method's lock semantics.
-        if self._tts_cache_path(text).exists():
+        # Preview speed belongs to this utterance, never the shared service or cache.
+        if speed is None and self._tts_cache_path(text).exists():
             logger.info("TTS cache-first hit: %s", text[:50])
             return self.speak_cached(
                 text, interruptible=interruptible, realtime_feedback=realtime_feedback,
@@ -1102,6 +1104,7 @@ class TTSService:
         thread = threading.Thread(
             target=self._speak_sync,
             args=(text,),
+            kwargs={"speed": speed} if speed is not None else {},
             daemon=True,
             name="tts-speak",
         )
@@ -1715,7 +1718,8 @@ class TTSService:
         return [c for c in chunks if c]
 
     def _iter_tts_samples(self, text: str, dst_rate: int, ttfb_tag: Optional[str] = None,
-                          cancelled: Optional[Callable[[], bool]] = None):
+                          cancelled: Optional[Callable[[], bool]] = None,
+                          speed: Optional[float] = None):
         """Yield float32 sample frames from the TTS backend's PCM stream."""
         stopped = cancelled if cancelled is not None else self._stop_event.is_set
         np = self._np
@@ -1731,7 +1735,7 @@ class TTSService:
             text=text,
             voice=self._voice,
             model=self._model,
-            speed=self._speed,
+            speed=self._speed if speed is None else speed,
             instructions=self._instructions,
         ):
             if stopped():
@@ -1823,6 +1827,7 @@ class TTSService:
         dst_rate: int,
         out_q: "queue.Queue[Optional[np.ndarray]]",
         idx_total: tuple[int, int],
+        speed: Optional[float] = None,
     ) -> None:
         """Produce head chunk frames into a queue. Runs in parallel with the
         ALSA OutputStream open call so HTTP TTFB overlaps codec warmup."""
@@ -1833,9 +1838,9 @@ class TTSService:
                 try:
                     logger.info(
                         "TTS chunk %d/%d: len=%d (attempt=%d, speed=%.2f)",
-                        idx, total, len(text), attempt + 1, self._speed,
+                        idx, total, len(text), attempt + 1, self._speed if speed is None else speed,
                     )
-                    for frame in self._iter_tts_samples(text, dst_rate, ttfb_tag="c0"):
+                    for frame in self._iter_tts_samples(text, dst_rate, ttfb_tag="c0", speed=speed):
                         if self._stop_event.is_set():
                             return
                         out_q.put(frame)
@@ -1864,6 +1869,7 @@ class TTSService:
         tail_chunks: list[str],
         dst_rate: int,
         out_q: "queue.Queue[Optional[np.ndarray]]",
+        speed: Optional[float] = None,
     ) -> None:
         """Produce tail frames sequentially into one shared queue."""
         total = len(tail_chunks) + 1
@@ -1875,7 +1881,7 @@ class TTSService:
                 while attempt <= self._max_retries:
                     try:
                         logger.info("Tail producer start c%d/%d len=%d", i, total, len(chunk_text))
-                        for frame in self._iter_tts_samples(chunk_text, dst_rate):
+                        for frame in self._iter_tts_samples(chunk_text, dst_rate, speed=speed):
                             if self._stop_event.is_set():
                                 return
                             out_q.put(frame)
@@ -1908,7 +1914,7 @@ class TTSService:
             except Exception:
                 pass
 
-    def _speak_sync(self, text: str):
+    def _speak_sync(self, text: str, speed: Optional[float] = None):
         """Head chunk direct playback + parallel tail producer queue."""
         sd = self._sd
         dst_rate = self._device_rate or TTS_SAMPLE_RATE
@@ -1950,6 +1956,7 @@ class TTSService:
         head_thread = threading.Thread(
             target=self._head_producer,
             args=(head_text, dst_rate, head_q, (1, head_total)),
+            kwargs={"speed": speed} if speed is not None else {},
             daemon=True,
             name="tts-head-producer",
         )
@@ -1971,6 +1978,7 @@ class TTSService:
                         tail_thread = threading.Thread(
                             target=self._tail_producer,
                             args=(tail_chunks, dst_rate, tail_q),
+                            kwargs={"speed": speed} if speed is not None else {},
                             daemon=True,
                             name="tts-tail-producer",
                         )
@@ -2031,6 +2039,7 @@ class TTSService:
                     head_thread = threading.Thread(
                         target=self._head_producer,
                         args=(head_text, dst_rate, head_q, (1, head_total)),
+                        kwargs={"speed": speed} if speed is not None else {},
                         daemon=True,
                         name="tts-head-producer-retry",
                     )
@@ -2114,6 +2123,9 @@ class TTSService:
 
     def _tts_cache_key(self, text: str) -> str:
         h = hashlib.sha1()
+        revision = getattr(self._backend, "cache_revision", "")
+        if revision:
+            h.update(revision.encode("utf-8") + b"\x00")
         h.update(self._provider.encode("utf-8"))
         h.update(b"\x00")
         h.update((self._voice or "").encode("utf-8"))

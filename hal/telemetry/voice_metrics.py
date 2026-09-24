@@ -42,6 +42,7 @@ Design rules that decide whether a number is trustworthy:
 """
 
 import logging
+import math
 import threading
 import time
 
@@ -132,15 +133,16 @@ class _Interaction:
         "run_id", "ack_latency_ms", "ack_modality", "ack_kind",
         "exclusion_reason", "failure_reason", "reported", "report_event_id",
         "timer", "life_timer", "closed", "last_activity",
-        "answer_latency_ms", "answer_kind",
+        "answer_latency_ms", "answer_kind", "ack_played_at", "answer_played_at",
         "task_started_at_ms", "task_revision", "task_exclusion_reason",
-        "endpoint_known", "mode", "suppressed",
+        "endpoint_known", "mode", "suppressed", "provider_turn_id",
     )
 
     def __init__(self, iid: str, speech_end: float, method: str):
         self.id = iid
         self.endpoint_known = True
         self.mode = "turn"
+        self.provider_turn_id = ""
         self.task_started_at_ms = int(time.time() * 1000) - _ms(_now() - speech_end)
         self.task_revision = 0
         self.task_exclusion_reason = ""
@@ -150,6 +152,7 @@ class _Interaction:
         self.route = ""
         self.run_id = ""
         self.ack_latency_ms = None
+        self.ack_played_at = None
         self.ack_modality = ""
         self.ack_kind = ""
         # When the ANSWER itself was heard, as opposed to the receipt. A
@@ -157,6 +160,7 @@ class _Interaction:
         # docs/voice-metrics.md), so ack_latency_ms alone cannot say how long
         # the user waited for the actual reply — this can.
         self.answer_latency_ms = None
+        self.answer_played_at = None
         self.answer_kind = ""
         self.exclusion_reason = ""
         # A failure that is NOT an exclusion: the request was valid and went
@@ -212,6 +216,9 @@ def speech_end(method: str, at: float = 0.0, *, endpoint_known: bool = True,
     ``method``: ``silence_clock``, ``stt_final``, ``tts_started``,
     ``music_started``, ``max_duration``, ``stt_error``.
     """
+    if mode == "live" and not _valid_endpoint(at):
+        endpoint_known = False
+        at = 0.0
     iid = "vi-" + client.new_event_id()[:16]
     with _lock:
         it = _Interaction(iid, at or _now(), method)
@@ -279,6 +286,27 @@ def _retire_interaction(iid: str) -> None:
         it.closed = True
 
 
+def bind_provider_turn(iid: str, provider_turn_id: str) -> None:
+    """Bind an explicit provider key without inferring ownership from recency."""
+    if not iid or not provider_turn_id:
+        return
+    with _lock:
+        it = _interactions.get(iid)
+        if it is not None and not it.provider_turn_id:
+            it.provider_turn_id = provider_turn_id
+
+
+def provider_interaction(provider_turn_id: str) -> str:
+    """Resolve a provider key among the bounded tracked interactions only."""
+    if not provider_turn_id:
+        return ""
+    with _lock:
+        matches = [it.id for it in _interactions.values()
+                   if it.provider_turn_id == provider_turn_id]
+        # A reused provider key is ambiguous, never a reason to pick the newest.
+        return matches[0] if len(matches) == 1 else ""
+
+
 def current_interaction() -> str:
     """The utterance currently being served, or "" if none is open.
 
@@ -310,19 +338,32 @@ def set_route(iid: str, route: str, event_type: str = "") -> None:
         _report_amendment(amendment)
 
 
+def _valid_endpoint(at: float) -> bool:
+    """Only accept finite timestamps already reached by the monotonic clock."""
+    return (
+        isinstance(at, (int, float)) and not isinstance(at, bool)
+        and math.isfinite(at) and 0 < at <= _now()
+    )
+
+
 def set_endpoint(iid: str, method: str, at: float) -> None:
     """Upgrade transcript-only evidence when a real provider endpoint arrives.
 
-    Never turn an endpoint received after playback into a zero/negative latency.
-    Such an observation remains outside KPI-1, but still belongs to the task cohort.
+    Arrival can follow playback if the event carries an earlier real endpoint.
+    An endpoint timestamp after first playback cannot establish an ack latency.
     """
     with _lock:
         it = _interactions.get(iid)
-        if it is None or it.endpoint_known or it.ack_kind:
+        if (it is None or it.endpoint_known or not _valid_endpoint(at)
+                or (it.ack_played_at is not None and at > it.ack_played_at)):
             return
         it.speech_end = at
         it.speech_end_method = method
         it.endpoint_known = True
+        if it.ack_played_at is not None:
+            it.ack_latency_ms = _ms(it.ack_played_at - at)
+        if it.answer_played_at is not None:
+            it.answer_latency_ms = _ms(it.answer_played_at - at)
         amendment = _amend_params(it, "late_endpoint") if it.reported else None
     if amendment:
         _report_amendment(amendment)
@@ -459,6 +500,7 @@ def playback_audio(owner: str, tts=None) -> None:
                 it.closed = False
                 _arm_lifetime(it)
             if it is not None and not it.ack_kind:
+                it.ack_played_at = started
                 if it.endpoint_known:
                     it.ack_latency_ms = _ms(started - it.speech_end)
                 it.ack_kind = kind
@@ -468,6 +510,7 @@ def playback_audio(owner: str, tts=None) -> None:
                     iid, kind, it.ack_latency_ms,
                 )
             if it is not None and not it.answer_kind and kind in _ANSWER_KINDS:
+                it.answer_played_at = started
                 if it.endpoint_known:
                     it.answer_latency_ms = _ms(started - it.speech_end)
                 it.answer_kind = kind

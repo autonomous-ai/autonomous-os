@@ -109,7 +109,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const [ttsProvider, setTtsProvider] = useState("elevenlabs");
   const [ttsProviders, setTtsProviders] = useState<string[]>([]);
   const [ttsVoice, setTtsVoice] = useState("Rachel");
-  const [ttsSpeed, setTtsSpeed] = useState(1.3);
+  const [ttsSpeed, setTtsSpeed] = useState(1.2);
   const [ttsVoices, setTtsVoices] = useState<string[]>([]);
   const [realtimeEnabled, setRealtimeEnabled] = useState(true);
   const [wakeWord, setWakeWord] = useState(false);
@@ -240,7 +240,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         setTtsBaseUrl((cfg.tts_base_url ?? "") || llmUrlInit);
         setTtsProvider(cfg.tts_provider || "elevenlabs");
         setTtsVoice(cfg.tts_voice || "Rachel");
-        setTtsSpeed(cfg.tts_speed ?? 1.3);
+        setTtsSpeed(cfg.tts_speed ?? 1.2);
         setWakeWord(cfg.wakeword ?? false);
         setAgentName(cfg.agent_name ?? "");
         setWakePhrases(cfg.wake_phrases ?? []);
@@ -324,7 +324,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
           ttsBaseUrl: (cfg.tts_base_url ?? "") || llmUrlInit,
           ttsProvider: cfg.tts_provider || "elevenlabs",
           ttsVoice: cfg.tts_voice || "Rachel",
-          ttsSpeed: cfg.tts_speed ?? 1.3,
+          ttsSpeed: cfg.tts_speed ?? 1.2,
           wakeWord: cfg.wakeword ?? false,
           channel: (cfg.channel as ChannelType) || "telegram",
           teleUserId: cfg.telegram_user_id ?? "",

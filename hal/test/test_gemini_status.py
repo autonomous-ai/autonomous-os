@@ -136,3 +136,36 @@ def test_overlapping_receive_completion_keeps_status_with_its_message():
         assert second.server_content.interaction_status == "IDLE"
 
     asyncio.run(run())
+
+
+def test_endpoint_fields_survive_real_sdk_and_missing_signal_is_counted(caplog):
+    async def run():
+        session = session_for(
+            '{"voiceActivity":{"type":"ACTIVITY_END","audioOffset":"1.250s"}}',
+            '{"serverContent":{"inputTranscription":{"text":"hello"},"turnComplete":true}}',
+        )
+        install_interaction_status(session)
+        with caplog.at_level("INFO"):
+            activity = (await session._receive()).voice_activity
+            assert activity.voice_activity_type == "ACTIVITY_END"
+            assert activity.audio_offset == "1.250s"
+            assert (await session._receive()).voice_activity is None
+        assert session._ws._endpoint_counts == {
+            "messages": 2, "wire_activity": 1, "sdk_activity": 1,
+            "wire_legacy": 0, "wire_speech_state": 0, "input_transcriptions": 1,
+        }
+        assert "[endpoint-wire]" in caplog.text
+        assert "[endpoint-coverage]" in caplog.text
+        assert "hello" not in caplog.text
+    asyncio.run(run())
+
+
+def test_endpoint_diagnostic_failure_cannot_break_receive(monkeypatch):
+    async def run():
+        session = session_for('{"serverContent":{"turnComplete":true}}')
+        install_interaction_status(session)
+        def broken(*args):
+            raise RuntimeError("observer failed")
+        monkeypatch.setattr(session._ws, "trace_endpoint", broken)
+        assert (await session._receive()).server_content.turn_complete
+    asyncio.run(run())
