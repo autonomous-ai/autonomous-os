@@ -13,6 +13,7 @@ class ProviderErrorTTSTests(unittest.TestCase):
         "I'm sorry, there was a system error.",
         "Rất tiếc, đã có lỗi hệ thống xảy ra.",
         "Rất tiếc, đã xảy ra lỗi hệ thống.",
+        "Rất tiếc, đã xảy ra lỗi hệ thống, vui lòng thử lại sau nhé.",
         "Rất tiếc, đã xảy ra lỗi hệ thống trong quá trình xử lý yêu cầu của bạn.",
     )
 
