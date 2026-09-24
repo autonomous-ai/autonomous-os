@@ -112,10 +112,19 @@ async def emotion_recognize(req: EmotionRecognizeRequest):
 
     try:
         face_crop = decode_image(req.image_b64)
-        emotion = await emotion_model.predict_face(face_crop)
 
-        if emotion is None or emotion.confidence < req.threshold:
-            return EmotionRecognizeResponse(detections=[])
+        if req.raw:
+            # The client gates. Hand back what the model said, even below
+            # threshold — dropping it here would hide it from the client's gate.
+            emotion = await emotion_model.predict_face(face_crop, gate=False)
+            if emotion is None:
+                return EmotionRecognizeResponse(detections=[])
+            probabilities = emotion.probabilities
+        else:
+            emotion = await emotion_model.predict_face(face_crop)
+            if emotion is None or emotion.confidence < req.threshold:
+                return EmotionRecognizeResponse(detections=[])
+            probabilities = None
 
         logger.info("[Facial emotion] Detected %s (%.2f)", emotion.emotion, emotion.confidence)
         return EmotionRecognizeResponse(
@@ -127,6 +136,7 @@ async def emotion_recognize(req: EmotionRecognizeRequest):
                     bbox=emotion.bbox,
                     valence=emotion.valence,
                     arousal=emotion.arousal,
+                    probabilities=probabilities,
                 )
             ]
         )
