@@ -35,7 +35,9 @@ status read before completing the reply. The check is required in that case;
 mentioning a measurement is optional and depends on fresh, relevant evidence.
 Urgent reported symptoms take priority over sensor checks. If capability is
 absent/unknown, the skill is unavailable, or the read fails, continue ordinary
-support without sensor-error commentary or retries.
+support without sensor-error commentary or retries. Ordinary room-feeling
+reports/questions use the Environmental care branch below, including its
+unavailable-data reply, rather than this personal-symptom fallback.
 
 Do not invent an activity event, run the activity/log router below, or infer
 screen use, duration, dehydration or a symptom cause from the complaint.
@@ -55,7 +57,13 @@ do not invent readings or stay silent on a user asking for support. Use whicheve
 metrics are available, regardless of the installed component. Missing or null
 metrics do not invalidate other readings or establish a hardware fault; do not
 require gas indices before giving supported temperature or CO₂ information.
-Follow environment's meaning-first response rule: explain the relevant comfort
+For ordinary room-feeling reports/questions and their follow-ups, apply
+environment's reference/room-comfort.md: one short casual sentence, no numbers,
+units, sensor names or tags; its fixed unavailable reply takes precedence over
+silent omission for that branch. Explicit numeric requests remain answerable.
+Personal symptoms without a room question keep the discomfort route; urgent
+symptoms/exposure take priority over sensor checks and brevity.
+For other environmental context, follow environment's meaning-first response rule: explain the relevant comfort
 observation or practical implication in plain language. Omit numbers by default;
 include them only when requested or materially useful, with their meaning.
 Never replace missing evidence with a reassuring or alarming air-quality label.

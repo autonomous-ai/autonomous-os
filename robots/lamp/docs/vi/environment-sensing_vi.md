@@ -460,14 +460,33 @@ Skill tham khảo mục environmental-care của `skills/wellbeing/SKILL.md`
 đã đọc, không chuyển lượt qua lại giữa các skill. Hỏi về phòng và hỗ trợ khi
 khó chịu không cần camera, danh tính, log hoạt động hay bộ đếm uống nước.
 
-Câu hỏi thông thường về phòng, nhận xét lúc khởi động, update tự động và hỗ
-trợ khi khó chịu đều diễn giải ý nghĩa trước số: một tình trạng hoặc thay đổi
-có căn cứ bằng lời dễ hiểu, kèm tối đa một hành động hữu ích. Mặc định bỏ số;
-chỉ đưa giá trị khi được hỏi hoặc thực sự giúp quyết định, kèm giải thích.
-Không thêm ngưỡng hay cho phép kết luận mạnh hơn: tăng chưa chắc là mức xấu,
-nhiệt độ không xác định chất lượng không khí, và số đo từng phần không chứng
-nhận phòng an toàn hay sạch. Nếu chưa đủ căn cứ diễn giải, nói rõ giới hạn
-thay vì đọc hàng loạt số.
+Câu hỏi hoặc nhận xét thông thường về cảm giác trong phòng (nóng, lạnh, bí,
+khô hoặc có vẻ có khói), cùng câu hỏi tiếp nối, dùng
+`skills/environment/reference/room-comfort.md`: đọc status một lần hoặc dùng
+snapshot hiện tại, rồi trả lời một câu ngắn, thân mật, không đọc số, đơn vị,
+tên sensor hay tag cảm xúc. Khi hỏi rõ số đo, vẫn trả giá trị được yêu cầu.
+Dùng số đo phù hợp còn hợp lệ để quyết định, không lặp lại lời than khi chưa
+có căn cứ. Kiểm tra độ mới và trạng thái nguồn theo từng chỉ số, không chỉ
+snapshot chung.
+
+Ngưỡng diễn đạt do người dùng chọn: nhiệt độ trên 27°C là nóng, dưới 19°C là
+lạnh; độ ẩm dưới 35% là khô, trên 65% là oi dính; CO₂ đo thật trên 1000 ppm
+là bí/nặng; PM2.5 trên 35 µg/m³ là nhiều bụi. So sánh nghiêm ngặt: bằng ngưỡng
+không kích hoạt nhãn. Đây là quy tắc diễn đạt, không phải giới hạn sức khỏe
+hay ngưỡng sự kiện OS; bụi cao không chứng minh có khói. Số đo bình thường
+chỉ cho phép nhận xét có phạm vi như “Trong này có vẻ không nóng,” không nói
+“không khí an toàn” hoặc “do bạn thôi.” Không bịa xu hướng, nguồn gây ra hay
+thiết bị sẵn có. Khi câu hỏi thông thường về phòng thiếu số đo phù hợp còn
+dùng được, chỉ nói “Not sure. I can't feel the air right now.” hoặc bản tương
+đương theo ngôn ngữ đang dùng: “Chưa rõ. Giờ mình không cảm nhận được không khí.”
+Đây là ngoại lệ hai câu cố định, không thêm lời khuyên.
+
+Nhận xét lúc khởi động và update tự động giữ nguyên quy tắc thời điểm, im
+lặng và snapshot. Diễn giải ý nghĩa có căn cứ trước số, kèm tối đa một hành
+động hữu ích. Triệu chứng cá nhân không kèm câu hỏi về phòng vẫn theo luồng
+wellbeing bên dưới; khó thở hoặc khói/phơi nhiễm do người dùng báo được ưu
+tiên trước việc đọc sensor và quy tắc trả lời ngắn. Số đo từng phần không
+chứng nhận phòng an toàn, sạch hay xác định nguyên nhân triệu chứng.
 
 Khi người dùng nói mệt, nhức đầu, chóng mặt, bí bách hoặc khó tập trung,
 wellbeing bắt buộc đọc reference discomfort, kể cả câu không chuẩn ngữ pháp
@@ -475,8 +494,8 @@ như “I'm headache, tired, what happen?”. Không tự suy ra việc dùng m�
 thời lượng hay nguyên nhân triệu chứng từ lời than. Capability
 thiếu/chưa biết thì không gọi công cụ môi trường; đọc lỗi, toàn null hoặc stale
 thì bỏ qua gợi ý môi trường. Không nhắc lỗi sensor hay yêu cầu setup hardware
-khi người dùng đang chia sẻ khó chịu. Chỉ giải thích thiếu dữ liệu nếu họ hỏi
-rõ về số đo phòng. Khi có capability và không có dấu hiệu khẩn cấp, bắt buộc
+khi người dùng đang chia sẻ khó chịu. Câu hỏi/nhận xét thông thường về cảm
+giác trong phòng dùng câu dự phòng khi thiếu dữ liệu ở trên. Khi có capability và không có dấu hiệu khẩn cấp, bắt buộc
 tham khảo environment và đọc status một lần có timeout (hoặc dùng snapshot
 hiện tại đã cung cấp) trước khi hoàn tất phản hồi. Việc thêm nhận xét phù hợp
 và một gợi ý thoải mái/thông gió có điều kiện vẫn là tùy chọn. Số đo không xác định nguyên nhân triệu chứng
@@ -490,8 +509,9 @@ loại nồng độ tự động hay ngưỡng OS. Dữ liệu thật đến sau
 nhưng không ngầm tạo lịch kiểm tra, log wellbeing mới hoặc quyền điều khiển
 thiết bị.
 
-- **Hỏi về phòng:** đọc status một lần, diễn giải ý nghĩa có căn cứ; thiếu dữ liệu hoặc
-  dữ liệu cũ là chưa biết, không phải không ô nhiễm hay bằng chứng an toàn.
+- **Hỏi về phòng:** đọc status một lần hoặc dùng snapshot hiện tại, rồi trả lời
+  ngắn theo quy tắc trên; thiếu số đo phù hợp còn dùng được thì chỉ nói câu dự
+  phòng, không khẳng định không ô nhiễm hay an toàn.
 - **Khởi động:** chào ngay; có thể thêm một câu từ số đo đã cache đủ điều kiện.
   Nếu chưa có, snapshot đầu tiên đủ điều kiện có thể tạo update riêng sau lời
   chào, không chào lần nữa hay gọi API cho bản tin này. Bỏ số đo ban đầu đã cũ.
