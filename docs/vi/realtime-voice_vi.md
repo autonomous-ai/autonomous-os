@@ -2300,8 +2300,13 @@ năm lần nền nhiễu và bao biên âm lượng loa trong 500 ms nhân hệ 
 3 giây audio loa cộng dồn để AEC ổn định. HAL đếm frame ghi thành công ra loa,
 không tính thời gian chờ TTS/mạng, từ đầu phiên live (mic được mở lại sau phiên).
 Không đặt lại bộ đếm ở mỗi câu. Trong thời gian chờ, audio khi loa phát/vọng
-bị chặn và không thể hạ loa; tiếng vọng đầu phiên không được gửi bù. Sau thời
-gian chờ, HAL cần xác nhận mới đủ 240 ms. Mic lúc nghỉ vẫn hoạt động.
+bị chặn và không thể hạ loa. Một đợt vượt ngưỡng bắt đầu trong thời gian chờ
+vẫn không được chấp nhận khi loa phát qua mốc 3 giây: VAD theo dõi cùng đợt
+đó đến khi dưới ngưỡng đủ 500 ms, rồi mới nhận một đợt mới đủ 240 ms. Cách
+chốt quyền ngắt ngay lúc bắt đầu giống demo, tránh nhận nhầm tiếng vọng đầu
+phiên kéo dài thành nói chen ở khoảng 3,2 giây. Frame dưới ngưỡng khi loa
+phát cũng cập nhật nền nhiễu khi VAD chưa nhận tiếng nói, giống demo.
+Mic lúc nghỉ vẫn hoạt động.
 `live-aec` ghi `played_s` và `aec_ready`; đây là thời gian chờ cho phép,
 không phải phép đo AEC đã hội tụ hay độ trễ đầu cuối đo được.
 

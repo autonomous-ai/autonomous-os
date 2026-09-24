@@ -23,6 +23,8 @@ class AdaptiveLiveGate:
         self.noise = 0.003
         self.threshold = max(self.IDLE_FLOOR, self.noise * 4)
         self.speaking = False
+        self._vad_speaking = False
+        self._barge_allowed = False
         self.duck = False
         self.coupling_db = -8.0
         self._time = 0.0
@@ -62,13 +64,16 @@ class AdaptiveLiveGate:
         if duration is not None and (not math.isfinite(duration) or duration <= 0):
             raise ValueError("duration must be finite and positive")
         threshold = max(self.IDLE_FLOOR, self.noise * 4)
-        if not self.speaking and rms <= threshold:
-            # Equivalent to the demo's 20 ms fast-down/slow-up smoothing.
-            retention = 0.9 if rms < self.noise else 0.995
-            alpha = 1 - retention ** ((self._dt if duration is None else duration) / 0.02)
-            self.noise = min(0.05, max(0.0005, self.noise + alpha * (rms - self.noise)))
+        if not self._vad_speaking and rms <= threshold:
+            self._track_noise(rms, self._dt if duration is None else duration)
         self.threshold = max(self.IDLE_FLOOR, self.noise * 4)
         return self.threshold
+
+    def _track_noise(self, rms, duration):
+        # The demo tracks subthreshold residual echo as well as idle ambient.
+        retention = 0.9 if rms < self.noise else 0.995
+        alpha = 1 - retention ** (duration / 0.02)
+        self.noise = min(0.05, max(0.0005, self.noise + alpha * (rms - self.noise)))
 
     def _remember(self, frame, rate):
         self._prefix.append(frame.copy())
@@ -127,6 +132,8 @@ class AdaptiveLiveGate:
                 # Idle speech may be stale or echo at the start of playback.
                 # Reconfirm against playback thresholds before opening/ducking.
                 self.speaking = False
+                self._vad_speaking = False
+                self._barge_allowed = False
                 self._below = 0.0
                 self._clear_prefix()
         self._risk = risk
@@ -141,20 +148,15 @@ class AdaptiveLiveGate:
                                  envelope * 10 ** ((self.coupling_db + 8) / 20))
             need = 0.24
         else:
-            self.threshold = self.idle_threshold(rms)
+            self.threshold = max(self.IDLE_FLOOR, self.noise * 4)
             need = 0.16
         above = rms > self.threshold
-        # Like the demo, wait for speaker audio to warm up the board AEC.
-        # Queue/network wait must not count. Reconfirm after warm-up so an
-        # earlier echo burst cannot open the uplink or duck the speaker.
+        # Count VAD even during warm-up, but latch admission at its onset.
+        # A rejected echo burst must end before a later burst can be admitted;
+        # crossing the warm-up deadline is not itself a fresh speech onset.
         warming_up = risk and playback_seconds < self.AEC_WARMUP_S
-        if warming_up:
-            self.speaking = False
-            self.duck = False
-            self._above = 0.0
-            self._clear_prefix()
         was_speaking = self.speaking
-        if risk and not self.speaking and envelope > 0.003:
+        if risk and not self._vad_speaking and envelope > 0.003:
             ratio = 20 * math.log10(max(rms, 1e-9) / envelope)
             if above:
                 self._burst_peak = max(ratio, self._burst_peak if self._burst_peak is not None else ratio)
@@ -166,28 +168,34 @@ class AdaptiveLiveGate:
                 alpha = 1 - 0.95 ** (self._dt / 0.02)
                 self.coupling_db += alpha * max(0.0, min(0.0, ratio) - self.coupling_db)
                 self.coupling_db = max(-30.0, self.coupling_db - self._dt)
-        if above and not warming_up:
+        if above:
             self._above += self._dt
             self._below = 0.0
         else:
             self._above = 0.0
             self._below += self._dt
-        if not self.speaking and self._above + 1e-9 >= need:
-            self.speaking = True
-            self.speech_started = True
+            if not self._vad_speaking:
+                self._track_noise(rms, self._dt)
+        if not self._vad_speaking and self._above + 1e-9 >= need:
+            self._vad_speaking = True
+            self._barge_allowed = not warming_up
+            self.speech_started = self._barge_allowed
             self._burst_peak = None
-            if risk:
+            if risk and self._barge_allowed:
                 self.barge_in = True
                 self.duck = True
                 self._duck_quiet = 0.0
-        elif self.speaking and self._below + 1e-9 >= 0.5:
-            self.speaking = False
+        elif self._vad_speaking and self._below + 1e-9 >= 0.5:
+            self._vad_speaking = False
+            self._barge_allowed = False
+        self.speaking = self._vad_speaking and self._barge_allowed
         if self.duck:
             self._duck_quiet = 0.0 if above else self._duck_quiet + self._dt
             if self._duck_quiet + 1e-9 >= 1.5 or not risk:
                 self.duck = False
 
-        if warming_up:
+        if warming_up or (risk and self._vad_speaking and not self._barge_allowed):
+            self._clear_prefix()
             return np.zeros_like(frame)
         if risk and not self.speaking:
             self._remember(frame, rate)

@@ -32,9 +32,40 @@ class GateTests(unittest.TestCase):
         for i in range(12):
             result = gate.process(self.frame(0.3), self.RATE, True, 0.1,
                                   playback_seconds=3.0)
+            self.assertFalse(gate.barge_in)
+            self.assertFalse(np.any(result))
+        self.assertFalse(gate.duck)
+        # A rejected warm-up utterance must end before a fresh onset can pass.
+        for _ in range(25):
+            gate.process(self.frame(0), self.RATE, True, 0.1, playback_seconds=3.0)
+        for i in range(12):
+            result = gate.process(self.frame(0.3), self.RATE, True, 0.1,
+                                  playback_seconds=3.0)
             self.assertEqual(gate.barge_in, i == 11)
         self.assertTrue(gate.duck)
-        self.assertEqual(len(result), 12 * 320)
+        self.assertEqual(np.count_nonzero(result), 12 * 320)
+
+    def test_sustained_echo_crossing_warmup_never_becomes_new_speech(self):
+        gate = AdaptiveLiveGate()
+        echo = np.full(320, 6000, dtype=np.int16)
+        for i in range(250):
+            result = gate.process(echo, self.RATE, True, 400 / 32768,
+                                  playback_seconds=(i + 1) * 0.02)
+            self.assertFalse(np.any(result))
+            self.assertFalse(gate.speaking)
+            self.assertFalse(gate.speech_started)
+            self.assertFalse(gate.barge_in)
+            self.assertFalse(gate.duck)
+        for _ in range(25):
+            gate.process(self.frame(0), self.RATE, True, 400 / 32768,
+                         playback_seconds=5.0)
+        for i in range(12):
+            result = gate.process(echo, self.RATE, True, 400 / 32768,
+                                  playback_seconds=5.0)
+            self.assertEqual(gate.barge_in, i == 11)
+        self.assertTrue(gate.speaking)
+        self.assertEqual(np.count_nonzero(result == 6000), 12 * 320)
+        self.assertGreaterEqual(gate.replayed_samples, 11 * 320)
 
     def test_warmup_does_not_block_idle_microphone(self):
         gate = AdaptiveLiveGate()
@@ -59,7 +90,7 @@ class GateTests(unittest.TestCase):
         np.testing.assert_array_equal(gate.process(following, self.RATE, True, 0.1, playback_seconds=3.0), following)
         self.assertEqual(gate.buffered_samples, 0)
 
-    def test_idle_forwarded_and_ambient_only_tracking(self):
+    def test_idle_forwarded_and_subthreshold_playback_noise_tracked(self):
         gate = AdaptiveLiveGate()
         low = self.frame(0.001)
         for _ in range(100):
@@ -68,7 +99,19 @@ class GateTests(unittest.TestCase):
         noise = gate.noise
         for _ in range(100):
             gate.process(self.frame(0.05), self.RATE, True, 0.5)
-        self.assertEqual(gate.noise, noise)
+        self.assertGreater(gate.noise, noise)
+
+    def test_playback_residual_updates_noise_floor_like_demo(self):
+        for dt in (0.02, 0.064):
+            gate = AdaptiveLiveGate()
+            elapsed = 0
+            while elapsed + dt <= 10.000001:
+                gate.process(self.frame(600 / 32768, dt), self.RATE, True,
+                             400 / 32768, playback_seconds=elapsed)
+                elapsed += dt
+            self.assertAlmostEqual(gate.noise * 32768, 559, delta=2)
+            self.assertAlmostEqual(gate.threshold * 32768, 2794, delta=10)
+            self.assertFalse(gate.barge_in)
 
     def test_confirmation_duration_independent_of_frame_size(self):
         for dt in (0.01, 0.02, 0.032, 0.064):

@@ -2359,8 +2359,12 @@ for 3 seconds of cumulative speaker audio for AEC warm-up. HAL counts frames
 successfully written to the speaker, excluding TTS/network wait, from the live
 session start (capture is reopened after a session). It does not restart this
 clock for each sentence. During warm-up playback/tail audio is gated and cannot
-duck the speaker; early echo is not replayed. HAL requires a fresh 240 ms
-confirmation after warm-up. Idle mic audio remains available. `live-aec`
+duck the speaker. A burst that starts during warm-up remains unaccepted even
+when playback crosses 3 seconds: local VAD tracks the same burst until 500 ms
+below threshold, then requires a new 240 ms onset. This matches the demo's
+onset-time permission latch, avoiding false ducking at approximately 3.2 seconds
+from sustained startup echo. Below-threshold playback frames also update the
+noise floor when local VAD is not speaking, as in the demo. Idle mic audio remains available. `live-aec`
 reports `played_s` and `aec_ready`; these indicate the time allowance, not a
 measurement of AEC convergence. These are not measured end-to-end latencies.
 
