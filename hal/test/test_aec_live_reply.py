@@ -112,3 +112,27 @@ def test_unkeyed_reply_after_cancel_gets_new_fallback_identity(monkeypatch, kpi)
     words = [text for text, _ in spoken]
     assert 'Stale.' not in words
     assert 'Fresh.' in words
+
+
+@pytest.mark.parametrize('chunks', [
+    ['<no ', 'speech>', 'Rất tiếc, đã ', 'xảy ra lỗi', ' hệ thống, vui lòng thử', ' lại sau nhé.'],
+    ['<no speech>Rất tiếc, đã xảy ra lỗi hệ thống, vui lòng thử lại sau nhé.'],
+    ['<no speech>Rất tiếc, đã xảy ra lỗi hệ thống, vui lòng thử lại sau nhé'],
+])
+def test_silence_marker_prefixed_error_never_reaches_tts(monkeypatch, kpi, chunks):
+    spoken = _pump(monkeypatch, kpi, [
+        ([TextOutput(text=text, user_turn_id='u') for text in chunks], 'u', True),
+        ([TextOutput(text='Mình nghe rõ.', user_turn_id='next')], 'next', True),
+    ], strip_markers=VoiceService.strip_rt_markers)
+    assert [text for text, _ in spoken] == ['Mình nghe rõ.']
+
+
+@pytest.mark.parametrize('text, expected', [
+    ('<no speech>Xin chào.', 'Xin chào.'),
+    ('<no speech><no speech>Xin chào.', 'Xin chào.'),
+    ('<no spe', ''),
+    ('<no speech>', ''),
+    ('Ký hiệu "<no speech>" là gì?', 'Ký hiệu "<no speech>" là gì?'),
+])
+def test_leading_silence_marker_cleanup_preserves_real_text(text, expected):
+    assert VoiceService.strip_rt_markers(text) == expected

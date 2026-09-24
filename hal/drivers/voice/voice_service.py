@@ -152,7 +152,11 @@ class VoiceService:
         )
         cleaned: str = VoiceService.RT_MARKER_RE.sub("", text)
         cleaned = re.sub(r"  +", " ", cleaned).strip()
-        if re.fullmatch(r"<\s*no\s+speech\s*>", cleaned, re.IGNORECASE):
+        # A provider silence marker can precede real text or an error, and
+        # can arrive split across events. Keep quoted/embedded mentions intact.
+        cleaned = re.sub(r"^(?:<\s*no\s+speech\s*>\s*)+", "", cleaned, flags=re.IGNORECASE)
+        partial = " ".join(cleaned.lower().split())
+        if partial and "<no speech>".startswith(partial):
             return ""
         return cleaned
 
