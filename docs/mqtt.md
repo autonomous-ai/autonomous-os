@@ -361,6 +361,8 @@ reapplying HAL settings even when unchanged. The `info` uplink includes effectiv
 | `system.network` | network facts of the default-route interface only | _(none)_ |
 | `system.reboot` | Queue HAL's cue-aware OS reboot | _(none)_ |
 | `system.shutdown` | Queue HAL's cue- and servo-aware OS shutdown | _(none)_ |
+| `system.ota_versions` | Per-component OTA versions + what bootstrap is installing now (the web Versions card's data) | _(none)_ |
+| `system.software_update` | Force-install the published version of one component (the Versions card's `update` button); replies `success`/`started`, then an unsolicited completion report | `target` (required) |
 
 `system.reboot` and `system.shutdown` publish `status:"starting"` before the
 device schedules the action, so the backend receives an acknowledgement before
@@ -465,6 +467,65 @@ returns just the `network` block. Version probes: `os-server` from the ldflags b
 var, `bootstrap` via `bootstrap-server --version`, `hal` over HTTP from the
 local HAL `/version` endpoint, `openclaw` from the agent monitor's cached probe
 (`openclaw_detected` distinguishes "not installed" from "installed but unparseable").
+
+#### `system.ota_versions` / `system.software_update`
+
+The cloud twin of the web Versions card. Both kinds and the HTTP endpoints
+(`GET /api/system/ota-versions`, `GET /api/system/ota-updating`,
+`POST /api/system/software-update/:target`) call the same package,
+`system/ota`, so they share the target allowlist, the `agent` alias and **one
+per-target 30 s rate limiter** — a web click and a cloud command for the same
+target within 30 s are rate-limited against each other. No admin auth on MQTT
+(same trust as `system.reboot`).
+
+`system.ota_versions` (synchronous) returns bootstrap's `/versions` report —
+including the `agent` alias of the configured runtime's CLI — and `/updating`:
+
+```json
+{"cmd":"data","kind":"system.ota_versions","data":{}}
+{"kind":"system.ota_versions","status":"success","data":{
+  "versions":{
+    "hal":{"current":"1.4.2","target":"1.4.3","min_version":"1.4.2","update_available":true,"held_by_floor":true},
+    "hermes":{"current":"0.21.1","target":"0.21.1","min_version":"0.21.1","update_available":false,"held_by_floor":false},
+    "agent":{"current":"0.21.1","target":"0.21.1","min_version":"0.21.1","update_available":false,"held_by_floor":false}},
+  "updating":["hal"]}}
+```
+
+Bootstrap unreachable (or any other read error) → `status:"failure"`,
+`error:"bootstrap unreachable: …"`, no `data`.
+
+`system.software_update` — `target`: `os-server` | `bootstrap` | `web` | `hal` |
+`device` | `codex` | `claudecode` | `opencode` | `picoclaw` | `hermes` | `agent`
+(virtual: resolved to the configured runtime's CLI). The immediate reply is the
+**terminal** `success` with `state:"started"` (an install runs for minutes, so
+the backend must not wait on an intermediate ack):
+
+```json
+{"cmd":"data","kind":"system.software_update","data":{"target":"agent"}}
+{"kind":"system.software_update","status":"success","data":{"target":"agent","resolved_target":"hermes","state":"started"}}
+```
+
+Rejections are `status:"failure"` with the same messages as the HTTP API:
+`unknown target: <t>`, `software-update <t> rate-limited, retry in <n>s` (plus
+`data.retry_after_seconds`), `bootstrap unreachable: …`,
+`bootstrap refused <t>: <status> <body>`:
+
+```json
+{"kind":"system.software_update","status":"failure","error":"software-update hal rate-limited, retry in 27s","data":{"target":"hal","retry_after_seconds":27}}
+```
+
+After a `started` reply the device polls bootstrap `/updating` every 3 s (up to
+40 min; a target not seen there within 15 s counts as finished), re-reads the
+versions and publishes an **unsolicited** report with the same kind:
+
+```json
+{"kind":"system.software_update","status":"success","data":{"target":"hal","resolved_target":"hal","state":"completed","current":"1.4.3","target_version":"1.4.3","update_available":false}}
+{"kind":"system.software_update","status":"failure","error":"update finished but hal is still at 1.4.2 (published 1.4.3)","data":{"target":"hal","resolved_target":"hal","state":"failed","current":"1.4.2","target_version":"1.4.3","update_available":true}}
+```
+
+The completion report is best-effort: installing `os-server`, `device` or
+`hermes` restarts os-server, which kills the watcher, so no report arrives for
+those — poll `system.ota_versions` for the final state.
 
 An unrecognized `kind` replies with `status:"failure"` and `error:"unknown kind: <kind>"`.
 
@@ -1211,6 +1272,8 @@ Handled by bootstrap worker, not through MQTT handler directly.
 | `system/server/device/delivery/mqtt/mcp_connector_writer.go` | Special stdio MCP writer (`figma-api`): token file + local-wrapper `openclaw.json` MCP entry |
 | `system/server/device/delivery/mqtt/connector_refresh.go` | Connector token refresh loop (`/connector/refresh-token`) |
 | `system/server/device/delivery/mqtt/system_info_handler.go` | Handle `data` kinds `system.info`/`system.version`/`system.network` |
+| `system/server/device/delivery/mqtt/system_ota_handler.go` | Handle `data` kinds `system.ota_versions`/`system.software_update` (+ completion watcher) |
+| `system/ota/ota.go` | Shared bootstrap OTA client (versions, updating, force-update, per-target rate limit) behind both the MQTT kinds and `/api/system/ota-*` + `software-update` |
 | `system/server/device/delivery/mqtt/channel_refresh_handler.go` | Handle `data` kind `channel.refresh_config` (async re-apply of a channel's config block) |
 | `system/server/device/delivery/mqtt/timezone_set_handler.go` | Handle `data` kind `timezone.set` (async apply of the device IANA timezone) |
 | `system/device/timezone.go` | `SetTimezone`/`CurrentTimezone`: validate zone, rewrite `/etc/localtime` + `/etc/timezone`, best-effort `timedatectl`, persist config |
