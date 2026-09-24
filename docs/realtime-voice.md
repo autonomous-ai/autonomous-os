@@ -2490,6 +2490,8 @@ make this behave:
 `HAL_LIVE_MAX_S` is the backstop for a room so noisy that even Silero keeps
 agreeing.
 
+When transcript-only idle detection is enabled, recent hardware-AEC confirmed speech defers an expired idle hangup by one additional `HAL_LIVE_IDLE_HANGUP_S` window (15 s by default) while its transcript arrives. Recent means within the configured server silence duration (at least 1 s) plus 1 s delivery allowance. Local candidates cannot renew this extra deadline; accepted transcript or reply progress resets it. This prevents the idle timer from splitting a newly started utterance without letting continuous noise keep a session open indefinitely.
+
 Read the counters in the session-END log line: `substituted` at ~100 % of
 `during_playback` is `mute` working as designed.
 
