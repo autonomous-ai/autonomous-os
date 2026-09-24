@@ -95,6 +95,22 @@ class PresenseService:
         """
         self._mark_present(f"user activity: {source}")
 
+    def on_wake(self):
+        """Sleep ended: start a fresh idle→away countdown from now.
+
+        Only a face used to reset the clock, so a wake that nobody stood in
+        front of (web UI, API, an agent reply to a chat) kept the pre-sleep
+        timestamp: already past AWAY_TIMEOUT_S it announced sleep again right
+        after waking, and a machine left AWAY never timed out again.
+        The light is left alone — the wake emotion owns the strip.
+        """
+        if not self._enabled:
+            return
+        self._last_motion_time = time.time()
+        if self._state != PresenceState.PRESENT:
+            logger.info("Presence: %s → PRESENT (woke from sleep)", self._state)
+        self._state = PresenceState.PRESENT
+
     def _mark_present(self, reason: str):
         if not self._enabled:
             return
@@ -126,6 +142,13 @@ class PresenseService:
     def tick(self):
         """Called periodically by sensing loop to check timeouts."""
         if not self._enabled or self._state == PresenceState.DISABLED:
+            return
+
+        # Asleep: sleep already owns the light and the speaker, and the camera
+        # is off so nothing can reset the clock. Counting on would dim a
+        # sleeping lamp back to 20% of the user's colour and leave the machine
+        # AWAY for the wake to inherit. on_wake() restarts the countdown.
+        if self._is_sleeping():
             return
 
         # Guard mode: never transition to IDLE or AWAY — the device must stay alert.
