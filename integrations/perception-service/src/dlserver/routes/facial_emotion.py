@@ -126,7 +126,13 @@ async def emotion_recognize(req: EmotionRecognizeRequest):
                 return EmotionRecognizeResponse(detections=[])
             probabilities = None
 
-        logger.info("[Facial emotion] Detected %s (%.2f)", emotion.emotion, emotion.confidence)
+        if req.raw:
+            # Raw mode fires once per face per lamp tick (no server-side gate
+            # to filter it down); keep this at debug to avoid flooding the
+            # shared server's logs.
+            logger.debug("[Facial emotion] Detected %s (%.2f)", emotion.emotion, emotion.confidence)
+        else:
+            logger.info("[Facial emotion] Detected %s (%.2f)", emotion.emotion, emotion.confidence)
         return EmotionRecognizeResponse(
             detections=[
                 EmotionItem(
