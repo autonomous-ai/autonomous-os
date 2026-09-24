@@ -337,8 +337,12 @@ func SpeakCachedInterruptibleForTurn(text, turnID string) error {
 // the os-server reads the key server-side from config and passes it here. Each arg
 // can be empty: HAL falls back to its own config-loaded defaults when a
 // field is missing, so partial overrides (e.g. just voice) work.
-func SpeakPreview(text, voice, provider, apiKey, baseURL string) error {
+// An optional speed overrides the saved rate for this preview only.
+func SpeakPreview(text, voice, provider, apiKey, baseURL string, speed ...*float64) error {
 	payload := map[string]any{"text": text}
+	if len(speed) > 0 && speed[0] != nil {
+		payload["speed"] = *speed[0]
+	}
 	if voice != "" {
 		payload["voice"] = voice
 	}
