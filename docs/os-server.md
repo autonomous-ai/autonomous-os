@@ -469,6 +469,10 @@ Requires sensing with camera (InsightFace). Enrolled person JPEGs persist under 
 
 ### TTS speed
 
+`POST /api/voice/preview` accepts optional `speed` (`0.25–4.0`) and forwards it
+to HAL `/voice/speak` for that uncached utterance only. It does not persist the
+rate or change the shared service speed. Omission retains the runtime default.
+
 `GET /api/device/config` returns effective `tts_speed`; `PUT /api/device/config`
 accepts `{"tts_speed":1.2}`. This optional field accepts `0.25–4.0`; omitting
 it preserves the saved value. Saved config takes precedence over `HAL_TTS_SPEED`,

@@ -492,6 +492,8 @@ export async function setTimezone(timezone: string): Promise<boolean> {
 }
 
 export interface TestTTSOptions {
+  /** Per-preview speed override; does not change the saved setting. */
+  speed?: number;
   text?: string;
   /** BCP-47 stt_language code; picks a friendly demo phrase in that language. */
   lang?: string;
@@ -530,6 +532,7 @@ export async function testTTSVoice(voice: string, opts: TestTTSOptions = {}): Pr
       provider: opts.provider || undefined,
       base_url: opts.baseUrl || undefined,
       api_key: opts.apiKey || undefined,
+      speed: opts.speed,
     }),
   });
 }
