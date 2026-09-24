@@ -1880,10 +1880,22 @@ class RealtimeOrchestrator:
             res: Any = None
             if config.LOOK_AIM_ENABLED:
                 try:
-                    from hal.drivers.tracking.aim import aim_for_look
+                    from hal.drivers.tracking.aim import aim_for_look, filler_ownership
+                    from hal.telemetry import voice_metrics
+
+                    # LIVE uses the tool's exact input key. Never charge a
+                    # delayed filler to whichever interaction is newest now.
+                    try:
+                        filler_owner = (
+                            voice_metrics.provider_interaction(output.user_turn_id)
+                            if config.LIVE_MODE else voice_metrics.current_interaction()
+                        )
+                    except Exception:
+                        logger.exception("[voice-metrics] look filler ownership unavailable")
+                        filler_owner = ""
 
                     t_aim = time.monotonic()
-                    with look_debug.stage("aim.total"):
+                    with look_debug.stage("aim.total"), filler_ownership(filler_owner):
                         res = aim_for_look(config.LOOK_AIM_DEADLINE_S)
                     logger.info(
                         "[realtime] look: aim %s (%s) iters=%d yaw=%+.1f in %.0fms",

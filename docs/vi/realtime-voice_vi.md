@@ -2146,13 +2146,17 @@ phải bằng chứng completed. Không có terminal thành công thì task vẫ
 incomplete. Ngắt lời từ server ghi biên `server_barge_in` đúng interaction
 để theo dõi audio cũ.
 
-Snapshot ghi `mode=live` và có biết endpoint tiếng nói hay không. Endpoint thật
-từ server dùng thời điểm HAL nhận (`server_vad`), không phải lúc âm học kết thúc.
-Lượt Gemini chỉ có transcript vẫn hợp lệ cho metric execution nhưng bị loại
+Snapshot ghi `mode=live` và có biết endpoint tiếng nói hay không. Timestamp nhận
+activity Gemini vẫn phục vụ voice cue (`server_vad_receive`), nhưng không được
+dùng làm speech end âm học cho KPI-1. Trace bộ đếm/offset trước và sau SDK không
+đổi cấu hình VAD. Lượt Gemini chỉ có transcript hoặc thời điểm nhận event vẫn
+hợp lệ cho metric execution nhưng bị loại
 khỏi KPI-1 latency với `speech_endpoint_unavailable` và latency null. Trên
 GPT-Live mọi lượt đều thuộc loại này: adapter không bao giờ có `endpoint_at`
 (không có event VAD), nên KPI-1 không đo được trên provider đó. Output
-không có owner không được gán cho câu nói mới nhất. Bộ đếm
+không có owner không được gán cho câu nói mới nhất. Endpoint hợp lệ trước playback
+tới muộn có thể amendment latency. Filler look LIVE giữ owner đúng provider turn
+suốt thao tác aim. Bộ đếm
 `voice_metrics_live_coverage` lúc đóng phiên thể hiện phần mất độ phủ này; hook
 không đổi lọc tiếng ồn, uplink hay cờ routing. Xem
 [voice metrics](voice-metrics_vi.md#độ-phủ-của-phiên-live) để biết hợp đồng event.
@@ -2995,7 +2999,7 @@ Thứ tự delegation của Gemini: với việc cần main (gồm nhạc, truy 
 
 Ở Live ON, `reject_turn` được chấp nhận còn đặt trạng thái chặn bền vững trước khi đưa tool tới consumer. Trạng thái này giữ qua các vòng nhận và ACK tool: audio/text của lượt đã bị loại không được biến thành câu trả lời mới không có chủ sở hữu hay kích hoạt fallback sang main. Sự kiện bắt đầu nói mới từ provider hoặc transcript đầu vào không rỗng mới mở lại; terminal và metadata kết thúc transcript rỗng không mở. Reconnect đặt lại trạng thái. Cách này bảo vệ quyền sở hữu lượt độc lập ngôn ngữ câu trả lời; không ngăn backend từ xa tự sinh câu lỗi sau ACK.
 
-Cả luồng theo lượt và Live ON text-to-TTS chặn các mẫu lỗi provider “I’m sorry, there was a system error.”, “Rất tiếc, đã xảy ra lỗi hệ thống.”, “Rất tiếc, đã xảy ra lỗi hệ thống, vui lòng thử lại sau nhé.”, “Rất tiếc, đã có lỗi hệ thống xảy ra.” và “Rất tiếc, đã xảy ra lỗi hệ thống trong quá trình xử lý yêu cầu của bạn.” trước khi đưa sang ElevenLabs. Prefix nhận từng mảnh được giữ tới khi lọc được hoặc chuyển thành câu bình thường; hỗ trợ cả thiếu dấu kết câu. Marker `<no speech>` ở đầu được bỏ trước khi lọc kể cả khi dính liền câu; prefix marker chưa đủ không được đọc ra. Marker nằm trong trích dẫn hoặc giữa lời giải thích được giữ nguyên. Prefix lỗi có chủ sở hữu được giữ qua timeout nhận cho đến khi đủ để phân loại; không ghép sang lượt khác và bị bỏ khi hủy. Cùng bộ lọc được áp dụng lên câu Live đã ghép đủ trước khi đồng bộ history sang OS/Main. Câu trả lời chỉ có lỗi không gửi `voice_agent_handled` hay cặp `[HANDLED]/[REPLY]`; nếu có nội dung hợp lệ đi kèm thì chỉ đồng bộ phần còn lại. Không xóa history đã lưu trước đó. Log provider gốc vẫn giữ để debug. Lời xin lỗi thông thường, thông báo lỗi được trích dẫn, routing và native audio không đổi. Đây là tập mẫu tiếng Anh/Việt cụ thể, không phải bộ phân loại mọi ngôn ngữ.
+Cả luồng theo lượt và Live ON text-to-TTS chặn các mẫu lỗi provider “I’m sorry, there was a system error.”, “Rất tiếc, đã xảy ra lỗi hệ thống.”, “Rất tiếc, đã xảy ra lỗi hệ thống, vui lòng thử lại sau nhé.”, “Rất tiếc, đã có lỗi hệ thống xảy ra.” và “Rất tiếc, đã xảy ra lỗi hệ thống trong quá trình xử lý yêu cầu của bạn.” trước khi đưa sang ElevenLabs. Prefix nhận từng mảnh được giữ tới khi lọc được hoặc chuyển thành câu bình thường; hỗ trợ cả thiếu dấu kết câu. Marker `<no speech>` và `{pause}` ở đầu được bỏ trước khi lọc kể cả khi dính liền câu; Prefix marker chưa đủ không được đọc ra, kể cả qua timeout nhận của cùng lượt. Reply chỉ có marker không phát TTS và không sync history sang Main (ví dụ input `với`, output `{pause}`). Marker nằm trong trích dẫn hoặc giữa lời giải thích được giữ nguyên. Prefix lỗi có chủ sở hữu được giữ qua timeout nhận cho đến khi đủ để phân loại; không ghép sang lượt khác và bị bỏ khi hủy. Cùng bộ lọc được áp dụng lên câu Live đã ghép đủ trước khi đồng bộ history sang OS/Main. Câu trả lời chỉ có lỗi không gửi `voice_agent_handled` hay cặp `[HANDLED]/[REPLY]`; nếu có nội dung hợp lệ đi kèm thì chỉ đồng bộ phần còn lại. Không xóa history đã lưu trước đó. Log provider gốc vẫn giữ để debug. Lời xin lỗi thông thường, thông báo lỗi được trích dẫn, routing và native audio không đổi. Đây là tập mẫu tiếng Anh/Việt cụ thể, không phải bộ phân loại mọi ngôn ngữ.
 
 ACK tool Gemini lưu tên hàm gốc cùng call ID và trả cả hai trong `FunctionResponse`. Thiếu `name` vi phạm contract provider và đã tái hiện câu báo lỗi hệ thống sau khi `look` chụp ảnh thành công trên Gemini 3.8. Tên được giữ đến khi gửi ACK thành công và xoá khi reset session. Không thay đổi cách gửi ảnh hay replay audio.
 

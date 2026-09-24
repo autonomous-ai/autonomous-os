@@ -691,7 +691,9 @@ class GeminiLiveAgent(VoiceAgentBase):
                 transcript_finished=transcript_finished,
                 user_turn_id=self._live_user_turn_id,
                 endpoint_at=endpoint_at,
-                method="server_vad" if endpoint_at is not None else "provider_transcript",
+                # This stamp drives existing voice cues, but is only the
+                # RECEIVE time, not speech end on the input audio timeline.
+                method="server_vad_receive" if endpoint_at is not None else "provider_transcript",
             ),
         ))
 

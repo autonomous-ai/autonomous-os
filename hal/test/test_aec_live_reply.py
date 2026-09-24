@@ -132,6 +132,14 @@ def test_silence_marker_prefixed_error_never_reaches_tts(monkeypatch, kpi, chunk
     ('<no speech><no speech>Xin chào.', 'Xin chào.'),
     ('<no spe', ''),
     ('<no speech>', ''),
+    ('{pause}', ''),
+    ('{ PAUSE }', ''),
+    ('{pau', ''),
+    ('{ pause', ''),
+    ('<no speech>{pause}<no speech>Xin chào.', 'Xin chào.'),
+    ('{pause}Xin chào.', 'Xin chào.'),
+    ('Ký hiệu "{pause}" là gì?', 'Ký hiệu "{pause}" là gì?'),
+    ('{"pause": 1}', '{"pause": 1}'),
     ('Ký hiệu "<no speech>" là gì?', 'Ký hiệu "<no speech>" là gì?'),
 ])
 def test_leading_silence_marker_cleanup_preserves_real_text(text, expected):
