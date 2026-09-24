@@ -120,6 +120,10 @@ GET  /hal/api/dl/ser/labels
 `scores` is the full per-label softmax map when `return_scores` is true (default),
 else `null`. `GET /hal/api/dl/ser/labels` → `{"engine": "emotion2vec", "labels": [...]}`.
 
+**Input length:** the server bounds every clip to 2–8 s after resampling. It
+keeps the **last** 8 s of a longer clip and zero-pads a shorter one to 2 s. It
+never rejects on length. Clients should send ≤8 s of speech (HAL does).
+
 ---
 
 ## Audio embedder (speaker) — HTTP

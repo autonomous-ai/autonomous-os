@@ -20,6 +20,7 @@ from core.models.audio_emotion import RawAudioEmotionDetection
 from core.models.media import Audio
 from core.perception.audio.processors import CompositeAudioProcessor
 from core.perception.audio.processors.utils import AudioProcessorFactory
+from core.perception.audio_emotion.length import fit_length
 from core.perception.base import PredictorBase
 from core.utils.common import get_or_default
 from core.utils.files import ensure_downloaded
@@ -47,6 +48,13 @@ class AudioEmotionRecognizer(PredictorBase[Audio, RawAudioEmotionDetection]):
     )
     ONNX_INPUT_NAME: str = "input"
     ONNX_OUTPUT_NAME: str = "logits"
+    # Hard input-length bound (seconds). Must match the TensorRT profile built
+    # in _start_impl — see length.py for why.
+    MIN_AUDIO_S: float = 2.0
+    MAX_AUDIO_S: float = 8.0
+    # Batched inputs are zero-padded to the longest member, so a short clip
+    # batched with a long one would be classified as mostly silence.
+    MAX_BATCH_SIZE: int = 1
 
     def __init__(
         self,
@@ -80,6 +88,13 @@ class AudioEmotionRecognizer(PredictorBase[Audio, RawAudioEmotionDetection]):
         self._session: ort.InferenceSession | None = None
         self._processor: CompositeAudioProcessor | None = None
 
+        if self._batch_size > self.MAX_BATCH_SIZE:
+            self._logger.warning(
+                "batch_size=%d exceeds MAX_BATCH_SIZE=%d for SER; clamping",
+                self._batch_size, self.MAX_BATCH_SIZE,
+            )
+            self._batch_size = self.MAX_BATCH_SIZE
+
     @property
     def class_names(self) -> list[str]:
         return self._class_names
@@ -87,6 +102,14 @@ class AudioEmotionRecognizer(PredictorBase[Audio, RawAudioEmotionDetection]):
     @property
     def sample_rate(self) -> int:
         return self._sample_rate
+
+    @property
+    def min_samples(self) -> int:
+        return int(self._sample_rate * self.MIN_AUDIO_S)
+
+    @property
+    def max_samples(self) -> int:
+        return int(self._sample_rate * self.MAX_AUDIO_S)
 
     @override
     def _start_impl(self) -> None:
@@ -133,13 +156,21 @@ class AudioEmotionRecognizer(PredictorBase[Audio, RawAudioEmotionDetection]):
     ) -> list[RawAudioEmotionDetection]:
         """Classify emotion for a batch of audio utterances.
 
-        Zero-pads shorter waveforms to max length in batch, stacks into
-        [N, T_max], and runs ONNX inference in one pass.
+        Bounds each waveform to [MIN_AUDIO_S, MAX_AUDIO_S], zero-pads to max length in batch,
+        stacks into [N, T_max], and runs ONNX inference in one pass.
         """
         if preprocess:
             input = self.preprocess(input)
 
-        waveforms = [audio.waveform for audio in input]
+        waveforms = []
+        for audio in input:
+            n = audio.waveform.shape[0]
+            if n > self.max_samples or n < self.min_samples:
+                self._logger.info(
+                    "SER input %.2fs outside [%.1f, %.1f]s — fitting",
+                    n / self._sample_rate, self.MIN_AUDIO_S, self.MAX_AUDIO_S,
+                )
+            waveforms.append(fit_length(audio.waveform, self.min_samples, self.max_samples))
         max_t = max(w.shape[0] for w in waveforms)
 
         batch = np.zeros((len(waveforms), max_t), dtype=np.float32)
