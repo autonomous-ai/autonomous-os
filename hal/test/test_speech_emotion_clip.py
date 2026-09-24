@@ -12,9 +12,19 @@ FRAME_MS = 20
 
 
 def _clip(total_s: float, bursts: list[tuple[float, float]]) -> np.ndarray:
-    """Quiet ramp (RMS well under VOICED_RMS) with loud sine bursts at [start, end) s."""
+    """Quiet noise floor (RMS well under VOICED_RMS) with loud sine bursts at [start, end) s.
+
+    The background is seeded low-amplitude noise, not a repeating ramp: a
+    periodic background (e.g. `arange(n) % 200`) combined with an integer-Hz
+    burst tone makes two windows a whole number of seconds apart byte-for-byte
+    identical, which lets `_span` "find" a span the function never actually
+    returned — silently defeating any test that needs to pin down *which*
+    occurrence was picked (see `test_tie_prefers_latest_span`). Noise makes
+    every 8 s window unique, so a located span is unambiguous.
+    """
     n = int(SR * total_s)
-    out = (np.arange(n) % 200).astype(np.int16)  # RMS ~115, index-unique pattern
+    rng = np.random.default_rng(0)
+    out = rng.integers(-150, 151, n).astype(np.int16)  # RMS ~87, unique per window
     t = np.arange(n) / SR
     for start, end in bursts:
         mask = (t >= start) & (t < end)
@@ -25,17 +35,11 @@ def _clip(total_s: float, bursts: list[tuple[float, float]]) -> np.ndarray:
 def _span(samples, out) -> tuple[float, float]:
     """Locate `out` inside `samples` (spans are contiguous slices).
 
-    Scans from the latest offset backwards, not the earliest forwards. The
-    synthetic clips built by `_clip` are exactly periodic (the ramp repeats
-    every 200 samples, which divides the 16 kHz frame rate, and a sine burst
-    at an integer Hz is exactly 1.0 s periodic too), so two windows that are a
-    whole number of seconds apart with the same voiced/quiet layout can be
-    byte-identical. `select_voiced_span` itself always resolves such ties to
-    the latest span (see its docstring), so the locator must prefer the
-    latest match too, or it reports a spurious earlier look-alike instead of
-    the span the function actually returned.
+    Forward scan: with the noise background in `_clip`, every window's bytes
+    are unique, so the first (and only) match is the span the function
+    actually returned.
     """
-    for start in range(samples.size - out.size, -1, -320):
+    for start in range(0, samples.size - out.size + 1, 320):
         if np.array_equal(samples[start : start + out.size], out):
             return start / SR, (start + out.size) / SR
     raise AssertionError("output is not a contiguous slice of the input")
