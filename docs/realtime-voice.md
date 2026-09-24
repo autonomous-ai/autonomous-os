@@ -1045,6 +1045,11 @@ next live session with an empty turn ID. Empty/invalid delegation messages do
 not set this flag. Rebuilding adds connection overhead after a handoff; this
 is not an error-text filter and does not fix upstream tool execution errors.
 
+On receive timeout, `[realtime][transport]` logs connection/sender state,
+queued input count, age of the last successful audio send, pending tools and
+tool-gated frames. These are transport metadata, not recorded audio. The live
+capture loop's `last_upload_ms` measures enqueue time, not a successful wire send.
+
 The model is told (`resources/system_prompt*.md`, "Expression Exception") to
 never wait for, announce, or speak the emotion aloud. Note this is distinct from
 the non-realtime path, where the agent emits a `[HW:/emotion:…]` text marker that

@@ -338,6 +338,22 @@ class VoiceAgentBase(ABC):
                         since_msg if self._last_server_msg_at > 0 else -1.0,
                     )
                     now = time.monotonic()
+                    # Enqueuing capture is not proof that the transport sent it.
+                    # Expose bounded metadata to distinguish a stuck sender/tool
+                    # gate from a connected provider that has stopped replying.
+                    sent_at = getattr(self, "_last_audio_sent_at", None)
+                    sender = getattr(self, "_send_thread", None)
+                    send_queue = getattr(self, "_send_queue", None)
+                    logger.info(
+                        "[realtime][transport] agent=%x connected=%s sender_alive=%s "
+                        "queued=%s last_audio_sent_s=%.3f pending_tools=%d gated_frames=%d",
+                        id(self), self.available,
+                        bool(sender and sender.is_alive()),
+                        send_queue.qsize() if send_queue is not None else -1,
+                        now - sent_at if sent_at is not None else -1.0,
+                        len(getattr(self, "_pending_tool_calls", ())),
+                        getattr(self, "_gated_audio_frames", 0),
+                    )
                     logger.info(
                         "[realtime][timing] receive_timeout gen=%s since_latest_commit_s=%.3f "
                         "progress_seen=%s progress_remaining_s=%.3f output_remaining_s=%.3f",

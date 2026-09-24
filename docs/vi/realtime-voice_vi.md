@@ -1009,6 +1009,11 @@ provider sinh) lọt sang phiên live tiếp theo với turn ID rỗng. Message
 delegate rỗng/không hợp lệ không bật cờ này. Rebuild tốn thêm thời gian kết
 nối sau handoff; đây không phải bộ lọc câu lỗi hay sửa lỗi thực thi tool upstream.
 
+Khi receive timeout, `[realtime][transport]` ghi trạng thái kết nối/luồng gửi,
+số input đang chờ, tuổi lần gửi audio thành công cuối, số tool pending và số
+frame bị giữ vì tool. Đây là metadata, không ghi âm. `last_upload_ms` của
+luồng thu live chỉ đo thời gian đưa vào hàng đợi, chưa chứng minh đã gửi ra socket.
+
 Model được dặn (`resources/system_prompt*.md`, mục "Expression Exception") không
 chờ, không thông báo, không đọc tên cảm xúc thành tiếng. Lưu ý điều này khác
 path không-realtime: ở đó agent phát marker text `[HW:/emotion:…]` rồi lớp Go
