@@ -49,6 +49,9 @@ liệu cho các pipeline đó. Các request từ nhiều session đồng thời 
 trước khi gửi lên GPU — cấu hình `BATCH_SIZE` và `BATCH_TIMEOUT` cho từng model.
 Input được giới hạn kích thước (ảnh, audio) để chống tấn công DoS — xem
 [`configuration.md#input-limits`](../../integrations/perception-service/docs/configuration.md#input-limits).
+Đầu vào SER được giới hạn 2–8 giây phía server với profile TensorRT cố định, nên
+không độ dài clip nào có thể kích hoạt việc build lại engine trong lúc xử lý
+request.
 Lựa chọn model và output:
 [`integrations/perception-service/docs/perceptions.md`](../../integrations/perception-service/docs/perceptions.md).
 

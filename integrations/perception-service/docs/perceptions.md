@@ -107,6 +107,11 @@ Classifies emotion from a speech waveform (independent of any transcript).
   Defaults: **high-pass and denoise are OFF** (they reshape the spectrum in ways CMN
   cannot cancel, diverging from the WeSpeaker reference); mono, resample, VAD and
   RMS-normalize are ON.
+- Input is bounded to **2–8 s** (`MIN_AUDIO_S` / `MAX_AUDIO_S` in `predictors/base.py`,
+  applied by `length.fit_length`), and inference runs at **batch 1**. The TensorRT
+  engine uses an explicit profile `audio:1x32000 … 1x128000` and is built once at
+  startup. Out-of-range audio is cropped or padded and never triggers an in-request
+  rebuild (#492).
 
 ## 5. Object detection
 
