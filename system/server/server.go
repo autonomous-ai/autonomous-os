@@ -60,13 +60,14 @@ type Server struct {
 	// harnessReplies is keyed by the local device run ID. A single Harness
 	// agent can work on more than one user request at once, so it cannot be
 	// keyed by agent ID.
-	harnessReplies  map[string]harnessReply
-	harnessFollowup atomic.Int64
-	harnessResultMu sync.RWMutex
-	harnessResult   string
-	harnessResultAt time.Time
-	engine          *gin.Engine
-	config          *config.Config
+	harnessReplies       map[string]harnessReply
+	harnessOverlapAgents map[string]bool
+	harnessFollowup      atomic.Int64
+	harnessResultMu      sync.RWMutex
+	harnessResult        string
+	harnessResultAt      time.Time
+	engine               *gin.Engine
+	config               *config.Config
 
 	environmentStartup *environment.StartupCoordinator
 

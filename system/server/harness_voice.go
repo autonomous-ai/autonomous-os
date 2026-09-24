@@ -24,7 +24,9 @@ func (s *Server) initializeHarnessVoice(ctx context.Context) {
 	s.harnessVoiceCtx = ctx
 	if s.harnessVoice == nil && s.harnessService != nil {
 		s.harnessVoice = harness.NewVoiceController(s.harnessService, harness.VoiceCallbacks{
-			OnDispatch: func(agentID, runID string) { s.registerHarnessReply(agentID, runID, false, false) },
+			OnDispatchRequest: func(agentID, runID string, frame harness.Frame) {
+				s.registerHarnessDispatch(agentID, runID, false, false, frame)
+			},
 			OnResponse: s.deliverHarnessVoiceQuestion,
 		})
 		s.harnessVoice.Start(ctx)
@@ -202,7 +204,8 @@ func (s *Server) deliverHarnessVoiceMessage(agentID, runID, text string) {
 		agentID = "harness-voice"
 	}
 	if !s.hasHarnessReply(agentID, runID) {
-		s.registerHarnessReply(agentID, runID, false, false)
+		// A preflight failure is a local notice, not another remote task.
+		s.registerHarnessRoute(agentID, runID, false, false, "", true)
 	}
 	s.deliverHarnessFinal(agentID, runID, text)
 }
