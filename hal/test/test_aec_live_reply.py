@@ -1,11 +1,33 @@
 """Exercise the live output pump with ElevenLabs-style delayed playback."""
-from types import SimpleNamespace
-
+import pytest
 from hal.drivers.voice.voice_service import VoiceService
+from hal.drivers.voice._internal.live_gate import AdaptiveLiveGate
 from hal.drivers.voice._internal.live_reply import LiveReplyGuard
 from hal.realtime.models.output import TextOutput, InterruptedOutput
 from hal.test.test_live_voice_metrics import _pump
 from hal.test.test_voice_metrics import kpi  # noqa: F401
+
+
+@pytest.mark.parametrize('chunks', [
+    ['Rất tiếc, đã có ', 'lỗi hệ thống xảy', ' ra.'],
+    ['Rất tiếc, ', 'đã xảy ra lỗi hệ thống trong quá trình xử lý yêu cầu của bạn.'],
+    ["I'm sorry, ", 'there was a system error.'],
+    ['Rất tiếc, đã có lỗi hệ thống xảy ra'],
+])
+def test_live_provider_error_fragments_never_reach_elevenlabs(monkeypatch, kpi, chunks):
+    spoken = _pump(monkeypatch, kpi, [
+        ([TextOutput(text=text) for text in chunks], '', True),
+        ([TextOutput(text='Mình nghe rõ.', user_turn_id='new')], 'new', True),
+    ])
+    assert [text for text, _ in spoken] == ['Mình nghe rõ.']
+
+
+def test_live_regular_apology_is_preserved(monkeypatch, kpi):
+    spoken = _pump(monkeypatch, kpi, [
+        ([TextOutput(text='Rất tiếc, ', user_turn_id='u'),
+          TextOutput(text='hôm nay trời mưa.', user_turn_id='u')], 'u', True),
+    ])
+    assert ' '.join(text for text, _ in spoken) == 'Rất tiếc, hôm nay trời mưa.'
 
 
 def test_no_speech_marker_split_across_events_never_reaches_tts(monkeypatch, kpi):
@@ -24,7 +46,7 @@ def enable_aec_live(monkeypatch):
     original = VoiceService._live_out_pump
     def run(service, *args, **kwargs):
         current['service'] = service
-        service._live_gate = SimpleNamespace()
+        service._live_gate = AdaptiveLiveGate()
         service._aec_live_replies = LiveReplyGuard()
         service._tts.stop_realtime_reply = service._tts.stop
         return original(service, *args, **kwargs)
@@ -51,9 +73,10 @@ def test_local_energy_candidate_preserves_reply_without_server_interrupt(monkeyp
 
 
 def test_provider_interrupt_drops_buffered_sentence_tail(monkeypatch, kpi):
-    enable_aec_live(monkeypatch)
+    current = enable_aec_live(monkeypatch)
     spoken = _pump(monkeypatch, kpi, [
         ([TextOutput(text='unfinished', user_turn_id='old'),
+          lambda: setattr(current['service']._live_gate, 'duck', True),
           InterruptedOutput(reason='server_interrupt', user_turn_id='old'),
           TextOutput(text=' stale tail', user_turn_id='old')], 'old', False),
         ([TextOutput(text='Fresh answer.', user_turn_id='new')], 'new', True),
@@ -62,6 +85,7 @@ def test_provider_interrupt_drops_buffered_sentence_tail(monkeypatch, kpi):
     assert '__stop__' in words
     assert not any('unfinished' in text or 'stale' in text for text in words)
     assert 'Fresh answer.' in words
+    assert not current['service']._live_gate.duck
 
 
 def test_late_old_interrupt_preserves_new_partial_sentence(monkeypatch, kpi):

@@ -2312,15 +2312,16 @@ năm lần nền nhiễu và bao biên âm lượng loa trong 500 ms nhân hệ 
 đã học, cộng biên an toàn 8 dB. Xác nhận tiếng người khi loa phát cần 240 ms;
 500 ms dưới ngưỡng kết thúc tiếng nói cục bộ. Giống demo, ngắt lời cục bộ chờ
 3 giây audio loa cộng dồn để AEC ổn định. HAL đếm frame ghi thành công ra loa,
-không tính thời gian chờ TTS/mạng, từ đầu phiên live (mic được mở lại sau phiên).
-Không đặt lại bộ đếm ở mỗi câu. Trong thời gian chờ, audio khi loa phát/vọng
+không tính thời gian chờ TTS/mạng, từ lúc mở stream mic vật lý.
+Không đặt lại bộ đếm ở mỗi cửa sổ nghe hay mỗi câu. Trong thời gian chờ, audio khi loa phát
 bị chặn và không thể hạ loa. Một đợt vượt ngưỡng bắt đầu trong thời gian chờ
 vẫn không được chấp nhận khi loa phát qua mốc 3 giây: VAD theo dõi cùng đợt
 đó đến khi dưới ngưỡng đủ 500 ms, rồi mới nhận một đợt mới đủ 240 ms. Cách
 chốt quyền ngắt ngay lúc bắt đầu giống demo, tránh nhận nhầm tiếng vọng đầu
 phiên kéo dài thành nói chen ở khoảng 3,2 giây. Frame dưới ngưỡng khi loa
 phát cũng cập nhật nền nhiễu khi VAD chưa nhận tiếng nói, giống demo.
-Mic lúc nghỉ vẫn hoạt động.
+Sau khi loa dừng, đuôi vọng 300 ms dùng ngưỡng idle và không yêu cầu đủ
+3 giây warm-up; onset mới đủ 160 ms đi qua cùng prefix đã giữ. Mic lúc nghỉ vẫn hoạt động.
 `live-aec` ghi `played_s` và `aec_ready`; đây là thời gian chờ cho phép,
 không phải phép đo AEC đã hội tụ hay độ trễ đầu cuối đo được.
 
@@ -2351,8 +2352,10 @@ File `.env` overlay của cả `pro-respeaker-lite` và `pro-xvf3800` đặt rõ
 watchdog khôi phục gain khi tín hiệu điều khiển cũ quá 500 ms. Phát hiện năng
 lượng cục bộ chỉ hạ âm lượng, không hủy TTS hay bỏ các đoạn văn bản tiếp theo.
 Giống chế độ `duck` của demo, chỉ tín hiệu ngắt từ provider mới hủy phát và
-chặn các đoạn đến muộn của câu trả lời đó. Nếu không được xác nhận, gain
-khôi phục sau 1,5 giây dưới ngưỡng tiếng nói. Nếu Gemini đã sinh xong nhưng
+chặn các đoạn đến muộn của câu trả lời đó, đồng thời xóa cả trạng thái duck
+cục bộ lẫn trạng thái phát. Nếu không được xác nhận, kiểm tra khôi phục lần đầu
+sau onset 1,5 giây, rồi mỗi 400 ms khi VAD vẫn báo nói (VAD kết thúc sau
+500 ms dưới ngưỡng). Ra khỏi cửa sổ rủi ro vọng cũng khôi phục gain. Nếu Gemini đã sinh xong nhưng
 ElevenLabs còn phát, không đảm bảo provider sẽ gửi tín hiệu ngắt; hạ âm cục
 bộ chưa đảm bảo dừng hẳn trong trường hợp này.
 Native audio vẫn là cấu hình riêng, không tự bật khi chọn đường này; ElevenLabs
@@ -2383,7 +2386,24 @@ câu trả lời dài vài phút không bao giờ bị nhầm thành vòng lặp
 luôn nghe căn phòng thật mà không có chuyển tiếp nhân tạo. Giảm âm lượng loa làm
 giảm rõ rệt khả năng xảy ra trong lúc chờ.
 
+Hai profile `pro-respeaker-lite` và `pro-xvf3800` cũng dùng VAD phía server
+giống demo hardware: độ nhạy bắt đầu/kết thúc `high`, prefix **100 ms**, và
+thời gian im lặng **500 ms**. Dùng các biến `HAL_LIVE_VAD_*` sẵn có; mặc định
+của profile AEC phần mềm không đổi. Chỉ đồng bộ bộ gate echo cục bộ chưa đủ
+để đồng bộ cách server nhận giọng nói.
+
 ### Kết thúc một phiên
+
+Khi cúp máy, HAL hủy luồng nhận output của phiên và chờ luồng đó thoát trước
+khi phiên live mới dùng lại hàng đợi provider. Lúc chờ hàng đợi, luồng kiểm tra
+hủy tối đa mỗi 100 ms, không rút ngắn timeout nhận thông thường. Điều này ngăn
+luồng cũ lấy rồi bỏ mất transcript hoặc câu trả lời của phiên mới. Luồng bị hủy
+không được đưa câu ElevenLabs đang dang dở vào hàng đợi phát.
+Tool handler đã chạy sẽ hoàn tất trước khi luồng nhận nhường quyền đọc.
+HAL sau đó xếp `audio_stream_end` của Gemini sau audio đã gửi, gắn đúng
+transport. Bỏ qua phiên manual VAD, còn tool chờ hoặc đã bị cách ly; socket
+thay thế không nhận marker của phiên cũ. Đây là kết thúc uplink mic thật,
+không phải commit ở các khoảng nghỉ thông thường.
 
 Một phiên kết thúc sau `HAL_LIVE_IDLE_HANGUP_S` (K, mặc định 15 s) không có
 hoạt động người dùng, phát loa hay tiến độ text/audio từ provider. Mic được
@@ -2954,7 +2974,9 @@ Replay camera với Gemini extended-thinking: khi audio replay được commit t
 
 Thứ tự delegation của Gemini: với việc cần main (gồm nhạc, truy xuất memory cụ thể và tác vụ Harness/code), yêu cầu chỉ gọi thật `delegate_to_main`, không để Gemini nói hoặc gọi emotion trước handoff. Cue chờ của HAL vẫn có thể phát; main chịu trách nhiệm trả lời nội dung. Chỉ Gemini được thêm lời nhắc routing ngắn sau identity và memory trong instructions, tránh lấy các câu xác nhận cũ làm mẫu thay cho thực thi. Chào hỏi vẫn trả lời trực tiếp; câu hỏi về ảnh vẫn dùng `look`. Thay đổi này chỉ tác động chỉ dẫn model, không đổi routing xác định hay deadline fallback. Kiểm chứng model bằng event provider `Function call: delegate_to_main`, không dùng riêng `route=delegated` vì route đó cũng gồm HAL fallback.
 
-Luồng realtime text-to-TTS chặn riêng câu lỗi “I’m sorry, there was a system error.” (kể cả khi nhận nhiều mảnh hoặc thiếu dấu kết câu). HAL vẫn ghi log câu bị chặn, loại câu đó khỏi transcript lời đã phát và giữ nguyên delegate/fallback. Các câu khác và phát native audio không thay đổi.
+Ở Live ON, `reject_turn` được chấp nhận còn đặt trạng thái chặn bền vững trước khi đưa tool tới consumer. Trạng thái này giữ qua các vòng nhận và ACK tool: audio/text của lượt đã bị loại không được biến thành câu trả lời mới không có chủ sở hữu hay kích hoạt fallback sang main. Sự kiện bắt đầu nói mới từ provider hoặc transcript đầu vào không rỗng mới mở lại; terminal và metadata kết thúc transcript rỗng không mở. Reconnect đặt lại trạng thái. Cách này bảo vệ quyền sở hữu lượt độc lập ngôn ngữ câu trả lời; không ngăn backend từ xa tự sinh câu lỗi sau ACK.
+
+Cả luồng theo lượt và Live ON text-to-TTS chặn các mẫu lỗi provider “I’m sorry, there was a system error.”, “Rất tiếc, đã xảy ra lỗi hệ thống.”, “Rất tiếc, đã có lỗi hệ thống xảy ra.” và “Rất tiếc, đã xảy ra lỗi hệ thống trong quá trình xử lý yêu cầu của bạn.” trước khi đưa sang ElevenLabs. Prefix nhận từng mảnh được giữ tới khi lọc được hoặc chuyển thành câu bình thường; hỗ trợ cả thiếu dấu kết câu. Log provider gốc vẫn giữ để debug. Lời xin lỗi thông thường, thông báo lỗi được trích dẫn, routing và native audio không đổi. Đây là tập mẫu tiếng Anh/Việt cụ thể, không phải bộ phân loại mọi ngôn ngữ.
 
 ACK tool Gemini lưu tên hàm gốc cùng call ID và trả cả hai trong `FunctionResponse`. Thiếu `name` vi phạm contract provider và đã tái hiện câu báo lỗi hệ thống sau khi `look` chụp ảnh thành công trên Gemini 3.8. Tên được giữ đến khi gửi ACK thành công và xoá khi reset session. Không thay đổi cách gửi ảnh hay replay audio.
 
@@ -2996,3 +3018,5 @@ loại triệu chứng xác định. Voice GPT-Live dùng handoff backend native
 gọi tiếp `delegate_to_main` thay vì tự trả lời hoặc search. Cả hai tầng không
 phát lời xác nhận cho handoff wellbeing. Thay đổi đi cùng HAL; chỉ upload skills không cập
 nhật prompt realtime.
+
+Gợi ý ngôn ngữ nhận dạng đầu vào Gemini được bật bằng flag có sẵn `HAL_GEMINI_USE_LANGUAGE_CODES=true`. Với google-genai 2.12.1 đang pin, HAL gửi `input_audio_transcription.language_hints.language_codes`, không dùng `language_codes` cấp trên vốn không được SDK hỗ trợ cho Developer API. Hint lấy từ `stt_language` (`vi` thành `vi-VN`); ngôn ngữ rỗng hoặc tắt flag vẫn tự nhận dạng. Transcript đầu ra không có hint. Đây là gợi ý nhận dạng, không khóa ngôn ngữ. Hai profile `pro-respeaker-lite` và `pro-xvf3800` bật flag này; các profile khác giữ mặc định tắt. Trên device Lite chạy 3.8 extended-thinking, provider đã chấp nhận hint và log ghi đúng các yêu cầu giá vàng, thời tiết và dừng lại trong lượt test người dùng; chưa có phép đo độ chính xác tổng quát hoặc xác nhận trên XVF3800.

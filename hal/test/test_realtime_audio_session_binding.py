@@ -199,3 +199,72 @@ def test_unbound_live_audio_continues_on_current_socket():
     assert "activity_start" in replacement.inputs[0]
     assert "audio" in replacement.inputs[1]
     assert "activity_end" in replacement.inputs[2]
+
+
+def test_live_stream_end_is_ordered_between_audio_without_committing():
+    agent = _agent(_Session())
+    agent._vad_disabled = False
+    rt = _orchestrator(agent)
+    rt.append_audio(np.full(160, 0.1, dtype=np.float32))
+    assert rt.end_live_audio()
+    rt.append_audio(np.full(160, 0.2, dtype=np.float32))
+    _run_queued_events(agent)
+    sent = agent._session.inputs
+    assert [set(message) for message in sent] == [{'audio'}, {'audio_stream_end'}, {'audio'}]
+    assert sent[1]['audio_stream_end'] is True
+    assert agent._turn_done.is_set()
+    assert agent._committed_at == 0.0
+
+
+def test_live_stream_end_never_moves_to_replacement_transport():
+    original = _Session()
+    agent = _agent(original)
+    agent._vad_disabled = False
+    assert _orchestrator(agent).end_live_audio()
+    replacement = _Session()
+    agent._session = replacement
+    _run_queued_events(agent)
+    assert original.inputs == replacement.inputs == []
+    assert agent._recv_queue.empty()
+
+
+@pytest.mark.parametrize('reason', ['manual_vad', 'pending_tool', 'quarantine'])
+@pytest.mark.parametrize('after_enqueue', [False, True])
+def test_live_stream_end_skips_unsafe_session(reason, after_enqueue):
+    agent = _agent(_Session())
+    agent._vad_disabled = False
+    rt = _orchestrator(agent)
+    if after_enqueue:
+        assert rt.end_live_audio()
+    if reason == 'manual_vad':
+        agent._vad_disabled = True
+    elif reason == 'pending_tool':
+        agent._pending_tool_calls.add('pending')
+    else:
+        agent._requires_fresh_session = True
+    if not after_enqueue:
+        assert not rt.end_live_audio()
+        assert agent._send_queue.empty()
+    else:
+        _run_queued_events(agent)
+    assert agent._session.inputs == []
+
+
+def test_live_stream_end_keeps_original_agent_queue_when_orchestrator_rebuilds():
+    old = _agent(_Session())
+    old._vad_disabled = False
+    rt = _orchestrator(old)
+    assert rt.end_live_audio()
+    replacement = _agent(_Session())
+    replacement._vad_disabled = False
+    rt._agent = replacement
+    _run_queued_events(old)
+    assert old._session.inputs == [{'audio_stream_end': True}]
+    assert replacement._send_queue.empty()
+    assert replacement._session.inputs == []
+
+
+def test_other_providers_do_not_send_live_stream_end():
+    agent = _agent(_Session())
+    assert VoiceAgentBase.end_audio_stream(agent, session=agent._session) is False
+    assert agent._send_queue.empty()

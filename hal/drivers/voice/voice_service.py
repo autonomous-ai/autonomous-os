@@ -46,6 +46,8 @@ from hal.drivers.voice._internal.audio_dsp import resample_to_stt, rms
 from hal.drivers.voice._internal.audio_recorder import ArecordStream
 from hal.drivers.voice._internal.realtime_turn import (
     _WaitFiller,
+    _filter_system_error_tts,
+    _pending_system_error_tts,
     ROUTE_DELEGATED,
     ROUTE_NOISE_DROPPED,
     split_first_chunk,
@@ -864,6 +866,11 @@ class VoiceService:
                     )
                 mic_ctx = aec.wrap_mic(mic_ctx, device_rate, self._np)
                 with mic_ctx as mic:
+                    if getattr(self, "_live_gate", None) is not None:
+                        # Hardware AEC convergence belongs to the open device,
+                        # not each logical provider listening window.
+                        self._live_gate.reset()
+                        self._aec_live_played_start = live_playback.played_seconds()
                     logger.info(
                         "Listening for speech (RMS=%d, rate=%dHz, backend=%s)...",
                         voice_cfg.RMS_THRESHOLD,
@@ -1329,12 +1336,15 @@ class VoiceService:
         before = self._tts_is_speaking()
         affected = guard.cancel(self._tts.stop_realtime_reply, key=key)
         if affected:
+            gate = getattr(self, "_live_gate", None)
+            if gate is not None:
+                gate.clear_duck()
             live_playback.duck(False)
         logger.info("[live-aec] interrupt requested reason=%s reply=%s affected=%s speaking_before=%s",
                     reason, key, affected, before)
         return affected
 
-    def _live_out_pump(self, generation: int, harness_voice=None, cues=None, opener=None) -> None:
+    def _live_out_pump(self, generation: int, harness_voice=None, cues=None, opener=None, stop_event=None) -> None:
         """Play what the model says, for as long as the session lasts.
 
         Deliberately loops orchestrator.stream_output() rather than reading the
@@ -1452,7 +1462,8 @@ class VoiceService:
             buffer_mixed = False
             native_owner = ""
             try:
-                for out in self._realtime.stream_output():
+                output_options = {"stop_event": stop_event} if stop_event is not None else {}
+                for out in self._realtime.stream_output(**output_options):
                     if not (self._live_running and generation == self._live_generation):
                         break
                     if live_replies is not None:
@@ -1690,6 +1701,14 @@ class VoiceService:
                             speech_iid = ""
                         iid = speech_iid
                         sentence_buf += out.text
+                        visible = self.strip_rt_markers(sentence_buf)
+                        if _pending_system_error_tts(visible):
+                            continue
+                        filtered = _filter_system_error_tts(visible)
+                        if filtered != visible.strip():
+                            sentence_buf = filtered
+                        if not filtered:
+                            continue
                         if not first_sent:
                             head, rest = split_first_chunk(sentence_buf)
                             head = self.strip_rt_markers(head) if head else ""
@@ -1720,6 +1739,8 @@ class VoiceService:
                                         opener["replied"] = True
                             sentence_buf = ""
                         continue
+                if stop_event is not None and stop_event.is_set():
+                    break
                 if getattr(self._realtime, "execution_completed", False) is True:
                     refresh_focus(getattr(self._realtime, "execution_turn_id", ""))
                 if cues is not None:
@@ -1742,9 +1763,9 @@ class VoiceService:
                 # A stopped promoted session has handed its unanswered opener
                 # back to main. A late receive exit must not enqueue its old tail.
                 if (not native and sentence_buf.strip()
-                        and (opener is None or (self._live_running
-                             and generation == self._live_generation))):
-                    tail = self.strip_rt_markers(sentence_buf)
+                        and self._live_running and generation == self._live_generation
+                        and not (stop_event is not None and stop_event.is_set())):
+                    tail = _filter_system_error_tts(self.strip_rt_markers(sentence_buf))
                     if tail:
                         if cues is not None:
                             cues.finish(getattr(self._realtime, "execution_turn_id", ""))
@@ -1804,7 +1825,8 @@ class VoiceService:
             return False
         if getattr(self, "_live_gate", None) is not None:
             self._live_gate.reset()
-            self._aec_live_played_start = live_playback.played_seconds()
+            if not hasattr(self, "_aec_live_played_start"):
+                self._aec_live_played_start = live_playback.played_seconds()
             self._aec_live_replies = LiveReplyGuard()
             live_playback.duck(False)
             logger.info("[live-aec] adaptive echo gate active; local duck enabled")
@@ -1876,9 +1898,10 @@ class VoiceService:
         cues = LiveVoiceCues(
             addressed=lambda text: self._live_emotion_addressed(text, harness_voice),
         )
+        pump_stop = threading.Event()
         pump = threading.Thread(
             target=self._live_out_pump,
-            args=(generation, harness_voice, cues, opener),
+            args=(generation, harness_voice, cues, opener, pump_stop),
             daemon=True,
             name="live-out",
         )
@@ -2045,8 +2068,13 @@ class VoiceService:
                 self._live_gate.reset()
             self._live_running = False
             self._listening = False
+            # Release the queue reader before a following session can reuse it.
+            # A timed join alone left the old reader blocked for up to 8 seconds,
+            # allowing it to steal and discard the next session's first output.
+            pump_stop.set()
+            pump.join()
+            self._realtime.end_live_audio()
             self._realtime.set_live_active(False)
-            pump.join(timeout=2.0)
             self._live_stop_output()
             logger.info(
                 "[live] session END after %.0fs — %d frames, %d during playback, "

@@ -60,7 +60,10 @@ class DeviceOverrideTests(unittest.TestCase):
         for value in ("HAL_AEC_ENABLED=false", "HAL_LIVE_MODE=true",
                       "HAL_SILERO_THRESHOLD=0.10",
                       "HAL_VOLUME_STATE_PATH=/root/config/.volume-pro-respeaker-lite", "HAL_TTS_SPEED=1.1",
-                      "HAL_LIVE_UPLINK_DURING_PLAYBACK=always", "HAL_LIVE_DUCK_GAIN=0.12"):
+                      "HAL_LIVE_UPLINK_DURING_PLAYBACK=always", "HAL_LIVE_DUCK_GAIN=0.12",
+                      "HAL_LIVE_VAD_START_SENSITIVITY=high", "HAL_LIVE_VAD_END_SENSITIVITY=high",
+                      "HAL_LIVE_VAD_PREFIX_PADDING_MS=100", "HAL_LIVE_VAD_SILENCE_MS=500",
+                      "HAL_GEMINI_USE_LANGUAGE_CODES=true"):
             self.assertIn(value + "\n", env)
         self.assertIn("startup_volume: 35", (self.profile / "ROBOT.md").read_text())
         self.assertIn("max_volume: 35", (self.profile / "SAFETY.md").read_text())
@@ -102,6 +105,9 @@ class DeviceOverrideTests(unittest.TestCase):
         env = (self.profile / "rootfs/opt/hal/.env").read_text()
         for value in ("HAL_AEC_ENABLED=false", "HAL_LIVE_MODE=true",
                       "HAL_LIVE_UPLINK_DURING_PLAYBACK=always", "HAL_LIVE_DUCK_GAIN=0.12",
+                      "HAL_LIVE_VAD_START_SENSITIVITY=high", "HAL_LIVE_VAD_END_SENSITIVITY=high",
+                      "HAL_LIVE_VAD_PREFIX_PADDING_MS=100", "HAL_LIVE_VAD_SILENCE_MS=500",
+                      "HAL_GEMINI_USE_LANGUAGE_CODES=true",
                       "HAL_VOLUME_STATE_PATH=/root/config/.volume-pro-xvf3800"):
             self.assertIn(value + "\n", env)
         self.assertIn("max_volume: 77", (self.profile / "SAFETY.md").read_text())

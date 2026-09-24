@@ -2371,15 +2371,17 @@ noise floor, and the 500 ms output envelope multiplied by a learned echo
 coupling factor plus an 8 dB margin. Playback onset confirmation takes 240 ms;
 500 ms below threshold ends local speech. Like the demo, local barge-in waits
 for 3 seconds of cumulative speaker audio for AEC warm-up. HAL counts frames
-successfully written to the speaker, excluding TTS/network wait, from the live
-session start (capture is reopened after a session). It does not restart this
-clock for each sentence. During warm-up playback/tail audio is gated and cannot
+successfully written to the speaker, excluding TTS/network wait, from the
+capture stream opening. Logical listening windows and individual sentences do
+not restart this clock. During warm-up playback audio is gated and cannot
 duck the speaker. A burst that starts during warm-up remains unaccepted even
 when playback crosses 3 seconds: local VAD tracks the same burst until 500 ms
 below threshold, then requires a new 240 ms onset. This matches the demo's
 onset-time permission latch, avoiding false ducking at approximately 3.2 seconds
 from sustained startup echo. Below-threshold playback frames also update the
-noise floor when local VAD is not speaking, as in the demo. Idle mic audio remains available. `live-aec`
+noise floor when local VAD is not speaking, as in the demo. After playback ends,
+the 300 ms echo tail uses idle speech thresholds and does not require playback
+warm-up; a fresh 160 ms onset can pass with its buffered prefix. Idle mic audio remains available. `live-aec`
 reports `played_s` and `aec_ready`; these indicate the time allowance, not a
 measurement of AEC convergence. These are not measured end-to-end latencies.
 
@@ -2411,8 +2413,10 @@ A 500 ms stale
 control watchdog restores gain. Local energy detection only ducks playback;
 it does not cancel TTS or discard subsequent text. This matches the demo's
 `duck` mode: only a provider interruption cancels playback and suppresses late
-fragments of that reply. Without confirmation, gain returns after 1.5 seconds
-below the speech threshold. If Gemini has already finished generating, an
+fragments of that reply, and clears both the playback and local duck latch.
+Without confirmation, the first unduck check runs 1.5 seconds after onset, then
+every 400 ms while VAD still reports speech (which ends after 500 ms below
+threshold). Leaving the echo-risk window also releases duck. If Gemini has already finished generating, an
 interruption event is not guaranteed during remaining ElevenLabs playback;
 local ducking alone does not guarantee a complete stop in that case.
 Native audio remains a separate setting and
@@ -2443,7 +2447,24 @@ that a single answer running for minutes is never mistaken for a loop. The cure 
 so the model always hears the true room with no artificial transitions. Lower
 speaker volume makes it markedly less likely in the meantime.
 
+The `pro-respeaker-lite` and `pro-xvf3800` profiles also match the hardware
+demo server VAD: start/end sensitivity `high`, prefix padding **100 ms**, and
+silence duration **500 ms**. These use the existing `HAL_LIVE_VAD_*` settings;
+software-AEC profile defaults are unchanged. Matching the local echo gate alone
+does not match server speech detection.
+
 ### Ending a session
+
+Hangup cancels the session's output reader and waits for it to exit before
+another live session can reuse the provider queue. Queue waits check cancellation
+at most every 100 ms without shortening the normal receive timeout. This prevents
+an old reader from consuming and discarding the next session's transcript or
+reply. A cancelled reader must not enqueue an unfinished ElevenLabs sentence.
+An already-running tool handler finishes before the reader releases ownership.
+HAL then queues Gemini `audio_stream_end` behind previously sent audio, bound to
+the same transport. Manual-VAD, pending-tool and quarantined sessions skip it;
+a replacement socket never receives the old end marker. This marks actual mic
+uplink shutdown, not a commit on normal pauses.
 
 A session ends after `HAL_LIVE_IDLE_HANGUP_S` (K, default 15 s) without user
 activity, playback or provider text/audio progress. The mic goes straight back
@@ -3043,7 +3064,9 @@ Gemini extended-thinking camera replay: a successful explicit replay audio commi
 
 Gemini delegation ordering: for work requiring main (including music, specific memory recall and Harness/code tasks), request only the actual `delegate_to_main` call, without Gemini speech or emotion before the handoff. HAL waiting cues remain available; main owns the substantive reply. A compact Gemini-only routing reminder follows identity and memory in the assembled instructions so examples of spoken receipts do not stand in for execution. Greetings remain direct answers; visual questions still use `look`. This changes model instructions, not deterministic routing or fallback deadlines. Validate model compliance using provider `Function call: delegate_to_main` events, not `route=delegated`, which also includes HAL fallback.
 
-The realtime text-to-TTS path suppresses the exact provider apology “I’m sorry, there was a system error.” (including streamed fragments and a missing final punctuation mark). HAL logs the suppressed sentence, excludes it from the spoken-reply transcript, and preserves normal delegation/fallback. Other replies and native audio playback are unchanged.
+In Live ON, an accepted `reject_turn` also installs a persistent rejection barrier before publishing the tool to its consumer. The barrier survives receive-loop boundaries and the tool ACK: provider audio/text from that rejected turn cannot become a new unowned reply or trigger main fallback. A fresh provider speech-start event or nonempty input transcript releases it; protocol terminals and empty transcription-finished metadata do not. Reconnect resets the barrier. This protects turn ownership independently of response language; it does not prevent the remote backend from generating an error after an ACK.
+
+Both turn-based and Live ON text-to-TTS paths suppress the known provider apologies “I’m sorry, there was a system error.”, “Rất tiếc, đã xảy ra lỗi hệ thống.”, “Rất tiếc, đã có lỗi hệ thống xảy ra.” and “Rất tiếc, đã xảy ra lỗi hệ thống trong quá trình xử lý yêu cầu của bạn.” before ElevenLabs enqueue. Matching streamed prefixes are held until they can be filtered or diverge into a normal sentence; missing final punctuation is supported. Raw provider logs remain available for diagnosis. Ordinary apologies, quoted error messages, routing and native audio playback are unchanged. This is an explicit English/Vietnamese template filter, not a universal multilingual classifier.
 
 Gemini tool acknowledgements retain the original function name alongside the call ID and return both in `FunctionResponse`. Missing `name` violates the provider contract and reproduced a spoken system-error response after a successful `look` capture on Gemini 3.8. The name is retained until the acknowledgement succeeds and cleared on session reset. Image transport and audio replay remain unchanged.
 
@@ -3087,3 +3110,5 @@ not a deterministic symptom classifier. GPT-Live voice uses its native backend
 handoff; its backend then calls `delegate_to_main` instead of answering or
 searching. Neither stage speaks a wellbeing acknowledgment. It ships with HAL; uploading skills
 alone does not update the realtime prompts.
+
+Gemini input transcription language hints are opt-in through the existing `HAL_GEMINI_USE_LANGUAGE_CODES=true` flag. With pinned google-genai 2.12.1, HAL sends `input_audio_transcription.language_hints.language_codes`, not the unsupported Developer API top-level `language_codes`. The hint follows `stt_language` (`vi` becomes `vi-VN`); an empty language or disabled flag retains automatic detection. Output transcription stays unhinted. This biases recognition, not a language lock. The `pro-respeaker-lite` and `pro-xvf3800` profiles enable this flag; other profiles retain the disabled default. On the Lite device with 3.8 extended-thinking, the provider accepted the hint and transcribed the user's gold-price, weather and stop requests in a live test; this is not a general accuracy measurement or XVF3800 acoustic validation.

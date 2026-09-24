@@ -20,7 +20,7 @@ from hal.telemetry.live_voice import LiveVoiceMetrics
 from hal.test.test_voice_metrics import FakeTTS, kpi  # noqa: F401 -- fake clock/transport
 
 
-def _pump(monkeypatch, kpi, batches, *, native=False, stop_delay_ms=0, harness_voice=None, sender=None, cues=None, main_reply=False, addressed=True, focus=None, opener=None, tts=None, strip_markers=None):
+def _pump(monkeypatch, kpi, batches, *, native=False, stop_delay_ms=0, harness_voice=None, sender=None, cues=None, main_reply=False, addressed=True, focus=None, opener=None, tts=None, strip_markers=None, stop_event=None):
     monkeypatch.setattr(config, "REALTIME_NATIVE_AUDIO", native)
     service = object.__new__(VoiceService)
     service._wakeword_focus = focus
@@ -39,7 +39,7 @@ def _pump(monkeypatch, kpi, batches, *, native=False, stop_delay_ms=0, harness_v
         execution_completed = False
         execution_turn_id = ""
 
-        def stream_output(self):
+        def stream_output(self, *, stop_event=None):
             self.execution_completed = False
             self.execution_turn_id = ""
             batch = next(batches, None)
@@ -95,7 +95,7 @@ def _pump(monkeypatch, kpi, batches, *, native=False, stop_delay_ms=0, harness_v
 
     service._realtime = Provider()
     service._tts = tts if tts is not None else Speaker()
-    service._live_out_pump(1, harness_voice=harness_voice, cues=cues, **({"opener": opener} if opener is not None else {}))
+    service._live_out_pump(1, harness_voice=harness_voice, cues=cues, stop_event=stop_event, **({"opener": opener} if opener is not None else {}))
     return spoken
 
 

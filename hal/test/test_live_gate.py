@@ -137,14 +137,65 @@ class GateTests(unittest.TestCase):
 
     def test_tail_and_no_replay_when_playback_ends(self):
         gate = AdaptiveLiveGate()
-        gate.process(self.frame(0.02), self.RATE, True, 0.1, playback_seconds=3.0)
+        gate.process(self.frame(0.001), self.RATE, True, 0.1, playback_seconds=3.0)
         for _ in range(14):
-            self.assertFalse(np.any(gate.process(self.frame(0.02), self.RATE, False, 0)))
-        frame = self.frame(0.02)
+            self.assertFalse(np.any(gate.process(self.frame(0.001), self.RATE, False, 0)))
+        frame = self.frame(0.001)
         for _ in range(2):
             result = gate.process(frame, self.RATE, False, 0)
         np.testing.assert_array_equal(result, frame)
         self.assertEqual(gate.buffered_samples, 0)
+
+    def test_short_reply_tail_admits_idle_speech_without_warmup(self):
+        gate = AdaptiveLiveGate()
+        gate.process(self.frame(0.001), self.RATE, True, 0.1, playback_seconds=1.0)
+        for i in range(8):
+            result = gate.process(self.frame(0.02), self.RATE, False, 0,
+                                  playback_seconds=1.0)
+            if i < 7:
+                self.assertFalse(np.any(result))
+        self.assertTrue(gate.risk)
+        self.assertTrue(gate.speaking)
+        self.assertFalse(gate.duck)
+        self.assertFalse(gate.barge_in)
+        self.assertEqual(np.count_nonzero(result), 8 * 320)
+        self.assertEqual(gate.replayed_samples, 7 * 320)
+
+    def test_unduck_timer_retries_after_long_speech_ends(self):
+        gate = AdaptiveLiveGate()
+        for _ in range(12):
+            gate.process(self.frame(0.3), self.RATE, True, 0.1, playback_seconds=3.0)
+        # The 1.5 s deadline passes while speaking; retry is due at 1.9 s.
+        for _ in range(80):
+            gate.process(self.frame(0.3), self.RATE, True, 0.1, playback_seconds=3.0)
+        for _ in range(34):
+            gate.process(self.frame(0), self.RATE, True, 0.1, playback_seconds=3.0)
+        self.assertFalse(gate.speaking)
+        self.assertTrue(gate.duck)
+        # Release at the 2.3 s retry: only 700 ms after speech ended.
+        gate.process(self.frame(0), self.RATE, True, 0.1, playback_seconds=3.0)
+        self.assertFalse(gate.duck)
+
+    def test_provider_clear_duck_preserves_speech_and_does_not_rearm(self):
+        gate = AdaptiveLiveGate()
+        for _ in range(12):
+            gate.process(self.frame(0.3), self.RATE, True, 0.1, playback_seconds=3.0)
+        self.assertTrue(gate.duck)
+        gate.clear_duck()
+        self.assertTrue(gate.speaking)
+        self.assertIsNone(gate._unduck_at)
+        gate.process(self.frame(0.3), self.RATE, True, 0.1, playback_seconds=3.0)
+        self.assertFalse(gate.duck)
+        self.assertFalse(gate.barge_in)
+
+    def test_duck_releases_when_echo_tail_ends_before_timer(self):
+        gate = AdaptiveLiveGate()
+        for _ in range(12):
+            gate.process(self.frame(0.3), self.RATE, True, 0.1, playback_seconds=3.0)
+        for _ in range(16):
+            gate.process(self.frame(0.3), self.RATE, False, 0, playback_seconds=3.0)
+        self.assertFalse(gate.risk)
+        self.assertFalse(gate.duck)
 
     def test_reset_clears_duck_and_state(self):
         gate = AdaptiveLiveGate()

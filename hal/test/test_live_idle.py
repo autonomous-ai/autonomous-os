@@ -1,4 +1,10 @@
 """Provider progress must prevent idle hangup before ElevenLabs playback."""
+import threading
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import numpy as np
+from hal.drivers.voice import voice_service as module
 from hal.drivers.voice.voice_service import VoiceService
 from hal.realtime.models.output import TextOutput
 from hal.test.test_live_voice_metrics import _pump
@@ -19,3 +25,54 @@ def test_provider_text_renews_idle_window_before_first_sentence(monkeypatch, kpi
     assert service._live_quiet_for(progress + 1, progress - 20, progress - 20) == 1
     assert service._live_quiet_for(progress + 16, progress - 20, progress - 20) == 16
     assert service._live_quiet_for(progress + 16, progress - 20, progress + 15) == 1
+
+
+def test_cancelled_live_reader_does_not_speak_buffered_tail(monkeypatch, kpi):
+    stop = threading.Event()
+    spoken = _pump(monkeypatch, kpi, [([
+        TextOutput(text='An unfinished sentence', user_turn_id='u'),
+        stop.set,
+    ], 'u', False)], stop_event=stop)
+    assert spoken == []
+
+
+def test_live_hangup_joins_cancelled_reader_before_releasing_session(monkeypatch):
+    service = object.__new__(VoiceService)
+    service._running = True
+    service._live_generation = 0
+    service._silence_vad = None
+    service._np = np
+    service._tts_is_speaking = lambda: False
+    service._music_is_playing = lambda: False
+    service._live_uplink_frame = lambda data: data
+    service._to_realtime = lambda frame: frame
+    service._live_stop_output = Mock()
+    reader_started, reader_exited = threading.Event(), threading.Event()
+
+    def pump(generation, mode, cues, opener, stop_event):
+        reader_started.set()
+        assert stop_event.wait(2), 'hangup did not cancel the blocked reader'
+        reader_exited.set()
+
+    def set_live_active(active):
+        if not active:
+            assert reader_exited.is_set(), 'released session while reader still owns queue'
+
+    service._live_out_pump = pump
+    service._realtime = SimpleNamespace(set_live_active=set_live_active,
+                                       flush_output=Mock(), append_audio=Mock(),
+                                       end_live_audio=Mock())
+
+    class Mic:
+        def read(self, size):
+            assert reader_started.wait(1)
+            service._running = False
+            return np.zeros((size, 1), np.int16), False
+
+    monkeypatch.setattr(module.voice_cfg, 'LIVE_UPLINK_DUMP_DIR', '')
+    monkeypatch.setattr(module, 'LiveVoiceCues', Mock())
+    monkeypatch.setattr(module.aec, 'active', lambda: False)
+    service._live_session(Mic(), 320, 16000, [], harness_voice={'enabled': False})
+    assert reader_exited.is_set()
+    service._realtime.end_live_audio.assert_called_once()
+    service._live_stop_output.assert_called_once()
