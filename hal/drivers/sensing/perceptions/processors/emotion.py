@@ -26,6 +26,7 @@ from hal.drivers.sensing.perceptions.utils import PerceptionStateObservers
 from hal.drivers.sensing.presence_service import PresenceState, PresenseService
 
 from .base import Perception
+from .emotion_gating import gate_reading, load_label_thresholds
 
 logger = logging.getLogger(__name__)
 
@@ -298,6 +299,7 @@ class RemoteEmotionRecognizer:
         threshold: float = config.EMOTION_CONFIDENCE_THRESHOLD,
         timeout: float = 10.0,
         debug_logger: "EmotionDebugLogger | None" = None,
+        label_thresholds: dict[str, float] | None = None,
     ):
         self._url: str = (
             base_url.rstrip("/") + "/" + config.DL_EMOTION_RECOGNIZE_ENDPOINT.strip("/")
@@ -306,6 +308,12 @@ class RemoteEmotionRecognizer:
         )
         self._api_key: str = api_key
         self._threshold: float = threshold
+        # Per-label bars applied here when the server returns raw probabilities.
+        self._label_thresholds: dict[str, float] = (
+            label_thresholds
+            if label_thresholds is not None
+            else load_label_thresholds(config.EMOTION_LABEL_THRESHOLDS_JSON)
+        )
         self._timeout: float = timeout
         self._crypto: CryptoSession | None = None
         self._debug: EmotionDebugLogger | None = debug_logger
@@ -347,6 +355,9 @@ class RemoteEmotionRecognizer:
             plain_body = json.dumps({
                 "image_b64": self._img2b64(face_crop),
                 "threshold": self._threshold,
+                # A supporting server skips its own gate and returns every class
+                # probability; an older one ignores this and gates as before.
+                "raw": True,
             }).encode()
 
             if self._crypto is not None:
@@ -420,6 +431,31 @@ class RemoteEmotionRecognizer:
             top = max(detections, key=lambda d: d["confidence"])
             result = dict(top)
             result["all_detections"] = detections
+
+            probabilities = top.get("probabilities")
+            if not probabilities:
+                # Older server: it already gated with its own map.
+                result["gate"] = "server"
+                return result
+
+            gated = gate_reading(probabilities, self._label_thresholds, self._threshold)
+            if gated is None:
+                # Same outcome as the old server's empty response: the caller
+                # records no reading, which counts against the label in the vote.
+                if self._debug is not None:
+                    _ = self._debug.save_failure(
+                        "gated",
+                        face_crop=face_crop,
+                        threshold=self._threshold,
+                        label_thresholds=self._label_thresholds,
+                        probabilities=probabilities,
+                        detail=f"{top['emotion']} {top['confidence']:.2f} failed the device gate",
+                    )
+                return None
+
+            result["emotion"] = gated.label
+            result["confidence"] = gated.confidence
+            result["gate"] = "hal"
             return result
         except requests.RequestException as e:
             logger.warning("[activity.emotion] request failed: %s", e)
