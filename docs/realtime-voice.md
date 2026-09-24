@@ -15,7 +15,7 @@ Code lives in `hal/realtime/`; it is driven by
 
 For [voice KPI-3](voice-metrics.md#kpi-3-execution-completion-not-correctness),
 `TurnDoneEvent.execution_completed` defaults to `false` and becomes true only
-for a provider terminal signal: Gemini normal `generation_complete` or
+for a provider terminal signal: Gemini Extended Thinking uses `IDLE` with accepted answer text and no unresolved local work; sessions without status use normal `generation_complete` or
 `turn_complete` without interruption, or OpenAI `response.done` with
 `response.status == "completed"` and no interruption seen during that response, or GPT-Live's **synthesized** boundary
 (`turn_gap_ms` of output silence with no user overlap — the Live wire has no
@@ -278,13 +278,14 @@ consumer turn on `generation_complete` and releases the next manual-VAD commit i
 This avoids an otherwise unnecessary silent-watchdog delay after the reply;
 any late `turn_complete` is discarded before the next turn.
 
-**Investigation note (2026-09-22, not implemented):** Google's
-[Gemini 3.8 Live Extended Thinking documentation](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-live-extended-thinking)
-defines `interaction_status=IN_PROGRESS` versus `IDLE`; `IDLE` means reasoning,
-processing and tool work have finished. Verify whether the Autonomous proxy and
-installed SDK expose this field before using it to finish routing grace. Preserve
-pending tool replies, playback ownership and cancellation; retain a fallback for
-missing status. Do not equate `turnComplete` alone with this idle state.
+**Lifecycle note (investigated 2026-09-22, implemented 2026-09-23):**
+For Gemini Extended Thinking, `IN_PROGRESS` keeps the same interaction open
+across fillers and tools. `IDLE` ends provider execution. When accepted answer
+text exists and no local tool or withheld continuation remains, HAL closes the
+turn without a second LLM classification. Explicit routing and interruption
+retain priority; empty output or unresolved local work still falls back. This
+is execution evidence, not a guarantee of semantic correctness. Sessions without
+status keep the bounded tool grace and independent outcome check below.
 
 For Gemini `extended-thinking` models, tools are `NON_BLOCKING`: a spoken filler
 such as “I can help with that.” must not consume the user's task (#453).
@@ -295,7 +296,7 @@ must delegate. A direct answer needs a confirmed outcome and a successful
 provider terminal before it counts as handled/completed. Text/audio alone is
 not completion evidence.
 
-For a spoken response with no routing decision, HAL starts an independent text
+For a session without interaction status and a spoken response with no routing decision, HAL starts an independent text
 check during the existing grace, using the configured realtime summarizer model,
 endpoint and credentials. It checks the original request, spoken answer and public
 search evidence, with no tools or speech output. Exact `COMPLETE` accepts a
@@ -456,8 +457,30 @@ with no weights; nova-3 uses `keyterm` too; older nova models use `keywords`
 with the `:3` intensifier.
 
 Every STT-final-confirmed wake-word turn reaches dispatch. It opens a 20-second
-follow-up focus window (reset after every authorized turn), so the next spoken
-turn can omit the wake phrase and is sent as `voice_followup`.
+follow-up focus window, so the next spoken turn can omit the wake phrase and
+is sent as `voice_followup`. For an authorized turn, the idle countdown starts
+when processing and its owned TTS queue have both finished, not at dispatch or
+the first filler. Vision/grounding, main-agent work, synthesis and queued answer
+chunks therefore do not consume the user's reply window. The configured
+`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` remains unchanged.
+
+This applies to turn mode and LIVE mode, including native realtime playback.
+Wake disabled still accepts speech normally; timeout 0 disables follow-up focus.
+An unknown/unaddressed interaction, Harness capture, web reply, music or ambient
+TTS cannot acquire a conversation hold. Button/gaze grants retain their existing
+limits; a valid subsequent voice turn gets the normal follow-up window. A filler
+cannot open focus or finish a still-processing turn. Cancellation releases only
+that turn's hold, and stale completion cannot renew it. Stop/mute clears holds.
+
+Main processing is paired through `POST /voice/followup/activity` with
+`interaction_id`, `run_id` and `phase` (`start`, `end`, `cancel`). HAL accepts only
+IDs already authorized by its voice gate. OS sends `end` after all reply TTS
+submissions are admitted; HAL additionally waits for physical playback to drain.
+Silent/error completion starts the idle timer without inventing audio. Holds
+expire after five minutes if a terminal is lost; activity delivery is best effort
+with a 250 ms HTTP timeout. Deploy HAL and OS together for the main-agent path.
+The `[wake] Follow-up idle window started` log records the countdown boundary.
+Voice KPI eligibility, timestamps and routing are unchanged.
 
 After the speech-end gaze check, HAL refreshes the capture's focus latch before
 opening realtime, including captures with a nonempty transcript. A gaze grant
@@ -2928,4 +2951,33 @@ until normal playback teardown. Agent-owned turns retain their thinking cue.
 
 ### Gemini Extended Thinking interaction lifecycle
 
-For `gemini-3.8-live-extended-thinking`, `serverContent.interactionStatus` is the provider lifecycle signal: an utterance terminal with `IN_PROGRESS` does not finish the interaction. HAL preserves this field through a per-session compatibility adapter because google-genai 2.12.1 drops unknown response fields. Subsequent speech streams through the same turn, including after filler and advisory `complete_response` calls. At `IDLE`, HAL checks the full answer before deciding success or fallback; idle alone is not task success. Explicit delegation/rejection and interruption still take priority. A stalled interaction has a silence bound using the larger of `REALTIME_TURN_MAX_SILENCE_S` and `REALTIME_RECV_QUEUE_TIMEOUT_S`, renewed by output/tool activity, not repeated status heartbeats. Models or sessions without the signal retain the existing bounded grace path. When a session has reported this async status, a fresh `look` returns its JPEG in `FunctionResponse.parts` with the original tool call ID and name, continuing the current interaction without replaying user audio. A separate realtime video frame sent after `activityEnd` was not consumed by the current visual answer in proxy tests; attaching the image to the tool result fixes that association. Only this multimodal result uses an explicit base64 WebSocket payload because google-genai 2.12.1 does not serialize the nested bytes in `send_tool_response`. The result is discarded if its look call was cancelled, resolved, or cleared by a session reset. Other tool ACKs keep the SDK path; sessions without async status keep ACK → video → replay. Standalone image inputs retain their existing pending-tool gate.
+For `gemini-3.8-live-extended-thinking`, `serverContent.interactionStatus` is the provider lifecycle signal: an utterance terminal with `IN_PROGRESS` does not finish the interaction. HAL preserves this field through a per-session compatibility adapter because google-genai 2.12.1 drops unknown response fields. Subsequent speech streams through the same turn, including after filler and advisory `complete_response` calls. At `IDLE`, HAL finishes a spoken response without an independent classifier when no local tool or withheld continuation remains. Empty output or unresolved local work still falls back; this terminal proves execution ended, not semantic correctness. Explicit delegation/rejection and interruption still take priority. A stalled interaction has a silence bound using the larger of `REALTIME_TURN_MAX_SILENCE_S` and `REALTIME_RECV_QUEUE_TIMEOUT_S`, renewed by output/tool activity, not repeated status heartbeats. Models or sessions without the signal retain the existing bounded grace path. When a session has reported this async status, a fresh `look` returns its JPEG in `FunctionResponse.parts` with the original tool call ID and name, continuing the current interaction without replaying user audio. A separate realtime video frame sent after `activityEnd` was not consumed by the current visual answer in proxy tests; attaching the image to the tool result fixes that association. Only this multimodal result uses an explicit base64 WebSocket payload because google-genai 2.12.1 does not serialize the nested bytes in `send_tool_response`. The result is discarded if its look call was cancelled, resolved, or cleared by a session reset. Other tool ACKs keep the SDK path; sessions without async status keep ACK → video → replay. Standalone image inputs retain their existing pending-tool gate.
+
+### Raw Gemini output transcription diagnostics
+
+`[realtime][wire-output]` logs each `serverContent.outputTranscription` at
+WebSocket receipt, before SDK conversion and HAL sentence buffering. Each entry
+includes a local session ID, received-frame sequence (`rx`), the status carried
+in that frame, terminal/interruption flags, transcription `finished`, and the
+full text with escaped newlines. Compare these chunks with `speak_queue` to
+distinguish repeated upstream text from downstream duplication. This observes
+the Autonomous proxy output, not the model before the proxy; it cannot by itself
+distinguish model repetition from proxy replay. No audio/image payload or
+credentials are logged. Routing and playback are unchanged.
+
+All realtime prompts (default, OpenAI Realtime, Gemini, Pipecat and both
+GPT-Live stages) delegate clearly addressed reports of headache, fatigue, dizziness,
+stuffiness or difficulty concentrating, even without a question/action verb
+and even with a trailing “okay”. Current-room air/CO₂/temperature/humidity/
+ventilation questions and discomfort follow-ups (“Could it be because the room
+is too airtight?”) also belong to main's wellbeing/environment skills. The
+provider system prompts, Gemini post-memory routing reminder and shared
+delegate tool description make this exception explicit: no generic advice, causal explanation, relief
+promise, disclaimer, search or `complete_response` in place of handoff.
+Urgent reports hand off immediately; main decides whether a sensor check is
+appropriate. Unrelated educational questions remain direct answers, and
+addressed-speech/audio-fidelity checks still apply. This is model guidance,
+not a deterministic symptom classifier. GPT-Live voice uses its native backend
+handoff; its backend then calls `delegate_to_main` instead of answering or
+searching. Neither stage speaks a wellbeing acknowledgment. It ships with HAL; uploading skills
+alone does not update the realtime prompts.

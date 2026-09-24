@@ -479,14 +479,27 @@ and data rather than passing the turn repeatedly between skills. Room questions
 and discomfort support do not require camera observations, identity, activity
 logs or hydration counters.
 
+Ordinary room questions, startup observations, automatic updates and discomfort
+support explain meaning before numbers: one supported plain-language condition
+or change, plus at most one useful action. Values are omitted by default and
+included when requested or materially useful, with an explanation. This does
+not add thresholds or permit stronger claims: an increase alone is not a bad
+level, temperature alone does not establish air quality, and partial readings
+cannot certify the room safe or clean. When interpretation is unsupported,
+explain the limit instead of reciting numbers.
+
 For fatigue, headache, dizziness, stuffiness or difficulty concentrating,
-wellbeing responds to the user first. Environment is optional: absent/unknown
+wellbeing must load its discomfort reference, including for informal phrasing
+such as “I'm headache, tired, what happen?”. It must not infer screen use,
+duration or a symptom cause from the complaint. Absent/unknown
 capability means no environment tool call; failed, all-null or stale readings
 mean silently omit environmental advice. Do not mention sensor errors or ask
 for hardware setup in response to a wellbeing concern. Only explicit questions
 about room readings need an unavailable-data explanation. With declared
-capability, one bounded status read (or a supplied current snapshot) can add a
-relevant observation and one conditional comfort/ventilation suggestion. No
+capability and non-urgent discomfort, consulting environment and using one
+bounded status read (or a supplied current snapshot) is required before
+completing the reply. Including a relevant observation and one conditional
+comfort/ventilation suggestion remains optional. No
 reading establishes the cause of a symptom or dismisses a user's concern.
 
 The discomfort reference covers when a reported symptom/exposure should take
@@ -497,7 +510,7 @@ concern; it adds no automatic concentration classification or OS threshold.
 A later real reading may support comparison, but no scheduled follow-up,
 new wellbeing log action or appliance permission is implied.
 
-- **Ask about the room:** read status once, report useful measurements; missing
+- **Ask about the room:** read status once, explain the useful meaning of supported readings; missing
   or stale data is unknown, not zero pollution or proof of safe air.
 - **Startup:** greet immediately; optionally use cached eligible readings in one
   short sentence. If unavailable, the first eligible snapshot can produce a

@@ -267,6 +267,9 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 
 	// User tasks enter the cohort at receipt, including queued chat. Sensor
 	// notifications enter only once routing selects an actual dispatch below.
+	// Only HAL-supplied interaction IDs can own follow-up focus. A telemetry
+	// ID generated locally below has no authorized capture to bind in HAL.
+	followupInteractionID := req.InteractionID
 	taskGroup := telemetry.TaskGroup(req.Type)
 	if taskGroup == "voice" || taskGroup == "chat" {
 		req.InteractionID = telemetry.ReportTaskStarted(req.Type, req.InteractionID, "")
@@ -893,6 +896,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// waiting on a promise nobody keeps. Such turns get no opening filler
 	// and only start filling at the first tool boundary.
 	if isVoice {
+		hal.StartVoiceFollowup(followupInteractionID, runID)
 		if strings.HasPrefix(req.Message, realtimeDelegationPrefix) {
 			DefaultFillerManager.MarkDelegatedVoiceRun(runID, req.InteractionID)
 		} else {
@@ -960,6 +964,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		}
 		// Forward failed — drop the voice mark so we don't keep state
 		// for a run that will never produce a lifecycle.start.
+		hal.EndVoiceFollowup(runID)
 		DefaultFillerManager.Cancel(runID)
 		slog.Error("failed to send event", "component", "sensing", "error", err)
 		flow.End("sensing_input", turnStart, map[string]any{"error": err.Error()})

@@ -812,6 +812,15 @@ class GeminiLiveAgent(VoiceAgentBase):
             _continuation_check = asyncio.create_task(check())
 
         async def _fallback_needed(delayed_playback_ack: bool = False) -> bool:
+            if interaction_status == "IDLE":
+                # Extended Thinking has finished the whole interaction, not
+                # merely a filler utterance. Do not let a second model's
+                # availability override this provider execution boundary.
+                # Empty output or unresolved local work still needs recovery.
+                return (_requires_outcome and not _routing_received
+                        and not execution_interrupted and not delayed_playback_ack
+                        and (not _spoken_response.strip() or bool(self._pending_tool_calls)
+                             or bool(_continuation) or _continuation_overflow))
             independently_complete = None
             continuation_released = False
             if _outcome_check is not None:
@@ -1646,9 +1655,9 @@ class GeminiLiveAgent(VoiceAgentBase):
 
             if interaction_status == "IDLE":
                 # Process any co-delivered routing tool before closing. IDLE
-                # ends server processing, not semantic success of the answer.
+                # ends execution, not proof of semantic correctness. The
+                # legacy classifier is only for sessions without this signal.
                 _progress_until = 0.0
-                _start_outcome_check()
                 await _finalize_turn_complete(False)
                 return
 

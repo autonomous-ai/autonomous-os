@@ -1483,3 +1483,5 @@ The proxy receives bounded task text and metadata, not full history. Logs contai
 mode, selected/proposed IDs, reason and latency, without task text, recaps or
 credentials. Local/mock tests do not establish provider accuracy or device behavior.
 See [Harness agent selection](harness.md#jev-harness-agent-selection).
+
+Voice follow-up activity: `POST /voice/followup/activity` on HAL accepts `{interaction_id, run_id, phase}` (`start`, `end`, `cancel`) only for a locally authorized voice interaction. OS holds processing through asynchronous TTS admission, then HAL waits for owned playback before starting the wake idle window. Silent/error terminals and cancellation release the hold; run metadata is bounded to five minutes, including cancellation after processing ends. Delivery uses a 250 ms timeout. See [realtime voice](realtime-voice.md).

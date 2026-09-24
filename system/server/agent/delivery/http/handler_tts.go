@@ -170,6 +170,7 @@ func (h *AgentHandler) CancelSpeech() {
 	// of every in-flight turn with it; the Opening filler of whatever the user
 	// says NEXT is armed after this and is unaffected.
 	cancelledFillers := sensinghttp.DefaultFillerManager.CancelAllActive()
+	hal.CancelVoiceFollowups(now)
 	slog.Info("speech cancelled -- in-flight turns muted",
 		"component", "agent", "watermark_ms", now, "fillers_cancelled", cancelledFillers)
 	// Monitor bus rather than flow.Log: the click belongs to no single run, and
@@ -228,6 +229,7 @@ func (h *AgentHandler) CancelSpeechForNewerTurn() bool {
 	now := time.Now().UnixMilli()
 	h.autoSpeechWatermarkMs.Store(now)
 	cancelledFillers := sensinghttp.DefaultFillerManager.CancelAllActive()
+	hal.CancelVoiceFollowups(now)
 	slog.Info("speech auto-cancelled -- realtime answered a newer turn",
 		"component", "agent", "watermark_ms", now, "fillers_cancelled", cancelledFillers)
 	if h.monitorBus != nil {
@@ -292,7 +294,9 @@ func (h *AgentHandler) deliverTTS(send func(string) error, text, flowRunID, errC
 		text = i18n.One(i18n.PhraseLLMLimit)
 		send = hal.SpeakCached
 	}
+	finishAdmission := hal.BeginVoiceFollowupSpeech(flowRunID)
 	go func() {
+		defer finishAdmission()
 		err := send(text)
 		if err == nil {
 			return
