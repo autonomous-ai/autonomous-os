@@ -449,6 +449,7 @@ class RemoteEmotionRecognizer:
                         threshold=self._threshold,
                         label_thresholds=self._label_thresholds,
                         probabilities=probabilities,
+                        gate="hal",
                         detail=f"{top['emotion']} {top['confidence']:.2f} failed the device gate",
                     )
                 return None
@@ -662,6 +663,7 @@ class EmotionPerception(Perception[FaceDetectionData]):
             valence=result.get("valence"),
             arousal=result.get("arousal"),
             all_detections=result.get("all_detections"),
+            gate=result.get("gate"),
         )
 
         logger.debug(
