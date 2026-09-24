@@ -2430,6 +2430,8 @@ Hai chi tiết khiến việc này chạy đúng:
 `HAL_LIVE_MAX_S` là chốt chặn cuối cho căn phòng ồn tới mức ngay cả Silero cũng
 liên tục đồng ý.
 
+Khi đồng hồ idle yêu cầu transcript, tiếng nói vừa được hardware-AEC gate xác nhận sẽ hoãn cúp máy thêm tối đa một cửa sổ `HAL_LIVE_IDLE_HANGUP_S` (mặc định 15 giây) để chờ transcript. Tiếng nói được tính là gần đây nếu nằm trong thời gian im lặng phía server (ít nhất 1 giây) cộng 1 giây chờ truyền. Candidate cục bộ không gia hạn mốc này; transcript hợp lệ hoặc tiến độ trả lời sẽ đặt lại. Cách này tránh cắt lời mới bắt đầu ở hạn idle nhưng không cho nhiễu liên tục giữ phiên vô hạn.
+
 Đọc các bộ đếm ở dòng log session-END: `substituted` ở mức ~100 % của
 `during_playback` là `mute` đang hoạt động đúng thiết kế.
 

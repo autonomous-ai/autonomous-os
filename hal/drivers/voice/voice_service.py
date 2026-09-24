@@ -1323,6 +1323,25 @@ class VoiceService:
         return now - max(user_spoke_at, last_reply_end,
                          self._live_last_model_output)
 
+    def _live_idle_pending_speech(self, now, quiet_for, last_user_speech):
+        """Give a pending hardware-AEC utterance one bounded transcript window."""
+        timeout = voice_cfg.LIVE_IDLE_HANGUP_S
+        if quiet_for <= timeout:
+            self._live_idle_speech_deadline = 0.0
+            return False
+        if not voice_cfg.LIVE_IDLE_REQUIRES_TRANSCRIPT or getattr(self, "_live_gate", None) is None:
+            return False
+        deadline = self._live_idle_speech_deadline
+        if not deadline:
+            # Allow server endpointing plus delivery time after local speech.
+            recent_s = max(1.0, hal_config.LIVE_VAD_SILENCE_MS / 1000) + 1.0
+            if now - last_user_speech > recent_s:
+                return False
+            # Local noise may look like speech; it cannot renew this deadline.
+            self._live_idle_speech_deadline = deadline = now + timeout
+            logger.info("[live] idle hangup deferred for pending speech (max %.1fs)", timeout)
+        return now < deadline
+
     def _aec_live_interrupt_reply(self, reason, key=None):
         if reason == "local_speech":
             # Energy can be residual speaker echo. Match the demo's duck mode:
@@ -1862,6 +1881,7 @@ class VoiceService:
                 logger.warning("[live] uplink dump could not be opened: %s", e)
                 uplink_dump = None
         last_user_speech = started
+        self._live_idle_speech_deadline = 0.0
         # When the device last had the floor. The model talking is NOT action
         # from the user, but hanging up mid-reply would be wrong, so the K
         # window runs from whichever came later: the user's last words, or the
@@ -1947,7 +1967,8 @@ class VoiceService:
                     else last_user_speech
                 )
                 quiet_for = self._live_quiet_for(now, user_spoke_at, last_reply_end)
-                if quiet_for > voice_cfg.LIVE_IDLE_HANGUP_S:
+                pending_speech = self._live_idle_pending_speech(now, quiet_for, last_user_speech)
+                if quiet_for > voice_cfg.LIVE_IDLE_HANGUP_S and not pending_speech:
                     logger.info(
                         "[live] no user action for %.0fs — hanging up, VAD resumes",
                         quiet_for,
