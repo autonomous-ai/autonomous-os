@@ -682,7 +682,9 @@ published but `min_version` was not promoted to it — the worker will refuse it
 which is why the web Versions card treats held components as "no update".
 The installed device profile is reported as `device`, resolved from nested
 `metadata.devices.<device_type>` rather than the flat component list.
-os-server proxies this as `GET /api/system/ota-versions`.
+os-server proxies this as `GET /api/system/ota-versions` and, for the cloud, as
+the MQTT `data` kind `system.ota_versions` (both via `system/ota`; the cloud's
+`system.software_update` is the MQTT twin of the Versions card's button).
 
 ### Version Detection Per Component
 

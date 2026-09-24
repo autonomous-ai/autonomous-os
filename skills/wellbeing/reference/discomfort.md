@@ -41,6 +41,13 @@ CO poisoning from a headache alone or from CO₂ readings.
 
 ## Check declared environment; mention only useful evidence
 
+For an ordinary room-feeling report/question or its follow-up, apply
+environment's reference/room-comfort.md for the short conversational reply and
+fixed unavailable-data wording instead of the omission rule below. Personal
+symptoms without a room question retain this reference's support and omission
+behavior. Actual breathing difficulty or reported smoke/exposure takes
+precedence over checking sensors, the fixed fallback and the speech budget.
+
 - If `environment` is not explicitly declared (including unknown capability),
   skip this step. Wellbeing remains usable without the environment skill.
 - For non-urgent discomfort with declared capability, you MUST consult
@@ -59,8 +66,10 @@ CO poisoning from a headache alone or from CO₂ readings.
   VOC is available. Other valid metrics can still support their own observation.
   A user's word “stuffy” alone is not a measured CO₂ value.
 - Explain relevant environmental meaning in plain language, not a list of
-  readings. Omit numbers unless asked or materially useful; follow environment's
-  interpretation limits even when not saying the value aloud. Keep evidence and
+  readings. For ordinary room conversations omit numbers, units and sensor names
+  unless explicitly asked; for other symptom support, omit numbers unless asked
+  or materially useful. Follow environment's interpretation limits even when
+  not saying the value aloud. Keep evidence and
   symptoms separate: a supported conditional ventilation suggestion is not
   “that's why your head hurts”. A lower reading does not dismiss their symptoms.
 - Give at most one comfort suggestion at a time; choose between a general

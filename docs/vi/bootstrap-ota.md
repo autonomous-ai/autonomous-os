@@ -660,7 +660,9 @@ component thiết bị THỰC SỰ có (`componentInstalled`), nên mục CLI ch
 nó đang chạy, không có cái nào khác. `held_by_floor` nghĩa là đã publish bản mới
 nhưng `min_version` chưa được promote lên — worker sẽ từ chối, nên card Versions
 trên web coi component bị giữ là "không có update". os-server proxy thành
-`GET /api/system/ota-versions`. Device profile đang cài được báo thành `device`,
+`GET /api/system/ota-versions` và, cho cloud, thành MQTT `data` kind
+`system.ota_versions` (cả hai qua `system/ota`; `system.software_update` là bản
+MQTT của nút trên card Versions). Device profile đang cài được báo thành `device`,
 resolve từ `metadata.devices.<device_type>` lồng nhau thay vì danh sách component phẳng.
 
 ### Phát hiện version hiện tại
