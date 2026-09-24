@@ -58,9 +58,11 @@ CO poisoning from a headache alone or from CO₂ readings.
 - Use only relevant, fresh measurements. No CO₂ means no CO₂ claim, even when
   VOC is available. Other valid metrics can still support their own observation.
   A user's word “stuffy” alone is not a measured CO₂ value.
-- Keep the report and evidence separate: “CO₂ is 1,800 ppm right now” can be
-  followed by a conditional ventilation suggestion, but not “that's why your
-  head hurts”. A lower reading does not dismiss their symptoms.
+- Explain relevant environmental meaning in plain language, not a list of
+  readings. Omit numbers unless asked or materially useful; follow environment's
+  interpretation limits even when not saying the value aloud. Keep evidence and
+  symptoms separate: a supported conditional ventilation suggestion is not
+  “that's why your head hurts”. A lower reading does not dismiss their symptoms.
 - Give at most one comfort suggestion at a time; choose between a general
   comfort step and an environmental action rather than stacking both lists.
   If the user cannot or does not want to open a window, respect that and offer
@@ -92,7 +94,7 @@ readings or user context.
 | “I'm headache, tired, what happen?”; declared environment, no snapshot | Read environment status once before completing the reply; include only useful fresh evidence, do not assume screen use or assign a cause. |
 | “Mình mệt và nhức đầu quá”; no environment capability | Respond warmly, suggest one ordinary comfort step and optionally ask about onset/severity. No sensor mention or environmental tool call. |
 | Same complaint; declared capability but status fails or all values null | Same ordinary support. Do not wait, retry, or tell the user to enable sensors. |
-| Same complaint; fresh CO₂ 1,800 ppm, no earlier reading | Acknowledge discomfort, report the value if useful, suggest ventilation conditionally. No claim of a rise, poisoning or symptom cause. |
+| Same complaint; fresh CO₂ 1,800 ppm, no earlier reading | Acknowledge discomfort and, if useful, explain that the reading suggests considering more ventilation, with a conditional suggestion. Omit the number unless requested or materially useful. No claim of a rise, poisoning or symptom cause. |
 | Automatic CO₂ change 500 → 720 ppm, no symptoms or useful action context | Do not call the room dangerous or manufacture a discomfort conversation; `NO_REPLY` can be appropriate. |
 | CO₂ rose; outdoor smoke is reported | Do not recommend opening a window into smoke. Consider an available fresh-air system with appropriate filtration or another suitable space. |
 | CO₂ missing; valid VOC index | No estimate of CO₂ and no CO₂-based advice. Use any relevant valid data without making up a cause. |

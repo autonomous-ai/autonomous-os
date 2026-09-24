@@ -457,8 +457,30 @@ with no weights; nova-3 uses `keyterm` too; older nova models use `keywords`
 with the `:3` intensifier.
 
 Every STT-final-confirmed wake-word turn reaches dispatch. It opens a 20-second
-follow-up focus window (reset after every authorized turn), so the next spoken
-turn can omit the wake phrase and is sent as `voice_followup`.
+follow-up focus window, so the next spoken turn can omit the wake phrase and
+is sent as `voice_followup`. For an authorized turn, the idle countdown starts
+when processing and its owned TTS queue have both finished, not at dispatch or
+the first filler. Vision/grounding, main-agent work, synthesis and queued answer
+chunks therefore do not consume the user's reply window. The configured
+`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` remains unchanged.
+
+This applies to turn mode and LIVE mode, including native realtime playback.
+Wake disabled still accepts speech normally; timeout 0 disables follow-up focus.
+An unknown/unaddressed interaction, Harness capture, web reply, music or ambient
+TTS cannot acquire a conversation hold. Button/gaze grants retain their existing
+limits; a valid subsequent voice turn gets the normal follow-up window. A filler
+cannot open focus or finish a still-processing turn. Cancellation releases only
+that turn's hold, and stale completion cannot renew it. Stop/mute clears holds.
+
+Main processing is paired through `POST /voice/followup/activity` with
+`interaction_id`, `run_id` and `phase` (`start`, `end`, `cancel`). HAL accepts only
+IDs already authorized by its voice gate. OS sends `end` after all reply TTS
+submissions are admitted; HAL additionally waits for physical playback to drain.
+Silent/error completion starts the idle timer without inventing audio. Holds
+expire after five minutes if a terminal is lost; activity delivery is best effort
+with a 250 ms HTTP timeout. Deploy HAL and OS together for the main-agent path.
+The `[wake] Follow-up idle window started` log records the countdown boundary.
+Voice KPI eligibility, timestamps and routing are unchanged.
 
 After the speech-end gaze check, HAL refreshes the capture's focus latch before
 opening realtime, including captures with a nonempty transcript. A gaze grant

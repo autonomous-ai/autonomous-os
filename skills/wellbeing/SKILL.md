@@ -55,6 +55,10 @@ do not invent readings or stay silent on a user asking for support. Use whicheve
 metrics are available, regardless of the installed component. Missing or null
 metrics do not invalidate other readings or establish a hardware fault; do not
 require gas indices before giving supported temperature or CO₂ information.
+Follow environment's meaning-first response rule: explain the relevant comfort
+observation or practical implication in plain language. Omit numbers by default;
+include them only when requested or materially useful, with their meaning.
+Never replace missing evidence with a reassuring or alarming air-quality label.
 
 For an automatic environmental update, use only activity, sleep/busy state and
 preferences already available in context. Respect requests for quiet and avoid
@@ -66,8 +70,8 @@ would be inappropriate.
 
 An initial report (`reason: "initial"`) can offer one brief factual observation
 without a change or advice. During a startup greeting, add at most one sentence
-with one or two supplied readings; preserve the greeting when readings are
-absent. For the separate post-greeting update, do not greet again. Never wait
+based on supplied readings, using plain language rather than a numeric readout;
+preserve the greeting when readings are absent. For the separate post-greeting update, do not greet again. Never wait
 for sensors, fetch data for the greeting, or arrange duplicate follow-ups.
 Quiet/sleep preferences still take precedence. A first snapshot says nothing
 about improvement, health, or whether the room is safe.

@@ -479,6 +479,15 @@ and data rather than passing the turn repeatedly between skills. Room questions
 and discomfort support do not require camera observations, identity, activity
 logs or hydration counters.
 
+Ordinary room questions, startup observations, automatic updates and discomfort
+support explain meaning before numbers: one supported plain-language condition
+or change, plus at most one useful action. Values are omitted by default and
+included when requested or materially useful, with an explanation. This does
+not add thresholds or permit stronger claims: an increase alone is not a bad
+level, temperature alone does not establish air quality, and partial readings
+cannot certify the room safe or clean. When interpretation is unsupported,
+explain the limit instead of reciting numbers.
+
 For fatigue, headache, dizziness, stuffiness or difficulty concentrating,
 wellbeing must load its discomfort reference, including for informal phrasing
 such as “I'm headache, tired, what happen?”. It must not infer screen use,
@@ -501,7 +510,7 @@ concern; it adds no automatic concentration classification or OS threshold.
 A later real reading may support comparison, but no scheduled follow-up,
 new wellbeing log action or appliance permission is implied.
 
-- **Ask about the room:** read status once, report useful measurements; missing
+- **Ask about the room:** read status once, explain the useful meaning of supported readings; missing
   or stale data is unknown, not zero pollution or proof of safe air.
 - **Startup:** greet immediately; optionally use cached eligible readings in one
   short sentence. If unavailable, the first eligible snapshot can produce a

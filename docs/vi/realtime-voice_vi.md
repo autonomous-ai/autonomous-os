@@ -444,8 +444,29 @@ Flux nhận chúng dưới dạng param `keyterm` lặp lại, không trọng s�
 dùng `keyterm`; các model nova cũ hơn dùng `keywords` kèm intensifier `:3`.
 
 Mọi lượt wake-word đã được STT final xác nhận đều đi qua dispatch. Nó mở một
-cửa sổ focus follow-up 20 giây (reset sau mỗi lượt được phép), nên câu nói kế
-tiếp có thể bỏ wake phrase và được gửi với type `voice_followup`.
+cửa sổ focus follow-up 20 giây, nên câu tiếp theo có thể bỏ wake phrase và
+được gửi với type `voice_followup`. Với turn đã được phép, thời gian chờ chỉ bắt
+đầu khi cả xử lý lẫn queue TTS của turn đã xong, không phải lúc dispatch hay filler
+đầu tiên. Vision/grounding, main agent, tổng hợp và các đoạn trả lời đang xếp hàng
+không trừ vào thời gian người dùng được nói tiếp. Giá trị cấu hình
+`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` không đổi.
+
+Áp dụng cho turn mode và LIVE, kể cả audio native của realtime. Wake tắt vẫn nhận
+speech bình thường; timeout 0 tắt focus follow-up. Interaction chưa được wake gate
+cho phép, Harness capture, trả lời web, nhạc và TTS ambient không được giữ hội thoại.
+Button/gaze giữ nguyên giới hạn hiện tại; voice turn hợp lệ tiếp theo được hưởng
+window thông thường. Filler không tự mở focus hoặc kết thúc turn còn đang xử lý.
+Cancel giải phóng hold của đúng turn; completion cũ không gia hạn lại. Stop/mute
+xóa các hold.
+
+OS báo vòng đời main qua `POST /voice/followup/activity`, gồm `interaction_id`,
+`run_id`, `phase` (`start`, `end`, `cancel`). HAL chỉ nhận ID đã qua voice gate.
+OS gửi `end` sau khi mọi yêu cầu TTS của câu trả lời đã được tiếp nhận; HAL còn
+đợi phát audio thực tế xong. Turn im lặng/lỗi bắt đầu đếm idle mà không tạo audio.
+Hold hết hạn sau 5 phút nếu mất terminal; HTTP báo activity có timeout 250 ms,
+không bảo đảm giao thành công. Cần deploy cả HAL và OS cho nhánh main agent.
+Log `[wake] Follow-up idle window started` đánh dấu lúc bắt đầu đếm.
+Eligibility, timestamp KPI voice và routing không đổi.
 
 Sau bước kiểm tra gaze ở cuối câu, HAL cập nhật cờ focus của lượt thu trước khi
 mở realtime, kể cả khi transcript có nội dung. Vì vậy gaze cấp focus ở cuối

@@ -1452,3 +1452,5 @@ Proxy nhận text task và metadata có giới hạn, không nhận toàn bộ h
 mode, ID đã chọn/đề xuất, lý do và latency, không chứa text task, recap hay credentials.
 Test local/mock không xác nhận độ chính xác provider hoặc hành vi thiết bị.
 Xem [chọn agent Harness](harness_vi.md#chọn-agent-harness-bằng-jev).
+
+Activity follow-up voice: `POST /voice/followup/activity` của HAL nhận `{interaction_id, run_id, phase}` (`start`, `end`, `cancel`) chỉ cho interaction đã được voice gate cho phép. OS giữ trạng thái xử lý đến khi các yêu cầu TTS bất đồng bộ được tiếp nhận; HAL đợi phát xong audio của turn rồi mới đếm wake idle window. Terminal im lặng/lỗi và cancel giải phóng hold; metadata run có giới hạn 5 phút, kể cả để cancel sau khi xử lý xong. HTTP có timeout 250 ms. Xem [realtime voice](realtime-voice_vi.md).

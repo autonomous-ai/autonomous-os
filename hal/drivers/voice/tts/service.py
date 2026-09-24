@@ -755,6 +755,22 @@ class TTSService:
             logger.exception("pending speech observation failed")
             return False
 
+    def has_followup_speech(self, owner: str) -> bool:
+        """Include main speech retained across a LIVE playback interruption.
+
+        Unlike suppression measurement, the wake timer must wait for queued
+        audio that will resume after the interrupted native worker exits.
+        """
+        if not owner:
+            return False
+        with self._pending_queue_lock:
+            return bool(
+                any(item.owner == owner for item in self._pending_queue)
+                or (self._speaking and not self._stop_event.is_set() and owner in (
+                    self._playback_owner, getattr(self, "_pending_playback_owner", ""),
+                ))
+            )
+
     @property
     def last_spoken_text(self) -> str:
         """Last text sent to TTS (for echo cancellation transcript filtering)."""
