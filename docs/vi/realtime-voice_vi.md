@@ -127,6 +127,8 @@ Hàn bị trả lời thành câu hỏi ngày tháng. Input không rõ giữ im 
 fallback cho lượt chưa chắc chắn hoặc điều kiện gọi `reject_turn`. Thay đổi
 prompt không bảo đảm transcript đúng hay chặn hết history bị hallucinate.
 
+Gemini còn phân biệt từ xưng hô đứng riêng (ví dụ “anh”, “chị”, “em”) với lời gọi rõ hướng tới thiết bị. Khi không có yêu cầu, lời gọi rõ hoặc liên hệ với câu hỏi đang chờ, model phải reject im lặng thay vì tự nói “em nghe đây”, gọi emotion hay completion. Lệnh ngắn và câu trả lời theo ngữ cảnh vẫn hợp lệ, kể cả cùng từ đó khi trả lời câu hỏi của thiết bị. Routing reminder riêng Gemini nhắc lại quy tắc sau memory context. Đây là quy tắc prompt, không phải blacklist xác định hay bảo đảm model luôn tuân thủ.
+
 `robots/lamp/SOUL.md` áp dụng cùng điều kiện lời nói hướng đến thiết bị cho voice
 và `[ambient]` của main agent. Lời nghe lỏm hoặc chưa rõ đang nói với ai phải trả
 đúng `NO_REPLY`, không gọi tool hay phản ứng bằng cử động/cảm xúc. Quy tắc này
