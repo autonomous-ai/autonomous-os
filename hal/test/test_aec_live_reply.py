@@ -136,3 +136,19 @@ def test_silence_marker_prefixed_error_never_reaches_tts(monkeypatch, kpi, chunk
 ])
 def test_leading_silence_marker_cleanup_preserves_real_text(text, expected):
     assert VoiceService.strip_rt_markers(text) == expected
+
+
+def test_held_error_prefix_releases_normal_apology_after_receive_timeout(monkeypatch, kpi):
+    spoken = _pump(monkeypatch, kpi, [
+        ([TextOutput(text='Rất tiếc, ', user_turn_id='u')], '', False),
+        ([TextOutput(text='hôm nay trời mưa.', user_turn_id='u')], 'u', True),
+    ], strip_markers=VoiceService.strip_rt_markers)
+    assert ' '.join(text for text, _ in spoken) == 'Rất tiếc, hôm nay trời mưa.'
+
+
+def test_held_error_prefix_cannot_attach_to_new_turn(monkeypatch, kpi):
+    spoken = _pump(monkeypatch, kpi, [
+        ([TextOutput(text='Rất tiếc, đã ', user_turn_id='old')], '', False),
+        ([TextOutput(text='Mình nghe rõ.', user_turn_id='new')], 'new', True),
+    ], strip_markers=VoiceService.strip_rt_markers)
+    assert [text for text, _ in spoken] == ['Mình nghe rõ.']
