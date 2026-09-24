@@ -2368,8 +2368,9 @@ noise floor when local VAD is not speaking, as in the demo. Idle mic audio remai
 reports `played_s` and `aec_ready`; these indicate the time allowance, not a
 measurement of AEC convergence. These are not measured end-to-end latencies.
 
-The output envelope is estimated after ALSA mixer attenuation and before
-temporary ducking, using the PCM level and actual `amixer` dB readback. Mixer
+The output envelope is estimated after temporary ducking and ALSA mixer
+attenuation, using the PCM sent to the speaker and actual `amixer` dB readback.
+Like the demo, the reference follows the duck ramp. Mixer
 state is read once at startup outside the audio path and updated by volume-
 control routes. Without a dB readback, the reference conservatively uses unity
 gain; it does not infer gain from saved percentages or a hardware-specific
@@ -2377,7 +2378,21 @@ softvol curve. This avoids a pre-mixer level inflating the speech threshold
 when attenuation is known. It estimates the output reference, not measured
 acoustic sound pressure or exact audio latency.
 
-Playback ducking uses 12% gain with 15 ms down / 80 ms up ramps; a 500 ms stale
+Echo gating starts only after a successful speaker write and expires 250 ms
+after the last write, followed by the gate's acoustic tail. Pending ElevenLabs
+synthesis and failed/retrying TTS are not playback and must not mute capture.
+A standalone Gemini `<no speech>` marker is discarded before TTS, including
+when it arrives split across text events.
+
+Playback ducking uses `HAL_LIVE_DUCK_GAIN` (default `0.12`, linear PCM gain,
+not the system volume percentage) with 15 ms down / 80 ms up ramps.
+Set it in the device's `/opt/hal/.env` and restart HAL. Valid values are
+greater than zero and at most one; invalid values fall back to `0.12`.
+This setting applies only to the hardware-AEC live path. The default comes
+from the demo and is not a measured optimum for every lamp or room.
+Both `pro-respeaker-lite` and `pro-xvf3800` profile `.env` overlays explicitly
+ship `HAL_LIVE_DUCK_GAIN=0.12`; Standard/Pro software-AEC profiles do not set it.
+A 500 ms stale
 control watchdog restores gain. Local energy detection only ducks playback;
 it does not cancel TTS or discard subsequent text. This matches the demo's
 `duck` mode: only a provider interruption cancels playback and suppresses late

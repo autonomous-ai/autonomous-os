@@ -150,6 +150,8 @@ class VoiceService:
         )
         cleaned: str = VoiceService.RT_MARKER_RE.sub("", text)
         cleaned = re.sub(r"  +", " ", cleaned).strip()
+        if re.fullmatch(r"<\s*no\s+speech\s*>", cleaned, re.IGNORECASE):
+            return ""
         return cleaned
 
     def __init__(
@@ -1945,7 +1947,9 @@ class VoiceService:
                 if getattr(self, "_live_gate", None) is not None:
                     raw_rms = rms(data, self._np)
                     input_samples = len(data)
-                    playback = self._tts_is_speaking()
+                    # Pending synthesis is not audible playback. In particular,
+                    # a TTS error/retry must never mute the user's microphone.
+                    playback = self._tts_is_speaking() and live_playback.is_playing()
                     output_level = live_playback.level()
                     was_speaking = self._live_gate.speaking
                     was_ducked = self._live_gate.duck
@@ -1965,12 +1969,12 @@ class VoiceService:
                         logger.info(
                             "[live-aec] mic=%.0f out=%.0f threshold=%.0f noise=%.0f "
                             "echo_db=%.1f playback=%s realtime=%s speech=%s gate=%s "
-                            "duck=%s prefix_ms=%.0f last_upload_ms=%.1f played_s=%.2f aec_ready=%s",
+                            "candidate=%s duck=%s prefix_ms=%.0f last_upload_ms=%.1f played_s=%.2f aec_ready=%s",
                             raw_rms, output_level * 32768, self._live_gate.threshold * 32768,
                             self._live_gate.noise * 32768, self._live_gate.coupling_db,
                             playback, bool(self._tts and self._tts.realtime_speaking),
                             self._live_gate.speaking, gated, self._live_gate.duck,
-                            replay_ms, self._aec_live_last_upload_ms,
+                            live_playback.snapshot()['duck'], replay_ms, self._aec_live_last_upload_ms,
                             played_seconds, played_seconds >= self._live_gate.AEC_WARMUP_S,
                         )
                     data = data.reshape(-1, 1)

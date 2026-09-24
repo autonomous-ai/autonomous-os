@@ -20,6 +20,22 @@ class LivePlaybackTest(unittest.TestCase):
         self.addCleanup(self.enabled.stop)
         self.clock = patch.object(playback.time, 'monotonic', return_value=10.0).start()
         self.addCleanup(patch.stopall)
+        patch.object(playback.config, 'LIVE_DUCK_GAIN', 0.12).start()
+
+    def test_configured_duck_gain_changes_pcm_and_preserves_restore(self):
+        playback.config.LIVE_DUCK_GAIN = 0.4
+        playback.duck(True)
+        result = playback.playback(np.ones(80, dtype=np.float32), 1000)
+        self.assertAlmostEqual(result[-1], 0.4)
+        playback.duck(False)
+        restored = playback.playback(np.ones(80, dtype=np.float32), 1000)
+        self.assertAlmostEqual(restored[-1], 1.0)
+
+    def test_duck_gain_rejects_invalid_or_amplifying_values(self):
+        for value in ('invalid', '', 'nan', 'inf', '-inf', '0', '-1', '1.01'):
+            self.assertEqual(playback.config._live_duck_gain(value), 0.12)
+        for value in ('0.12', '0.4', '1'):
+            self.assertEqual(playback.config._live_duck_gain(value), float(value))
 
     def test_live_path_uses_existing_software_aec_switch(self):
         from hal.drivers.voice._internal import config
@@ -39,6 +55,15 @@ class LivePlaybackTest(unittest.TestCase):
         playback.record_written(44100, 44100)
         self.assertEqual(playback.played_seconds(), 3)
 
+    def test_pending_or_failed_write_does_not_activate_echo_gate(self):
+        self.assertFalse(playback.is_playing())
+        playback.playback(np.ones(40, dtype=np.float32), 1000)
+        self.assertFalse(playback.is_playing())
+        playback.record_written(40, 1000)
+        self.assertTrue(playback.is_playing())
+        self.clock.return_value = 10.251
+        self.assertFalse(playback.is_playing())
+
     def test_disabled_preserves_object_identity(self):
         playback.ENABLED = False
         for chunk in (b'\0\0', np.ones(40, dtype=np.float32)):
@@ -46,13 +71,16 @@ class LivePlaybackTest(unittest.TestCase):
         playback.duck(True)
         self.assertFalse(playback.snapshot()['duck'])
 
-    def test_int16_meter_does_not_overflow_or_measure_ducked_output(self):
+    def test_int16_meter_measures_ducked_pcm_without_overflow(self):
         pcm = np.full(40, -32768, dtype=np.int16)
         playback.duck(True)
         out = playback.playback(pcm, 1000)
         self.assertEqual(out.dtype, np.int16)
-        self.assertEqual(playback.level(), 1.0)
+        expected = float(np.sqrt(np.mean((out.astype(np.float32) / 32768) ** 2)))
+        self.assertAlmostEqual(playback.level(), expected)
         self.assertEqual(out[-1], -3932)
+        steady = playback.playback(pcm, 1000)
+        self.assertAlmostEqual(playback.level(), abs(float(steady[-1])) / 32768)
 
     def test_bytes_and_array_pcm_match(self):
         pcm = np.array([-32768, 32767, 0, 16384], dtype=np.int16)
@@ -67,7 +95,7 @@ class LivePlaybackTest(unittest.TestCase):
         self.assertEqual(result.shape, pcm.shape)
         self.assertEqual(result.dtype, pcm.dtype)
         np.testing.assert_array_equal(result[:, 0], -result[:, 1])
-        self.assertAlmostEqual(playback.level(), 0.5)
+        self.assertAlmostEqual(playback.level(), float(np.sqrt(np.mean(result ** 2))))
         self.assertAlmostEqual(result[-1, 0], 0.06)
 
     def test_up_ramp_continues_across_40ms_chunks(self):

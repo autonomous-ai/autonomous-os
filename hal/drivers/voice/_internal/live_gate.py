@@ -95,7 +95,7 @@ class AdaptiveLiveGate:
     def process(self, data, rate, playback, output_level, playback_seconds=0.0):
         """Return flat mono int16 PCM, optionally prepended with withheld onset.
 
-        Accept mono (N,) or (N, 1). Pass output RMS before duck gain, and actual
+        Accept mono (N,) or (N, 1). Pass output RMS after duck gain, and actual
         local playback state. speech_started and barge_in are one-call pulses;
         consume barge_in once to interrupt locally, rather than testing speaking.
         Output can exceed input by at most 300 ms; send it once without refeeding.

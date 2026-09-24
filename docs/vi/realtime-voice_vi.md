@@ -2310,8 +2310,9 @@ Mic lúc nghỉ vẫn hoạt động.
 `live-aec` ghi `played_s` và `aec_ready`; đây là thời gian chờ cho phép,
 không phải phép đo AEC đã hội tụ hay độ trễ đầu cuối đo được.
 
-Bao biên âm loa được ước lượng sau suy hao mixer ALSA và trước khi giảm âm
-tạm thời, từ mức PCM và giá trị dB thực tế đọc bằng `amixer`. Trạng thái mixer
+Bao biên âm loa được ước lượng sau giảm âm tạm thời và suy hao mixer ALSA,
+từ PCM gửi ra loa và giá trị dB thực tế đọc bằng `amixer`.
+Giống demo, mức tham chiếu đi theo quá trình giảm và khôi phục âm. Trạng thái mixer
 được đọc một lần khi khởi động ngoài luồng audio, rồi cập nhật qua các route
 điều khiển âm lượng. Nếu không đọc được dB, mức tham chiếu dùng gain bằng 1
 một cách bảo thủ; không suy gain từ phần trăm đã lưu hay thang softvol riêng
@@ -2319,7 +2320,20 @@ của phần cứng. Khi biết suy hao, cách này tránh mức trước mixer 
 tiếng người lên quá cao. Đây là ước lượng mức tham chiếu đầu ra, không phải
 đo áp suất âm trong phòng hay độ trễ audio chính xác.
 
-Giảm âm tạm thời dùng gain 12%, chuyển xuống trong 15 ms và lên trong 80 ms;
+Chặn vọng chỉ bắt đầu sau khi ghi thành công ra loa và hết hiệu lực 250 ms
+sau lần ghi cuối, rồi đến khoảng đuôi vọng của bộ chặn. Chờ ElevenLabs tạo
+audio hoặc TTS lỗi/đang thử lại không được coi là loa đang phát để chặn mic.
+Marker Gemini `<no speech>` đứng riêng bị bỏ trước TTS, kể cả khi được gửi
+thành nhiều mảnh văn bản.
+
+Giảm âm tạm thời dùng `HAL_LIVE_DUCK_GAIN` (mặc định `0.12`, gain PCM tuyến tính,
+không phải phần trăm volume hệ thống), chuyển xuống trong 15 ms và lên trong 80 ms.
+Đặt trong `/opt/hal/.env` trên device rồi restart HAL. Giá trị hợp lệ lớn hơn
+0 và không quá 1; giá trị không hợp lệ dùng lại `0.12`.
+Cấu hình này chỉ áp dụng cho luồng live với AEC phần cứng. Mặc định lấy từ
+demo, chưa phải mức tối ưu đã đo cho mọi lamp hoặc phòng.
+File `.env` overlay của cả `pro-respeaker-lite` và `pro-xvf3800` đặt rõ
+`HAL_LIVE_DUCK_GAIN=0.12`; profile Standard/Pro dùng AEC phần mềm không đặt biến này.
 watchdog khôi phục gain khi tín hiệu điều khiển cũ quá 500 ms. Phát hiện năng
 lượng cục bộ chỉ hạ âm lượng, không hủy TTS hay bỏ các đoạn văn bản tiếp theo.
 Giống chế độ `duck` của demo, chỉ tín hiệu ngắt từ provider mới hủy phát và

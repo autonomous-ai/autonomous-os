@@ -9,10 +9,11 @@ import time
 
 import numpy as np
 
+from hal.drivers.voice._internal import config
+
 
 def _enabled():
     # Profiles choose the canceller; no device-name checks or extra feature flag.
-    from hal.drivers.voice._internal import config
     return config.LIVE_MODE and not config.AEC_ENABLED
 
 
@@ -30,14 +31,23 @@ _last_log = float('-inf')
 _mixer_gain = 1.0
 _mixer_source = 'unknown'
 _played_seconds = 0.0
+_played_at = None
 
 
 def record_written(frames, rate):
     """Count successful speaker writes, not generation or queue wait time."""
-    global _played_seconds
+    global _played_seconds, _played_at
     if ENABLED and frames > 0 and rate > 0:
         with _lock:
             _played_seconds += frames / rate
+            _played_at = time.monotonic()
+
+
+def is_playing():
+    """True only after a successful speaker write, not while TTS is pending."""
+    with _lock:
+        return (ENABLED and _played_at is not None
+                and time.monotonic() - _played_at < 0.25)
 
 
 def played_seconds():
@@ -100,7 +110,7 @@ def initialize_mixer():
 
 
 def level():
-    """Return pre-duck, post-softvol normalized RMS; expire after 250 ms."""
+    """Return post-duck, post-softvol normalized RMS; expire after 250 ms."""
     with _lock:
         return (_level * _mixer_gain if ENABLED and _written is not None
                 and time.monotonic() - _written < 0.25 else 0.0)
@@ -148,16 +158,15 @@ def playback(chunk, rate):
     values = data.astype(np.float32)
     scale = 32768.0 if data.dtype == np.int16 else 1.0
     with _lock:
-        _level = float(np.sqrt(np.mean((values / scale) ** 2)))
         _written = time.monotonic()
-        target = 0.12 if _written < _duck_until else 1.0
+        target = config.LIVE_DUCK_GAIN if _written < _duck_until else 1.0
         if target != _target:
             _target = target
             _ramp_remaining = max(1, int(rate * (0.015 if target < _gain else 0.08)))
             _ramp_step = (target - _gain) / _ramp_remaining
             if _written - _last_log >= 0.5:
                 logger.info('[live-aec] playback gain %.3f -> %.3f level=%.4f',
-                            _gain, target, _level)
+                            _gain, target, float(np.sqrt(np.mean((values / scale) ** 2))))
                 _last_log = _written
         ramp = min(len(data), _ramp_remaining)
         gains = np.full(len(data), target, dtype=np.float32)
@@ -167,9 +176,12 @@ def playback(chunk, rate):
             _gain = target if not _ramp_remaining else float(gains[ramp - 1])
         else:
             _gain = target
-    if data.ndim > 1:
-        gains = gains[:, None]
-    result = (values * gains).astype(data.dtype)
+        if data.ndim > 1:
+            gains = gains[:, None]
+        result = (values * gains).astype(data.dtype)
+        # Match the demo: echo estimation observes the PCM sent to the speaker,
+        # including the duck ramp, rather than the unattenuated synthesis PCM.
+        _level = float(np.sqrt(np.mean((result.astype(np.float32) / scale) ** 2)))
     return result.tobytes() if is_bytes else result
 
 

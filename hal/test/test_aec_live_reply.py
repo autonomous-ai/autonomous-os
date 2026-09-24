@@ -8,6 +8,17 @@ from hal.test.test_live_voice_metrics import _pump
 from hal.test.test_voice_metrics import kpi  # noqa: F401
 
 
+def test_no_speech_marker_split_across_events_never_reaches_tts(monkeypatch, kpi):
+    spoken = _pump(monkeypatch, kpi, [
+        ([TextOutput(text='<no ', user_turn_id='old'),
+          TextOutput(text='speech>', user_turn_id='old')], 'old', True),
+        ([TextOutput(text='Bạn cần mình giúp gì?', user_turn_id='new')], 'new', True),
+    ], strip_markers=VoiceService.strip_rt_markers)
+    words = [text for text, _ in spoken]
+    assert not any('no speech' in text for text in words)
+    assert 'Bạn cần mình giúp gì?' in words
+
+
 def enable_aec_live(monkeypatch):
     current = {}
     original = VoiceService._live_out_pump

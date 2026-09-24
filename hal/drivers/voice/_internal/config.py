@@ -239,6 +239,18 @@ ENDPOINT_SILENCE_S = float(os.environ.get("HAL_ENDPOINT_SILENCE_S", "0.8"))
 # ---------------------------------------------------------------------------
 LIVE_MODE = _hal_config.LIVE_MODE
 
+# Linear PCM gain while hardware-AEC live playback is temporarily ducked.
+# Keep the demo default until a device-specific value has been measured.
+def _live_duck_gain(value):
+    try:
+        gain = float(value)
+    except (TypeError, ValueError):
+        return 0.12
+    return gain if 0.0 < gain <= 1.0 else 0.12
+
+
+LIVE_DUCK_GAIN = _live_duck_gain(os.environ.get("HAL_LIVE_DUCK_GAIN", "0.12"))
+
 # What goes on the uplink while our own speaker is playing.
 #
 #   "mute"      — substitute silence for the whole playback window. Ships today.
