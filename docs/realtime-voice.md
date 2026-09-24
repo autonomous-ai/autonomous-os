@@ -126,6 +126,8 @@ date question. Unclear input stays silent without changing uncertain-turn
 fallback or `reject_turn` eligibility. This prompt change cannot guarantee
 transcription accuracy or prevent all hallucinated history entries.
 
+Gemini also distinguishes an isolated form of address (for example Vietnamese “anh”, “chị”, “em”) from a clear call to the device. Without a request, a clear summons or relevance to a pending question, it should reject silently instead of inventing an “I’m listening” greeting, emotion or completion call. Short commands and contextual answers remain valid, including the same word when it answers the device’s question. The final Gemini routing reminder repeats this rule after memory context. This is a prompt policy, not a deterministic blacklist or a guarantee of model compliance.
+
 Lamp's `robots/lamp/SOUL.md` applies the same addressed-speech prerequisite to
 main-agent voice and `[ambient]` messages. Overheard speech or an unclear
 addressee requires exactly `NO_REPLY`, without tool calls or physical/emotional
