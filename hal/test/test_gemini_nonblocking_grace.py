@@ -318,7 +318,7 @@ def test_continuation_after_filler_waits_for_outcome_and_late_routing(
 
 @pytest.mark.parametrize('delegate', [False, True])
 @pytest.mark.parametrize('spoken', [False, True])
-def test_spoken_handoff_quarantines_before_consumer_can_start_next_capture(
+def test_handoff_quarantines_before_consumer_can_start_next_capture(
         monkeypatch, delegate, spoken):
     from hal.realtime import response_outcome
 
@@ -348,7 +348,29 @@ def test_spoken_handoff_quarantines_before_consumer_can_start_next_capture(
     agent._recv_queue = ObservedQueue()
     _receive(agent)
     assert boundaries
-    assert all(value is spoken for value in boundaries)
+    assert all(value is (spoken or delegate) for value in boundaries)
+
+
+@pytest.mark.parametrize('model', ['gemini-3.8-live-extended-thinking', 'gemini-3.1-flash-live-preview'])
+def test_silent_delegate_quarantine_survives_successful_tool_ack(model):
+    from hal.realtime.models import FunctionCallResultInput
+    agent = _agent([_tool(), _terminal()], model=model)
+    events = _receive(agent)
+    assert [call.name for call in _calls(events)] == ['delegate_to_main']
+    asyncio.run(agent._async_send_input(FunctionCallResultInput(
+        call_id='c1', output='{"result":"delegated"}',
+    )))
+    assert not agent._pending_tool_calls
+    assert agent.requires_fresh_session
+    assert agent._session.tool_responses[-1].name == 'delegate_to_main'
+
+
+def test_empty_delegate_does_not_quarantine_session_for_handoff():
+    tool = _tool()
+    tool.tool_call.function_calls[0].args = {'message': ' '}
+    agent = _agent([tool, _terminal()])
+    _receive(agent)
+    assert not getattr(agent, '_requires_fresh_session', False)
 
 
 @pytest.mark.parametrize("generation", [False, True])
@@ -1262,3 +1284,110 @@ def test_receiver_invalidates_cancelled_look_image(interrupt):
     _receive(agent)
     assert agent._cancelled_look_calls == {"look-1"}
     assert agent.requires_fresh_session
+
+
+@pytest.mark.parametrize('fresh_kind', ['transcript', 'activity_start'])
+@pytest.mark.parametrize('orphan_text', ['Unrelated acknowledgement.', 'Một câu bất kỳ.', '通知'])
+def test_live_reject_barrier_survives_ack_and_receive_restart(monkeypatch, orphan_text, fresh_kind):
+    from hal.realtime.models import FunctionCallResultInput, InterruptedOutput
+    monkeypatch.setattr(gemini_live.app_config, 'LIVE_MODE', True)
+    agent = _agent([_tool('reject_turn'), _terminal()])
+    first = _receive(agent)
+    assert [call.name for call in _calls(first)] == ['reject_turn']
+    assert agent._reject_followup_barrier
+    asyncio.run(agent._async_send_input(FunctionCallResultInput(
+        call_id='c1', output='{"result":"turn dropped"}',
+    )))
+    assert not agent._pending_tool_calls
+    assert agent._reject_followup_barrier
+
+    orphan = _terminal()
+    orphan.server_content.turn_complete = False
+    orphan.server_content.output_transcription = SimpleNamespace(text=orphan_text)
+    orphan.server_content.model_turn = SimpleNamespace(parts=[
+        SimpleNamespace(inline_data=SimpleNamespace(data=b'\x00\x01' * 160))])
+    agent._session.messages.put_nowait(orphan)
+    empty_finished = _terminal()
+    empty_finished.server_content.turn_complete = False
+    empty_finished.server_content.input_transcription = SimpleNamespace(text='', finished=True)
+    agent._session.messages.put_nowait(empty_finished)
+    old_end = _terminal()
+    old_end.server_content.turn_complete = False
+    old_end.voice_activity = SimpleNamespace(voice_activity_type='ACTIVITY_END')
+    agent._session.messages.put_nowait(old_end)
+    agent._session.messages.put_nowait(_terminal())
+    second = _receive(agent)
+    assert agent._reject_followup_barrier
+    assert not any(isinstance(event, OutputEvent) and isinstance(
+        event.output, (AudioOutput, TextOutput, InterruptedOutput, FunctionCallOutput)) for event in second)
+    assert all(not event.fallback_to_main and not event.execution_completed
+               for event in second if isinstance(event, TurnDoneEvent))
+
+    fresh = _terminal()
+    fresh.server_content.turn_complete = False
+    if fresh_kind == 'transcript':
+        fresh.server_content.input_transcription = SimpleNamespace(text='What time is it?', finished=True)
+    else:
+        fresh.voice_activity = SimpleNamespace(voice_activity_type='ACTIVITY_START')
+    agent._session.messages.put_nowait(fresh)
+    reply = _terminal()
+    reply.server_content.output_transcription = SimpleNamespace(text='A valid new answer.')
+    agent._session.messages.put_nowait(reply)
+    agent._session.messages.put_nowait(_tool('complete_response', 'new-call'))
+    third = _receive(agent)
+    assert not agent._reject_followup_barrier
+    texts = [event.output for event in third if isinstance(event, OutputEvent)
+             and isinstance(event.output, TextOutput)]
+    assert [out.text for out in texts] == ['A valid new answer.']
+    if fresh_kind == 'transcript':
+        assert texts[0].user_turn_id and texts[0].user_turn_id != 'user-1'
+
+
+def test_manual_rejection_does_not_arm_live_barrier(monkeypatch):
+    monkeypatch.setattr(gemini_live.app_config, 'LIVE_MODE', False)
+    agent = _agent([_tool('reject_turn'), _terminal()])
+    _receive(agent)
+    assert not getattr(agent, '_reject_followup_barrier', False)
+
+
+def test_live_reject_barrier_accepts_finished_only_transcription(monkeypatch):
+    from google.genai import types
+
+    monkeypatch.setattr(gemini_live.app_config, 'LIVE_MODE', True)
+    # A real SDK completion marker has text=None, not an empty string.
+    finished = types.LiveServerMessage(server_content=types.LiveServerContent(
+        input_transcription=types.Transcription(finished=True),
+    ))
+    agent = _agent([finished, _terminal()])
+    agent._reject_followup_barrier = True
+
+    events = _receive(agent)
+
+    assert agent._reject_followup_barrier
+    assert not any(isinstance(event, OutputEvent) for event in events)
+    assert len(events) == 1
+    assert isinstance(events[0], TurnDoneEvent)
+    assert not events[0].execution_completed
+    assert not events[0].fallback_to_main
+
+
+def test_live_reject_barrier_keeps_transport_controls(monkeypatch):
+    from websockets.exceptions import ConnectionClosed
+    monkeypatch.setattr(gemini_live.app_config, 'LIVE_MODE', True)
+    control = _terminal()
+    control.server_content.turn_complete = False
+    control.session_resumption_update = SimpleNamespace(new_handle='resume-new')
+    control.tool_call_cancellation = SimpleNamespace(ids=['cancel-old'])
+    agent = _agent([control, _terminal()])
+    agent._reject_followup_barrier = True
+    cancelled = []
+    agent._invalidate_look_images = lambda ids: cancelled.extend(ids)
+    _receive(agent)
+    assert agent._resumption_handle == 'resume-new'
+    assert cancelled == ['cancel-old']
+    assert agent._reject_followup_barrier
+    goodbye = _terminal()
+    goodbye.go_away = SimpleNamespace(time_left=0)
+    agent._session.messages.put_nowait(goodbye)
+    with pytest.raises(ConnectionClosed):
+        _receive(agent)

@@ -3,7 +3,6 @@ package server
 import (
 	"errors"
 	"strings"
-	"time"
 
 	"go.autonomous.ai/os/system/harness"
 	"go.autonomous.ai/os/system/telemetry"
@@ -40,25 +39,14 @@ func (s *Server) observeHarnessExecution(agentID, kind string, frame harness.Fra
 	default:
 		return
 	}
-	// Preserve legacy reply routing. Metrics must not guess the oldest turn
-	// when an explicit ID mismatches or several requests share an agent.
-	eventRunID := harnessFrameRunID(frame)
 	s.harnessRepliesMu.Lock()
-	var runID string
-	for _, reply := range s.harnessReplies {
-		if reply.agentID != agentID || time.Since(reply.created) > 15*time.Minute {
-			continue
-		}
-		if eventRunID != "" && reply.runID != eventRunID {
-			continue
-		}
-		if runID != "" {
-			runID = ""
-			break
-		}
+	reply, ok := s.harnessReplyForFrameLocked(agentID, frame)
+	s.harnessRepliesMu.Unlock()
+	runID := ""
+	if ok {
 		runID = reply.runID
 	}
-	s.harnessRepliesMu.Unlock()
+
 	if runID != "" {
 		telemetry.ReportTaskExecution(runID, "", outcome, evidence)
 	}

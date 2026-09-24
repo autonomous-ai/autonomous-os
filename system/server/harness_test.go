@@ -127,7 +127,7 @@ func TestCanonicalHarnessReplyRunIDRepairsStaleSequence(t *testing.T) {
 func TestHarnessEventTextUsesDirectLifecycleAndSummary(t *testing.T) {
 	if got := harnessEventText("receipt.updated", harness.Frame{
 		"payload": map[string]any{"receipt": map[string]any{"state": "queued"}},
-	}); got != "Harness accepted the request." {
+	}); got != "Harness queued the request." {
 		t.Fatalf("queued text = %q", got)
 	}
 	if got := harnessEventText("turn.started", harness.Frame{"payload": map[string]any{}}); got != "Harness agent is working." {
@@ -255,17 +255,81 @@ func TestEmptyHarnessSummaryRetainsPendingChat(t *testing.T) {
 
 func TestHarnessSameAgentKeepsEachChatRouteUntilItsOwnSummary(t *testing.T) {
 	s := &Server{agentHandler: &agenthttp.AgentHandler{}}
-	s.registerHarnessReply("mike", "device-chat-first", true, false)
-	s.registerHarnessReply("mike", "device-chat-second", true, false)
-	s.forwardHarnessEvent(harness.Frame{"agentId": "mike", "kind": "turn.summary", "payload": map[string]any{"text": "first result"}})
+	s.registerHarnessDispatch("mike", "device-chat-first", true, false, harness.Frame{"idempotencyKey": "first-key"})
+	s.registerHarnessDispatch("mike", "device-chat-second", true, false, harness.Frame{"idempotencyKey": "second-key"})
+	s.forwardHarnessEvent(harness.Frame{"agentId": "mike", "kind": "turn.summary", "payload": map[string]any{"idempotencyKey": "first-key", "text": "first result"}})
 	if _, pending := s.harnessReplies["device-chat-first"]; pending {
 		t.Fatal("first result did not consume the first route")
 	}
 	if _, pending := s.harnessReplies["device-chat-second"]; !pending {
 		t.Fatal("first result consumed the newer route")
 	}
-	s.forwardHarnessEvent(harness.Frame{"agentId": "mike", "kind": "turn.summary", "payload": map[string]any{"text": "second result"}})
+	s.forwardHarnessEvent(harness.Frame{"agentId": "mike", "kind": "turn.summary", "payload": map[string]any{"idempotencyKey": "second-key", "text": "second result"}})
 	if _, pending := s.harnessReplies["device-chat-second"]; pending {
 		t.Fatal("second result did not consume the second route")
+	}
+}
+
+func TestHarnessOverlappingRepliesRejectUncorrelatedAndLateEvents(t *testing.T) {
+	s := &Server{agentHandler: &agenthttp.AgentHandler{}}
+	s.registerHarnessDispatch("agent", "first", true, false, harness.Frame{"idempotencyKey": "key-a"})
+	s.registerHarnessDispatch("agent", "second", true, false, harness.Frame{"idempotencyKey": "key-b"})
+	for _, payload := range []map[string]any{{"text": "ambiguous"}, {"text": "unknown", "idempotencyKey": "unknown"}, {"text": "mismatch", "idempotencyKey": "key-a", "runId": "second"}} {
+		s.forwardHarnessEvent(harness.Frame{"agentId": "agent", "kind": "turn.summary", "payload": payload})
+		if len(s.harnessReplies) != 2 {
+			t.Fatal("unmatched event consumed a route")
+		}
+	}
+	s.forwardHarnessEvent(harness.Frame{"agentId": "agent", "kind": "turn.summary", "payload": map[string]any{"idempotencyKey": "key-b", "text": "preview", "fullText": "second complete"}})
+	if !s.hasHarnessReply("agent", "first") || s.hasHarnessReply("agent", "second") {
+		t.Fatal("out-of-order completion reached wrong route")
+	}
+	s.forwardHarnessEvent(harness.Frame{"agentId": "agent", "kind": "turn.summary", "payload": map[string]any{"text": "late legacy second result"}})
+	if !s.hasHarnessReply("agent", "first") {
+		t.Fatal("late ambiguous event consumed remaining route")
+	}
+	if s.harnessReplyAllowsRecap("agent", "first") {
+		t.Fatal("latest recap allowed for overlapped route")
+	}
+}
+
+func TestHarnessReceiptEventCorrelatesByNestedKey(t *testing.T) {
+	s := &Server{agentHandler: &agenthttp.AgentHandler{}}
+	s.registerHarnessDispatch("agent", "first", true, false, harness.Frame{"idempotencyKey": "key-a"})
+	s.registerHarnessDispatch("agent", "second", true, false, harness.Frame{"idempotencyKey": "key-b"})
+	reply, ok := s.harnessReplyForFrameLocked("agent", harness.Frame{"payload": map[string]any{"receipt": map[string]any{"idempotencyKey": "key-b", "state": "queued"}}})
+	if !ok || reply.runID != "second" {
+		t.Fatal("receipt routed to wrong turn")
+	}
+	if _, ok := s.harnessReplyForEventLocked("agent", "unknown"); ok {
+		t.Fatal("unknown explicit run fell back")
+	}
+}
+
+func TestHarnessLocalNoticeDoesNotPoisonPendingRemoteReply(t *testing.T) {
+	s := &Server{agentHandler: &agenthttp.AgentHandler{}}
+	s.registerHarnessDispatch("agent", "remote", true, false, harness.Frame{"idempotencyKey": "key-a"})
+	s.deliverHarnessVoiceMessage("agent", "local-failure", "Harness focus changed")
+	if !s.harnessReplyAllowsRecap("agent", "remote") || s.harnessOverlapAgents["agent"] {
+		t.Fatal("local failure was mistaken for overlapping remote execution")
+	}
+	s.forwardHarnessEvent(harness.Frame{"agentId": "agent", "kind": "turn.summary", "payload": map[string]any{"fullText": "remote result"}})
+	if s.hasHarnessReply("agent", "remote") {
+		t.Fatal("local failure blocked the existing remote result")
+	}
+}
+
+func TestHarnessLateLegacyEventCannotCompleteFutureTurnAfterOverlap(t *testing.T) {
+	s := &Server{agentHandler: &agenthttp.AgentHandler{}}
+	s.registerHarnessReply("agent", "a", true, false)
+	s.registerHarnessReply("agent", "b", true, false)
+	s.takeHarnessReply("agent", "a")
+	s.takeHarnessReply("agent", "b")
+	s.registerHarnessReply("agent", "c", true, false)
+	if _, ok := s.harnessReplyForEventLocked("agent", ""); ok {
+		t.Fatal("uncorrelated late event can complete future turn")
+	}
+	if _, ok := s.harnessReplyForEventLocked("agent", "c"); !ok {
+		t.Fatal("explicit future turn lost")
 	}
 }

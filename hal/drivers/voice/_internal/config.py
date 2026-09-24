@@ -114,6 +114,8 @@ WARM_MIC_ECHO_SKIP_MAX_S = float(os.environ.get("HAL_WARM_MIC_ECHO_SKIP_MAX_S", 
 # not a hal dependency — absent, every AEC entry point degrades to a no-op and
 # the voice path behaves exactly as it did before, so defaulting this on cannot
 # break a device that lacks the binding.
+# Hardware-AEC profiles disable this explicitly. With LIVE_MODE enabled,
+# that selects the shared adaptive live path; no hardware name is inspected.
 # ---------------------------------------------------------------------------
 AEC_ENABLED = os.environ.get("HAL_AEC_ENABLED", "true").lower() == "true"
 # Speaker→mic delay hint. AEC3 estimates the real delay itself, but the hint
@@ -236,6 +238,18 @@ ENDPOINT_SILENCE_S = float(os.environ.get("HAL_ENDPOINT_SILENCE_S", "0.8"))
 # knobs below only shape a session once one is open.
 # ---------------------------------------------------------------------------
 LIVE_MODE = _hal_config.LIVE_MODE
+
+# Linear PCM gain while hardware-AEC live playback is temporarily ducked.
+# Keep the demo default until a device-specific value has been measured.
+def _live_duck_gain(value):
+    try:
+        gain = float(value)
+    except (TypeError, ValueError):
+        return 0.12
+    return gain if 0.0 < gain <= 1.0 else 0.12
+
+
+LIVE_DUCK_GAIN = _live_duck_gain(os.environ.get("HAL_LIVE_DUCK_GAIN", "0.12"))
 
 # What goes on the uplink while our own speaker is playing.
 #

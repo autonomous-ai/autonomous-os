@@ -38,6 +38,13 @@ class AudioCommitEvent(AgentInputEvent):
     queued_at: float = Field(default_factory=time.monotonic)
 
 
+class AudioStreamEndEvent(AgentInputEvent):
+    """End an automatic-VAD input stream on its original transport only."""
+
+    type: InputEventTypeEnum = InputEventTypeEnum.AUDIO_STREAM_END
+    session: object
+
+
 # --- Receive queue events ---
 
 

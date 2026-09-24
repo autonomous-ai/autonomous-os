@@ -28,6 +28,7 @@ from hal.realtime.enums import GeminiThinkingLevel
 from hal.realtime.models import (
     AgentInputEvent,
     AudioCommitEvent,
+    AudioStreamEndEvent,
     AudioInput,
     AudioOutput,
     FunctionCallOutput,
@@ -152,6 +153,7 @@ class GeminiLiveAgent(VoiceAgentBase):
         self.supports_look_continuation = False
         self._pending_image = None
         self._requires_fresh_session: bool = False
+        self._reject_followup_barrier: bool = False
         self._user_transcript: str = ""
         self._gated_audio_frames: int = 0
         self._reconnect_delay_s: float = config.reconnect_delay_s
@@ -190,7 +192,7 @@ class GeminiLiveAgent(VoiceAgentBase):
     @property
     @override
     def requires_fresh_session(self) -> bool:
-        """Whether unresolved tools or a spoken handoff require a new session."""
+        """Whether unresolved tools or a handoff require a new session."""
         return getattr(self, "_requires_fresh_session", False) or bool(
             self._pending_tool_calls
         )
@@ -245,8 +247,11 @@ class GeminiLiveAgent(VoiceAgentBase):
     def _build_config(self) -> types.LiveConnectConfig:
         lang: str | None = self._config.language
         lang_codes: list[str] | None = (
-            [lang] if lang and self._config.use_language_codes else None
+            ["vi-VN" if lang == "vi" else lang]
+            if lang and self._config.use_language_codes else None
         )
+
+        logger.info("[realtime] input transcription language hints: %s", lang_codes or "auto")
 
         if "2.5" in self._config.model or "native-audio" in self._config.model:
             budget = 0 if self._config.thinking_level == GeminiThinkingLevel.MINIMAL else -1
@@ -289,14 +294,14 @@ class GeminiLiveAgent(VoiceAgentBase):
             ),
             system_instruction=self._config.instructions,
             input_audio_transcription=types.AudioTranscriptionConfig(
-                language_codes=lang_codes,
+                language_hints=(
+                    types.LanguageHints(language_codes=lang_codes) if lang_codes else None
+                ),
             ),
             # Always on: with AUDIO the only modality, this transcript is the
             # ONLY way to get the reply as text, which is what our TTS speaks
             # when native audio is off.
-            output_audio_transcription=types.AudioTranscriptionConfig(
-                language_codes=lang_codes,
-            ),
+            output_audio_transcription=types.AudioTranscriptionConfig(),
             realtime_input_config=types.RealtimeInputConfig(
                 automatic_activity_detection=self._activity_detection(),
             ),
@@ -358,6 +363,7 @@ class GeminiLiveAgent(VoiceAgentBase):
     async def _async_connect(self) -> None:
         # A reopened session must not inherit input ownership or playback acks.
         self.supports_look_continuation = False
+        self._reject_followup_barrier = False
         self._live_user_turn_id = ""
         self._live_speech_emitted = False
         self._awaiting_playback_turn_complete = False
@@ -611,6 +617,22 @@ class GeminiLiveAgent(VoiceAgentBase):
             if pending_image is not None:
                 await self._async_send_input(pending_image)
 
+    def end_audio_stream(self, *, session: object) -> bool:
+        """Preserve audio/EOS ordering without ending a manual-VAD activity."""
+        if (not self.available or self.audio_session is not session
+                or self._vad_disabled or self.requires_fresh_session):
+            return False
+        self._send_queue.put(AudioStreamEndEvent(session=session))
+        return True
+
+    async def _async_end_audio_stream(self, session: object) -> None:
+        # Recheck after queueing: a tool or transport swap can occur while the
+        # sender drains earlier audio. Never replay EOS onto a replacement.
+        self.validate_audio_session(session)
+        if self._vad_disabled or self.requires_fresh_session:
+            return
+        await session.send_realtime_input(audio_stream_end=True)
+
     async def _async_commit(
         self, turn_end_queued_at: float | None = None, *, session: object | None = None,
     ) -> None:
@@ -812,6 +834,8 @@ class GeminiLiveAgent(VoiceAgentBase):
             _continuation_check = asyncio.create_task(check())
 
         async def _fallback_needed(delayed_playback_ack: bool = False) -> bool:
+            if getattr(self, "_reject_followup_barrier", False):
+                return False
             if interaction_status == "IDLE":
                 # Extended Thinking has finished the whole interaction, not
                 # merely a filler utterance. Do not let a second model's
@@ -898,7 +922,8 @@ class GeminiLiveAgent(VoiceAgentBase):
             self._user_transcript = ""
             self._turn_done.set()
             self._recv_queue.put(TurnDoneEvent(
-                execution_completed=not execution_interrupted and not delayed_playback_ack and not fallback,
+                execution_completed=(not execution_interrupted and not delayed_playback_ack and not fallback
+                                     and not getattr(self, "_reject_followup_barrier", False)),
                 fallback_to_main=fallback,
                 user_transcript=transcript,
                 handoff_context=_handoff_context() if fallback else "",
@@ -924,7 +949,8 @@ class GeminiLiveAgent(VoiceAgentBase):
             self._first_audio_received = False
             self._turn_done.set()
             self._recv_queue.put(TurnDoneEvent(
-                execution_completed=not execution_interrupted and not fallback,
+                execution_completed=(not execution_interrupted and not fallback
+                                     and not getattr(self, "_reject_followup_barrier", False)),
                 fallback_to_main=fallback,
                 user_transcript=transcript,
                 handoff_context=_handoff_context() if fallback else "",
@@ -1083,6 +1109,48 @@ class GeminiLiveAgent(VoiceAgentBase):
             # is indistinguishable from one the model abandoned. See
             # RealtimeVoiceAgent.note_server_activity.
             self.note_server_activity()
+            if app_config.LIVE_MODE and getattr(self, "_reject_followup_barrier", False):
+                content = message.server_content
+                incoming = getattr(content, "input_transcription", None)
+                activity = getattr(message, "voice_activity", None)
+                fresh_input = (
+                    getattr(activity, "voice_activity_type", None) == "ACTIVITY_START"
+                    or bool((getattr(incoming, "text", None) or "").strip())
+                )
+                if fresh_input:
+                    self._reject_followup_barrier = False
+                    self._live_user_turn_id = ""
+                    self._live_speech_emitted = False
+                    self._user_transcript = ""
+                    response_user_turn_id = None
+                    _routing_received = _outcome_received = False
+                    self._awaiting_playback_turn_complete = False
+                else:
+                    # ACK-triggered speech has no new user owner. Keep the
+                    # barrier across receive iterators and protocol terminals;
+                    # do not feed it to continuation/outcome/fallback machinery.
+                    cancellation = getattr(message, "tool_call_cancellation", None)
+                    if cancellation is not None:
+                        self._invalidate_look_images(getattr(cancellation, "ids", ()) or ())
+                    update = getattr(message, "session_resumption_update", None)
+                    if update is not None and update.new_handle:
+                        self._resumption_handle = update.new_handle
+                    if getattr(message, "go_away", None):
+                        raise ConnectionClosed(None, None)
+                    tool_call = getattr(message, "tool_call", None)
+                    for call in (getattr(tool_call, "function_calls", None) or ()):
+                        await self._session.send_tool_response(function_responses=[
+                            types.FunctionResponse(id=call.id, name=call.name,
+                                                   response={"result": "ignored: rejected turn"})
+                        ])
+                    if content is not None and (
+                        getattr(content, "turn_complete", False)
+                        or getattr(content, "generation_complete", False)
+                        or getattr(content, "interaction_status", None) == "IDLE"
+                    ):
+                        await _finalize_turn_complete(False)
+                        return
+                    continue
             cancellation = getattr(message, "tool_call_cancellation", None)
             if cancellation is not None:
                 self._invalidate_look_images(getattr(cancellation, "ids", ()) or ())
@@ -1613,14 +1681,22 @@ class GeminiLiveAgent(VoiceAgentBase):
                         # Keep the grace open: a delegate can follow this call in
                         # another frame (device-observed 2026-09-21, +39ms).
                         continue
+                    if (app_config.LIVE_MODE and fc.name == "reject_turn"
+                            and not _initial_speech):
+                        # Publish before the consumer can ACK. A plain ACK can
+                        # cause provider speech in a later receive iteration.
+                        self._reject_followup_barrier = True
                     if fc.name in {"delegate_to_main", "reject_turn", "end_conversation"}:
                         _outcome_received = True
                         _routing_received = True
-                    if (_requires_outcome and fc.name == "delegate_to_main"
-                            and _spoken_response.strip()):
+                    if (fc.name == "delegate_to_main"
+                            and isinstance(fc.args, dict)
+                            and isinstance(fc.args.get("message"), str)
+                            and fc.args["message"].strip()):
                         # Publish quarantine BEFORE the tool: its consumer may
-                        # release the next capture immediately. Late filler/ACK
-                        # output must not start a grace in that new capture.
+                        # release the next capture immediately. Even a silent
+                        # handoff can produce late spoken output after its ACK;
+                        # it must not become the next capture's response.
                         self._requires_fresh_session = True
                     self._recv_queue.put(
                         OutputEvent(
@@ -1846,7 +1922,7 @@ class GeminiLiveAgent(VoiceAgentBase):
             for attempt in range(self._max_retries):
                 session = (
                     event.session
-                    if isinstance(event, (BoundAudioInputEvent, BoundAudioCommitEvent))
+                    if isinstance(event, (BoundAudioInputEvent, BoundAudioCommitEvent, AudioStreamEndEvent))
                     else None
                 )
                 if session is not None and (
@@ -1864,7 +1940,11 @@ class GeminiLiveAgent(VoiceAgentBase):
                     logger.debug("[realtime] Not connected, skipping attempt %d/%d", attempt + 1, self._max_retries)
                     continue
                 try:
-                    if isinstance(event, AudioCommitEvent):
+                    if isinstance(event, AudioStreamEndEvent):
+                        self._submit_and_wait(
+                            self._async_end_audio_stream(session), timeout=self._send_timeout_s,
+                        )
+                    elif isinstance(event, AudioCommitEvent):
                         if not self._turn_done.wait(timeout=10.0):
                             logger.warning("[realtime] Timed out waiting for turn to finish — forcing commit")
                         self._submit_and_wait(
