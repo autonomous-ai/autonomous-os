@@ -41,6 +41,7 @@ from hal.drivers.voice.speech_emotion.constants import (
     PREFILTER_VAD_FALLBACK_MIN_VOICED_S,
     PREFILTER_VAD_MIN_VOICED_S,
     PREFILTER_VOICED_RMS,
+    SER_MAX_CLIP_S,
 )
 from hal.drivers.voice.speech_emotion.debug_tracer import (  # SER-DEBUG
     audio_stats,
@@ -49,6 +50,7 @@ from hal.drivers.voice.speech_emotion.debug_tracer import (  # SER-DEBUG
 from hal.drivers.voice.speech_emotion.utils import (
     compute_trim_and_voiced,
     pcm16_to_wav,
+    select_voiced_span,
     wav_to_pcm16,
 )
 
@@ -344,6 +346,22 @@ class Emotion2VecRecognizer(BaseSpeechEmotionRecognizer):
                 total_s, trimmed_s, voiced_s, ratio * 100, silero_voiced_s,
             )
             tracer.note_section("prefilter", {"verdict": "pass"})  # SER-DEBUG
+
+        # Upload only the most-voiced contiguous SER_MAX_CLIP_S span. The
+        # gates above ran on the full trimmed buffer; this only bounds what
+        # is sent (and what the server would otherwise crop away).
+        clipped = select_voiced_span(
+            trimmed, sample_rate, PREFILTER_VOICED_RMS, PREFILTER_FRAME_MS, SER_MAX_CLIP_S,
+        )
+        if clipped.size != trimmed.size:
+            logger.info(
+                "[prefilter] CLIP %.2fs → %.2fs (most-voiced span)",
+                trimmed.size / sample_rate, clipped.size / sample_rate,
+            )
+        tracer.note_section("prefilter", {  # SER-DEBUG
+            "clipped_s": round(clipped.size / sample_rate, 3),
+        })
+        trimmed = clipped
 
         try:
             with tracer.stage("encode_wav"):  # SER-DEBUG

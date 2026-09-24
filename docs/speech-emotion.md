@@ -42,7 +42,7 @@ SpeechEmotionService.submit(user, wav_bytes, duration_s)   ← non-blocking
     ▼
 worker thread (daemon)
     │  Emotion2VecRecognizer.recognize(wav_bytes)
-    │     ├─ prefilter — RMS trim + voiced gate, then Silero VAD   ← LOCAL, drops non-speech
+    │     ├─ prefilter — RMS trim + voiced gate, then Silero VAD, then ≤8 s most-voiced span   ← LOCAL, drops non-speech
     │     ├─ POST {DL_BACKEND_URL}/hal/api/dl/ser/recognize
     │     │     ← { "label": "happy", "confidence": 0.78 }
     │     ├─ per-label confidence gate
@@ -124,6 +124,8 @@ Decode requires 16-bit PCM at exactly 16 kHz; multi-channel is averaged to mono.
 **Stage 1 — RMS** (single pass, `utils.compute_trim_and_voiced`). One 20 ms RMS envelope serves two jobs with two thresholds by design: `PREFILTER_TRIM_RMS = 3500` (strict) anchors the head/tail trim boundary, `PREFILTER_VOICED_RMS = 2500` (lenient) counts voiced frames inside it so whisper/breathy speech still registers. 100 ms of padding is kept around the cut. Drops when the trimmed clip is `< 2.0 s`, total voiced is `< 1.0 s`, or the voiced ratio is `< 0.30` (denominator is the padded-trim span, so a long silent prefix cannot deflate it).
 
 **Stage 2 — Silero VAD** on the trimmed buffer (`emotion2vec.py:399`). Silero v5 contract: 512-sample chunks at 16 kHz with a 64-sample context prepended; LSTM `state` and `context` are rebuilt from zeros every call, so independent invocations never bleed into each other. Drops when Silero-voiced duration is `< 1.0 s`. When Silero is unavailable (missing model, broken ORT) the RMS bar **tightens** from 1.0 s to 3.0 s rather than passing everything through.
+
+**Upload clip** — after both gates pass, `utils.select_voiced_span` keeps only the contiguous **8 s** (`SER_MAX_CLIP_S`) span with the most voiced 20 ms frames (`PREFILTER_VOICED_RMS`). Ties go to the latest span. Clips of 8 s or less are unchanged. The span is a plain slice, never stitched from voiced pieces. perception-service also bounds SER input to 2–8 s, so anything longer would be cropped server-side anyway (#492).
 
 Re-encode failure is fail-open: the original WAV is sent.
 

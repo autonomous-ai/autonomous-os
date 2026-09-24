@@ -44,7 +44,7 @@ SpeechEmotionService.submit(user, wav_bytes, duration_s)   ← non-blocking
     ▼
 worker thread (daemon)
     │  Emotion2VecRecognizer.recognize(wav_bytes)
-    │     ├─ prefilter — RMS trim + cổng voiced, rồi Silero VAD   ← CỤC BỘ, loại phi-tiếng-nói
+    │     ├─ prefilter — RMS trim + cổng voiced, rồi Silero VAD, sau đó cắt đoạn ≤8 giây nhiều giọng nói nhất   ← CỤC BỘ, loại phi-tiếng-nói
     │     ├─ POST {DL_BACKEND_URL}/hal/api/dl/ser/recognize
     │     │     ← { "label": "happy", "confidence": 0.78 }
     │     ├─ cổng confidence theo nhãn
@@ -131,6 +131,8 @@ Giải mã yêu cầu PCM 16-bit đúng 16 kHz; đa kênh được lấy trung b
 **Chặng 1 — RMS** (một lượt, `utils.compute_trim_and_voiced`). Một envelope RMS 20 ms phục vụ hai việc với hai ngưỡng có chủ đích: `PREFILTER_TRIM_RMS = 3500` (nghiêm) neo biên cắt đầu/đuôi, `PREFILTER_VOICED_RMS = 2500` (rộng rãi) đếm frame có tiếng bên trong vùng đó để giọng thì thầm/hơi vẫn được ghi nhận. Giữ 100 ms đệm quanh vết cắt. Drop khi clip sau trim `< 2.0 s`, tổng thời lượng có tiếng `< 1.0 s`, hoặc tỉ lệ voiced `< 0.30` (mẫu số là vùng trim đã đệm, nên đoạn im lặng dài ở đầu không làm giảm tỉ lệ).
 
 **Chặng 2 — Silero VAD** trên buffer đã trim (`emotion2vec.py:399`). Hợp đồng Silero v5: chunk 512 mẫu ở 16 kHz với context 64 mẫu đặt phía trước; `state` LSTM và `context` được dựng lại từ zero mỗi lần gọi, nên các lần gọi độc lập không lẫn trạng thái vào nhau. Drop khi thời lượng Silero-voiced `< 1.0 s`. Khi Silero không khả dụng (thiếu model, ORT hỏng), ngưỡng RMS **siết** từ 1.0 s lên 3.0 s thay vì cho qua tất cả.
+
+**Cắt clip gửi lên** — sau khi qua cả hai cổng lọc, `utils.select_voiced_span` chỉ giữ đoạn liên tục **8 giây** (`SER_MAX_CLIP_S`) có nhiều frame 20 ms có giọng nói nhất (`PREFILTER_VOICED_RMS`). Khi bằng nhau thì chọn đoạn muộn nhất. Clip ≤8 giây giữ nguyên. Đoạn được cắt nguyên khối, không ghép các mảnh có giọng nói lại với nhau. perception-service cũng giới hạn đầu vào SER ở 2–8 giây, nên phần dài hơn cũng sẽ bị cắt phía server (#492).
 
 Lỗi mã hóa lại thì fail-open: WAV gốc được gửi đi.
 
