@@ -1,14 +1,21 @@
 package http
 
-import "fmt"
+import (
+	"fmt"
+
+	"go.autonomous.ai/os/system/lib/sensingmsg"
+)
 
 // Include Harness routing metadata only while the paired transport is connected.
 // Check each request so disconnects also stop injecting retained follow-up hints.
 func (h *SensingHandler) harnessRoutingContext(message, runID, channel string) string {
-	if h.harnessConnected == nil || !h.harnessConnected() {
+	if h.harnessConnected == nil {
 		return ""
 	}
-	context := fmt.Sprintf("\n[harness-reply run_id=%s channel=%s]", runID, channel)
+	if !h.harnessConnected() {
+		return "\n" + sensingmsg.HarnessDisconnectedContext
+	}
+	context := fmt.Sprintf("\n[harness-reply run_id=%s channel=%s]\n%s", runID, channel, sensingmsg.HarnessConnectedContext)
 	followupActive := h.harnessFollowup != nil && h.harnessFollowup()
 	if routing := harnessRequestRouting(message, followupActive); routing != "" {
 		context += "\n" + routing

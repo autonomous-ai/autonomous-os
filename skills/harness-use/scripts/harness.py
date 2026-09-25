@@ -45,9 +45,9 @@ def require_connection():
     """Distinguish missing pairing from an offline paired computer before dispatch."""
     status = api('/status')
     if status.get('paired') is not True:
-        raise ValueError('HARNESS_UNPAIRED: Pair this device in Harness Desktop Settings > Devices using the code from OS Monitor.')
+        raise ValueError('HARNESS_UNPAIRED: This device has no Harness pairing. This connection check attempted no remote operation; it says nothing about earlier deliveries. Apply the skill fallback policy for fresh undispatched tasks. If the task requires Harness, pair in Harness Desktop Settings > Devices using the OS Monitor code.')
     if status.get('connected') is not True:
-        raise ValueError('HARNESS_OFFLINE: Open Harness on the paired computer and check the local network connection. Pairing is already saved; do not pair again.')
+        raise ValueError('HARNESS_OFFLINE: Harness is disconnected. This connection check attempted no remote operation; it says nothing about earlier deliveries. Apply the skill fallback policy for fresh undispatched tasks. If the task requires Harness, open Harness on the paired computer and check the local network. Pairing is saved; do not pair again.')
     return status
 
 

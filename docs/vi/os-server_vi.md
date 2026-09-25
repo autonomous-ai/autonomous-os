@@ -1395,7 +1395,7 @@ Notification realtime được lưu trước gate busy/readiness của sensing, 
 
 Khi nhận history realtime, sensing trả ID hội thoại gốc (`device-realtime-…`) trong `runId`, ID đồng bộ riêng trong `historyRunId`. Metrics HAL gắn với lượt gốc; journal và lượt silent gửi main giữ nguyên ID sync ổn định. Chỉ tách bản ghi monitor, không đổi routing voice/follow-up hay chính sách silent/TTS.
 
-Metadata reply-routing Harness trên request sensing voice/chat chỉ được chèn khi transport Harness đã pair và đang kết nối. Request lúc ngắt kết nối bỏ cả reply marker lẫn hint routing/follow-up riêng của Harness; routing voice và follow-up thông thường giữ nguyên.
+Metadata reply-routing Harness trên request sensing voice/chat chỉ được chèn khi transport Harness đã pair và đang kết nối. Request mất kết nối bỏ remote reply marker và hint follow-up nhưng thêm hướng dẫn trạng thái hiện tại: main làm task số mới chưa từng gửi bằng tool còn lại, trừ khi người dùng chỉ định Harness hoặc agent/workspace từ xa. Không làm trùng task từ xa đã tồn tại hoặc delivery chưa rõ. Replay hàng đợi cập nhật quan sát và bỏ reply marker cũ của run hiện tại khi mất kết nối. Thiếu provider trạng thái không khẳng định offline. Quan sát dùng RAM sẵn có, không thêm network hay lượt gọi model. Xem [policy fallback Harness](harness_vi.md#chính-sách-công-việc-số-của-lamp).
 
 Payload sensing HAL nhận trường tùy chọn `voice_turn_type` (`voice`, `voice_command`, `voice_followup`) cho debug voice. OS chỉ ghi giá trị hợp lệ vào Flow Monitor; `type` vẫn quyết định authorization, routing, queue, đồng bộ history và cancel loa.
 
