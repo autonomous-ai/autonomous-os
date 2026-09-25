@@ -367,6 +367,8 @@ Monitor polls system/HW APIs every **3 seconds**. Flow uses file-backed hybrid m
 
 ### 5.1 Overview Section
 
+Returning to Overview immediately refreshes section data instead of waiting for the next 5-second poll. Existing card data stays visible while refreshing. The monitor retains successful OTA-version and emotion-preset snapshots across section unmounts, displays them immediately on return, and revalidates in the background. These snapshots are memory-only and expire when the monitor unmounts. Section changes abort the previous section poll; hidden sections do not keep their streams mounted.
+
 Cards included:
 
 **OpenClaw AI**
