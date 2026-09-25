@@ -1783,31 +1783,14 @@ def _auto_camera_on(reason: str) -> bool:
 
 
 def _read_agent_name() -> str:
-    """Read agent name from the ACTIVE runtime's IDENTITY.md (a rename lands
-    in the active workspace only — reading a fixed openclaw path returns a
-    stale/template name on other runtimes). Falls back to the device type
-    (lamp/dog/intern) so wake words follow the device class, not a brand."""
-    identity_path = os.path.join(
-        _hal_config.ACTIVE_AGENT_WORKSPACE_DIR, "IDENTITY.md"
-    )
-    try:
-        with open(identity_path) as f:
-            for line in f:
-                lower = line.lower()
-                idx = lower.find("**name:**")
-                if idx >= 0:
-                    name = (
-                        line[idx + len("**name:**") :]
-                        .strip()
-                        .split("\u2014")[0]
-                        .split("-")[0]
-                        .strip()
-                    )
-                    if name:
-                        return name.lower()
-    except Exception:
-        pass
-    # No IDENTITY.md name → use the device type (lamp/dog/intern) so an unnamed
+    """Resolve the active runtime's name through its context manager layout."""
+    from hal.realtime.context_manager import CONTEXT_MANAGERS, OpenClawContextManager
+
+    context_cls = CONTEXT_MANAGERS.get(_hal_config.AGENT_GATEWAY, OpenClawContextManager)
+    name = context_cls.read_agent_name(_hal_config.ACTIVE_AGENT_WORKSPACE_DIR)
+    if name:
+        return name
+    # No explicit identity name → use the device type (lamp/dog/intern) so an unnamed
     # device is addressed by its class instead of a hardcoded "lamp".
     try:
         from hal.config import resolve_device_type

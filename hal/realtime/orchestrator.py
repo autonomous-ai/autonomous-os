@@ -36,9 +36,8 @@ from hal.realtime.config import (
     gemini_needs_idle_workaround,
 )
 from hal.realtime.context_manager import (
-    ClaudeCodeContextManager,
+    CONTEXT_MANAGERS,
     ContextManagerBase,
-    HermesContextManager,
     OpenClawContextManager,
 )
 from hal.realtime.enums import AgentGateway
@@ -380,22 +379,7 @@ class RealtimeOrchestrator:
     flow (device → OpenClaw).
     """
 
-    # PicoClaw, Codex and OpenCode reuse OpenClawContextManager: their workspaces
-    # are verbatim copies of OpenClaw's layout (SOUL.md / IDENTITY.md / MEMORY.md /
-    # memory/ / skills/), only the root dir differs. (Like Codex, OpenCode keeps
-    # its skills in a non-workspace dir — ~/.config/opencode/skills — so the
-    # workspace-relative skills catalog is empty here; identity + memory load
-    # correctly.) Claude Code matches that layout except skills, which live in
-    # .claude/skills (native claude CLI convention) — its subclass only changes
-    # the skills path.
-    CONTEXT_MANAGERS: dict[str, type[ContextManagerBase]] = {
-        AgentGateway.OPENCLAW: OpenClawContextManager,
-        AgentGateway.HERMES: HermesContextManager,
-        AgentGateway.PICOCLAW: OpenClawContextManager,
-        AgentGateway.CODEX: OpenClawContextManager,
-        AgentGateway.CLAUDECODE: ClaudeCodeContextManager,
-        AgentGateway.OPENCODE: OpenClawContextManager,
-    }
+    CONTEXT_MANAGERS = CONTEXT_MANAGERS
 
     WORKSPACE_DIRS: dict[str, str] = {
         AgentGateway.OPENCLAW: config.OPENCLAW_WORKSPACE_DIR,
