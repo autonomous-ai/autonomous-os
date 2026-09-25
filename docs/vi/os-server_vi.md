@@ -512,6 +512,15 @@ không có tham số speed: HAL áp dụng tốc độ đã lưu tại chỗ, gi
 v3. Audio tag trong ngoặc vuông bị bỏ. Trong Settings → Voice, đây là vendor thứ
 ba dưới `Autonomous (proxy)`.
 
+Khi chọn Gemini TTS và realtime provider là Gemini Live, các câu chit-chat do
+model Live tự trả lời được phát bằng **native audio với đúng voice TTS**, không
+gọi TTS (`native_voice()` trong `hal/drivers/voice/tts/gemini.py`), bất kể
+`HAL_REALTIME_NATIVE_AUDIO`. Session Live mở bằng voice TTS thay vì
+`realtime.gemini.voice`; đổi voice hoặc provider thì session được dựng lại trước
+lượt kế tiếp (`gemini-voice-change`). Câu trả lời delegate vẫn đọc bằng Gemini
+TTS. Native audio phát ở 1.0×; tốc độ TTS đã lưu chỉ áp dụng cho TTS. Provider
+TTS khác thì native audio giữ nguyên như cấu hình.
+
 ### Piper — TTS chạy trên thiết bị
 
 Provider TTS thứ ba bên cạnh `openai` và `elevenlabs`, chọn bằng

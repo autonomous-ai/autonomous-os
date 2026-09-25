@@ -18,7 +18,7 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from typing import Any
 
@@ -35,6 +35,7 @@ from hal.realtime.config import (
     _load_language,
     gemini_needs_idle_workaround,
 )
+from hal.realtime.enums.gemini import GeminiVoice
 from hal.realtime.context_manager import (
     CONTEXT_MANAGERS,
     ContextManagerBase,
@@ -396,7 +397,11 @@ class RealtimeOrchestrator:
         extra_tools: list[dict[str, Any]] | None = None,
         enable_expression: bool = False,
         stt_provider: Any = None,
+        voice_override: Callable[[], str | None] | None = None,
     ) -> None:
+        # Returns the Gemini Live voice to use instead of config (the Gemini TTS
+        # voice, see tts/gemini.py native_voice), or None for the config voice.
+        self._voice_override: Callable[[], str | None] | None = voice_override
         # VoiceService's STT provider, handed to providers that run STT
         # themselves (pipecat_v1) so the pipeline transcribes on the same
         # relay, key, model and boost terms as the turn-based path. None →
@@ -596,7 +601,10 @@ class RealtimeOrchestrator:
             from hal.realtime.voice_agent.gemini_live import GeminiLiveAgent
 
             return GeminiLiveAgent(
-                config=GeminiConfig(instructions=instructions), tools=self._tools,
+                config=GeminiConfig(
+                    instructions=instructions, voice=GeminiVoice(self._gemini_voice()),
+                ),
+                tools=self._tools,
             )
         if provider == "openai":
             from hal.realtime.voice_agent.openai_realtime import (
@@ -621,6 +629,12 @@ class RealtimeOrchestrator:
                 stt_provider=self._stt_provider,
             )
         return None
+
+    def _gemini_voice(self) -> str:
+        """Voice for the next Gemini Live session: the override, else config."""
+        voice_override = getattr(self, "_voice_override", None)
+        override = voice_override() if voice_override else None
+        return override or config.REALTIME_GEMINI_VOICE
 
     def _begin_rebuild(self) -> bool:
         """Reserve the rebuild slot before a synchronous or background rebuild."""
@@ -885,6 +899,16 @@ class RealtimeOrchestrator:
             ):
                 self._skip_post_idle_recycle = True
             return
+        # The voice is fixed at connect, so a TTS voice/provider change made
+        # since this session opened needs a fresh one before this turn speaks.
+        if provider == "gemini" and agent is not None:
+            current = getattr(getattr(agent, "_config", None), "voice", None)
+            wanted = self._gemini_voice()
+            if current is not None and current != wanted:
+                logger.info("[realtime] Gemini voice %s -> %s — rebuilding session", current, wanted)
+                if self._rebuild_now("gemini-voice-change", discard_old_on_failure=True):
+                    self._skip_post_idle_recycle = True
+                return
         # NOT gated on gemini_needs_idle_workaround(). That predicate asks whether
         # the MODEL has the native-audio idle-resume bug, but an idle session dying
         # is a session-lifecycle fact, not a model one: Gemini closes a session it

@@ -518,6 +518,15 @@ filter does not apply. Gemini has no speed parameter: HAL applies the saved
 speed locally, like ElevenLabs HTTP v3. Bracket audio tags are stripped. In
 Settings → Voice it is the third vendor under `Autonomous (proxy)`.
 
+When Gemini TTS is selected and the realtime provider is Gemini Live, chit-chat
+the Live model answers itself plays as **native audio in the TTS voice**, with no
+TTS call (`native_voice()` in `hal/drivers/voice/tts/gemini.py`), regardless of
+`HAL_REALTIME_NATIVE_AUDIO`. The Live session is opened with the TTS voice
+instead of `realtime.gemini.voice`; after a voice or provider change the session
+is rebuilt before the next turn (`gemini-voice-change`). Delegated replies are
+still spoken by Gemini TTS. Native audio plays at 1.0×; the saved TTS speed only
+applies to TTS. Any other TTS provider leaves native audio as configured.
+
 ### Piper — on-device TTS
 
 A third TTS provider alongside `openai` and `elevenlabs`, selected as
