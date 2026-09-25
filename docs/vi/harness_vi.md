@@ -372,13 +372,18 @@ Unpair làm mất quyền truy xuất kết quả của cặp cũ. Không có st
 404; API không chạy task hoặc phát âm thanh. History của main runtime lưu tham
 chiếu result chung, còn context follow-up ngắn giữ câu trả lời đầy đủ kèm
 `agentId`, `resultId`, `responseRunIds` dạng danh sách. Chat hiển thị câu trả lời
-một lần và tham chiếu ở các input còn lại. Receipt và `turn.done` không đóng hoặc đọc kết quả. Summary cuối có membership
+một lần tại input thành viên mới nhất và tham chiếu ở các input còn lại. Receipt và `turn.done` không đóng hoặc đọc kết quả. Summary cuối có membership
 được kiểm tra atomic; summary đơn thiếu metadata vẫn dùng bộ đối chiếu legacy an toàn. Câu hỏi có cấu trúc vẫn giữ task pending,
 chống lặp theo question ID trong tiến trình; thông báo này tách khỏi outbox result.
 
 Claim outbox được lưu trước thông báo UI và trước gọi HAL. Kiểm tra mode/generation,
-focus và cancellation của mọi input lúc tiếp nhận; sau đó HAL dùng turn ID của input
-đầu tiên để sở hữu playback. Huỷ sau tiếp nhận vẫn theo quy tắc HAL hiện tại. Chưa có
+focus lúc tiếp nhận. Input thành viên mới nhất nhận toàn bộ câu trả lời và sở hữu
+playback HAL; thứ tự lấy từ timestamp của device run, dùng thời điểm đăng ký làm
+fallback hoặc phân xử khi bằng nhau. Thứ tự membership từ producer không quyết
+định ưu tiên phát. Kiểm tra cancellation trên chủ sở hữu mới nhất: dừng A trước
+khi gửi B không được làm im kết quả chung A/B; dừng sau B vẫn chặn phát. Vẫn kiểm
+tra mọi thành viên về route web/local/restored/hết hạn và giữ dedupe result.
+Huỷ sau tiếp nhận vẫn theo quy tắc HAL hiện tại. Chưa có
 receipt xác nhận playback đầu cuối: HTTP accepted không có nghĩa người dùng đã nghe.
 
 Đã đối chiếu handoff từ OpenHarness PR #336 tại

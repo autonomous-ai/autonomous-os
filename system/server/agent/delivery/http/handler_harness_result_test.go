@@ -20,7 +20,7 @@ func TestHarnessGroupedResultPublishesOneAnswerAndReferences(t *testing.T) {
 		t.Fatal("not delivered")
 	}
 	first, second := <-events, <-events
-	if first.Summary != "House with trees" || first.RunID != "a" || second.Summary == first.Summary || second.RunID != "b" {
+	if first.Summary != "House with trees" || first.RunID != "b" || second.Summary == first.Summary || second.RunID != "a" {
 		t.Fatalf("wrong group output: %+v %+v", first, second)
 	}
 	if h.DeliverHarnessGroupedResult("result-1", "completed", "House with trees", []string{"a", "b"}) {
@@ -52,7 +52,7 @@ func TestHarnessGroupedSpeechSingleSynchronousSubmission(t *testing.T) {
 	calls := 0
 	send := func(text, owner string) error {
 		calls++
-		if text != "Result" || owner != "a" {
+		if text != "Result" || owner != "b" {
 			t.Fatalf("wrong submission %q %q", text, owner)
 		}
 		return nil
@@ -165,5 +165,76 @@ func TestHarnessGroupedUsageLimitNeverRewritesResult(t *testing.T) {
 	err := h.speakHarnessGroupedResult("You've reached the usage limit", []string{"a"}, func(string, string) error { t.Fatal("rewritten/submitted banner"); return nil })
 	if !errors.Is(err, ErrHarnessResultSpeechSuppressed) {
 		t.Fatal(err)
+	}
+}
+
+// Reproduces the device report: A begins, speech is cancelled, then B is
+// submitted. A/B complete together. The new request must still own its reply.
+func TestHarnessGroupedSpeechNewInputAfterCancelOwnsSharedReply(t *testing.T) {
+	old := "device-chat-1-1790308528212"
+	latest := "device-chat-2-1790308585451"
+	for _, order := range [][]string{{old, latest}, {latest, old}} {
+		for _, source := range []string{"click", "realtime"} {
+			t.Run(source+"/"+order[0], func(t *testing.T) {
+				h := &AgentHandler{}
+				// Registration order is deliberately reversed: replay/callback
+				// arrival must not decide which device request is newest.
+				h.MarkHarnessResponseRun(latest, false, false)
+				h.MarkHarnessResponseRun(old, false, false)
+				if source == "click" {
+					h.speechWatermarkMs.Store(1790308578529)
+				} else {
+					h.autoSpeechWatermarkMs.Store(1790308578529)
+				}
+				if !h.isSpeechCancelled(old) || h.isSpeechCancelled(latest) {
+					t.Fatal("invalid reproduction setup")
+				}
+				calls := 0
+				originalFirst := order[0]
+				err := h.speakHarnessGroupedResult("All clouds are black.", order, func(text, owner string) error {
+					calls++
+					if owner != latest || text != "All clouds are black." {
+						t.Fatalf("wrong speech owner/content: %s %s", owner, text)
+					}
+					return nil
+				})
+				if err != nil || calls != 1 {
+					t.Fatalf("new input lost its shared reply: %v calls=%d", err, calls)
+				}
+				if order[0] != originalFirst {
+					t.Fatal("mutated caller membership")
+				}
+			})
+		}
+	}
+}
+
+func TestHarnessGroupedSpeechStillHonorsCancelAfterLatestInput(t *testing.T) {
+	h := &AgentHandler{}
+	ids := []string{"device-chat-1-1790308528212", "device-chat-2-1790308585451"}
+	for _, id := range ids {
+		h.MarkHarnessResponseRun(id, false, false)
+	}
+	h.speechWatermarkMs.Store(1790308585452)
+	err := h.speakHarnessGroupedResult("All clouds are black.", ids, func(string, string) error { t.Fatal("spoke after user cancelled latest request"); return nil })
+	if !errors.Is(err, ErrHarnessResultSpeechSuppressed) {
+		t.Fatalf("wrong cancellation %v", err)
+	}
+}
+
+func TestHarnessGroupedResultShowsFullAnswerOnNewestDeviceInput(t *testing.T) {
+	bus := monitor.ProvideBus()
+	events, unsub := bus.Subscribe()
+	defer unsub()
+	h := &AgentHandler{monitorBus: bus}
+	old, latest := "device-chat-1-1790308528212", "device-chat-2-1790308585451"
+	h.MarkHarnessResponseRun(latest, true, false)
+	h.MarkHarnessResponseRun(old, true, false)
+	if !h.DeliverHarnessGroupedResult("shared", "completed", "All clouds are black.", []string{old, latest}) {
+		t.Fatal("not delivered")
+	}
+	first, second := <-events, <-events
+	if first.RunID != latest || first.Summary != "All clouds are black." || second.RunID != old || second.Detail.(map[string]string)["result_run_id"] != latest || second.Detail.(map[string]string)["result_reference"] != "true" {
+		t.Fatalf("incorrect shared reply placement: %+v %+v", first, second)
 	}
 }
