@@ -487,6 +487,10 @@ Cần sensing có camera (InsightFace). Mặc định ảnh người đã đăng
 `POST /api/voice/preview` nhận `speed` tùy chọn (`0.25–4.0`), chuyển tới HAL
 `/voice/speak` cho riêng câu thử không dùng cache. Không lưu tốc độ hoặc thay
 đổi tốc độ chung của service; bỏ qua field thì dùng tốc độ runtime hiện tại.
+`provider` / `voice` (+ `tts_api_key` / `tts_base_url`) trên `/voice/speak` cũng
+vậy: HAL dựng backend preview cho riêng câu đó, service đang chạy giữ nguyên
+provider, backend và voice đã lưu. Chúng chỉ dùng với câu không cache (`400` nếu
+kèm `cached`/`prerender`). Áp dụng cho **Test Voice** trên web và MQTT `tts.preview`.
 
 `GET /api/device/config` trả `tts_speed` hiệu lực; `PUT /api/device/config`
 nhận `{"tts_speed":1.2}`. Field tùy chọn nhận `0.25–4.0`; bỏ qua thì giữ

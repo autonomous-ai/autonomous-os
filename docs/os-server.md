@@ -493,6 +493,10 @@ Requires sensing with camera (InsightFace). Enrolled person JPEGs persist under 
 `POST /api/voice/preview` accepts optional `speed` (`0.25–4.0`) and forwards it
 to HAL `/voice/speak` for that uncached utterance only. It does not persist the
 rate or change the shared service speed. Omission retains the runtime default.
+`provider` / `voice` (+ `tts_api_key` / `tts_base_url`) on `/voice/speak` are the
+same: HAL builds a preview backend for that utterance and the running service
+keeps its saved provider, backend and voice. They require uncached speech (`400`
+with `cached`/`prerender`). This covers web **Test Voice** and MQTT `tts.preview`.
 
 `GET /api/device/config` returns effective `tts_speed`; `PUT /api/device/config`
 accepts `{"tts_speed":1.2}`. This optional field accepts `0.25–4.0`; omitting
