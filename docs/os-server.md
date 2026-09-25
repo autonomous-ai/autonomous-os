@@ -1561,3 +1561,7 @@ Structured `question.answer` commands are journaled separately from task inputs.
 Their completed/rejected receipts close only the answer command UI, without TTS.
 The explicit original task binding owns the later summary; receipt reconciliation
 uses the original answer key and never resends the command.
+
+### iMessage configuration updates
+
+For `PUT /api/device/config`, omitted or null `bluebubbles_server_url`, `bluebubbles_user_address`, and `bluebubbles_caller_context` preserve their saved values. An explicit empty string clears only that field. An omitted or empty `bluebubbles_password` preserves the saved secret. Changing unrelated settings must not reset the channel or its caller context.
