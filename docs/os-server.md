@@ -1561,3 +1561,8 @@ Structured `question.answer` commands are journaled separately from task inputs.
 Their completed/rejected receipts close only the answer command UI, without TTS.
 The explicit original task binding owns the later summary; receipt reconciliation
 uses the original answer key and never resends the command.
+
+
+### HAL startup timing
+
+HAL overlaps motion-driver imports with independent audio, camera, sensing and voice imports. It resolves the motion class only after those imports, before route availability checks and lifespan initialization, preserving required-driver failures. Startup logs `[startup] driver_imports_complete` (including `motion_wait_ms`), `lifespan_begin`, and `lifespan_ready` separate module-loading time from device initialization. Elapsed time starts inside `hal.server`, so it excludes interpreter/Uvicorn setup. Background vision warm-up can continue after lifespan readiness; this is not a guarantee that every subsystem or an intentionally muted microphone is ready.

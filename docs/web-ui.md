@@ -367,6 +367,8 @@ Monitor polls system/HW APIs every **3 seconds**. Flow uses file-backed hybrid m
 
 ### 5.1 Overview Section
 
+Returning to Overview immediately refreshes section data instead of waiting for the next 5-second poll. Existing card data stays visible while refreshing. The monitor retains successful OTA-version and emotion-preset snapshots across section unmounts, displays them immediately on return, and revalidates in the background. These snapshots are memory-only and expire when the monitor unmounts. Section changes abort the previous section poll; hidden sections do not keep their streams mounted.
+
 Cards included:
 
 **OpenClaw AI**
@@ -468,6 +470,8 @@ one column below 760px.
 - Revoking a pairing requires confirmation and calls `DELETE /api/buddy`.
 
 **Harness pairing**
+- The connection badge shows **CONNECTED** only for a successful live status read, **OFFLINE** for a saved pairing without a connection, and **STATUS UNAVAILABLE** when polling fails. Saved pairing is explained separately; it does not establish that the computer is online. Offline guidance explains that new requests cannot reach the computer and that offline alone does not require pairing again.
+
 - **Generate pairing code** calls admin-authenticated `POST /api/harness/pair` with no
   computer selection. The OS generates a six-character code valid for 60 seconds.
 - On the same local network, open Harness Desktop → Settings → Devices, select this

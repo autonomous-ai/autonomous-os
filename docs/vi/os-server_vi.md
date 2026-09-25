@@ -1527,3 +1527,8 @@ hạn triển khai.
 Command `question.answer` được lưu riêng với input task. Receipt completed/rejected
 chỉ đóng UI của command answer, không TTS. Liên kết task gốc tường minh giữ quyền
 nhận summary sau đó; đối chiếu receipt dùng key answer gốc, không gửi lại command.
+
+
+### HAL startup timing
+
+HAL nạp driver motion song song với các import độc lập của audio, camera, sensing và voice. Chỉ resolve lớp motion sau các import này, trước kiểm tra khả dụng route và khởi tạo lifespan, giữ nguyên cơ chế báo lỗi driver bắt buộc. Log `[startup] driver_imports_complete` (gồm `motion_wait_ms`), `lifespan_begin` và `lifespan_ready` tách thời gian nạp module khỏi khởi tạo thiết bị. Thời gian bắt đầu tính bên trong `hal.server`, chưa gồm interpreter/Uvicorn. Warm-up vision nền có thể tiếp tục sau khi lifespan sẵn sàng; mốc này không khẳng định mọi subsystem hoặc mic đang mute đã sẵn sàng.
