@@ -454,6 +454,8 @@ nối gọn và bố cục card hai cột, chuyển thành một cột khi nhỏ
 - Thu hồi ghép đôi yêu cầu xác nhận và gọi `DELETE /api/buddy`.
 
 **Ghép đôi Harness**
+- Nhãn kết nối chỉ hiển thị **CONNECTED** khi đọc được trạng thái kết nối sống, **OFFLINE** khi còn pairing nhưng không có kết nối, và **STATUS UNAVAILABLE** khi đọc trạng thái lỗi. Pairing đã lưu được giải thích riêng, không đồng nghĩa máy đang online. Hướng dẫn offline cho biết yêu cầu mới chưa thể tới máy và không cần ghép đôi lại chỉ vì offline.
+
 - **Generate pairing code** gọi `POST /api/harness/pair` có xác thực admin, không cần
   chọn máy tính. OS tạo mã sáu ký tự có hiệu lực 60 giây.
 - Trên cùng mạng nội bộ, mở Harness Desktop → Settings → Devices, chọn thiết bị
