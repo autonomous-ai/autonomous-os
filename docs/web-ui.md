@@ -152,7 +152,8 @@ autonomous proxy URL, a pairing that cannot work.
 **TTS key ownership.** The device stores exactly one TTS key (`ttsAPIKey`), and
 it always belongs to the provider currently selected in Voice. `Autonomous
 (proxy)` and `Custom (BYO URL)` store nothing and inherit the AI Brain key via
-`Config.GetTTSAPIKey()` (`system/server/config/config.go:605`); `Piper` needs no
+`Config.GetTTSAPIKey()` (`system/server/config/config.go:605`) — its vendor
+sub-picker offers OpenAI, ElevenLabs and Gemini; `Piper` needs no
 key at all; `OpenAI (direct)` and `ElevenLabs (direct)` **require their own** —
 the inherited Autonomous JWT is rejected with a 401 that HAL retries, abandons,
 and returns as zero samples, i.e. a mute device with no error in this UI.

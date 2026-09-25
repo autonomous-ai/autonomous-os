@@ -150,7 +150,8 @@ key openrouter đi kèm URL proxy autonomous, một cặp không thể chạy.
 **Quyền sở hữu key TTS.** Thiết bị chỉ lưu đúng một key TTS (`ttsAPIKey`), và nó
 luôn thuộc về provider đang được chọn trong Voice. `Autonomous (proxy)` và
 `Custom (BYO URL)` không lưu gì cả mà kế thừa key AI Brain qua
-`Config.GetTTSAPIKey()` (`system/server/config/config.go:605`); `Piper` không cần
+`Config.GetTTSAPIKey()` (`system/server/config/config.go:605`) — ô chọn vendor
+của nó có OpenAI, ElevenLabs và Gemini; `Piper` không cần
 key; `OpenAI (direct)` và `ElevenLabs (direct)` **bắt buộc phải có key riêng** —
 JWT Autonomous kế thừa sẽ bị từ chối bằng 401, HAL retry rồi bỏ cuộc và trả về 0
 sample, tức là thiết bị câm mà UI không báo lỗi gì. Bốn quy tắc giữ bất biến này:

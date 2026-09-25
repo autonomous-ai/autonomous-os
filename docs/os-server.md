@@ -503,6 +503,21 @@ live through `/voice/tts/config {speed}`. ElevenLabs HTTP v3 uses provider speed
 locally with pitch-preserving streaming. Other ElevenLabs models still clamp
 the outgoing value to `0.7–1.2`.
 
+### Gemini — TTS through the autonomous proxy
+
+`tts_provider: "gemini"` renders with a Gemini TTS model
+(`hal/drivers/voice/tts/gemini.py`). It reuses the proxy's Gemini REST relay —
+the same `…/ai/v1/google-search/v1beta` route the pipecat web search calls — as
+`<tts_base_url>/google-search/v1beta/models/<model>:streamGenerateContent?alt=sse`
+with the `x-goog-api-key` header, so no BFF change is needed. Default model
+`gemini-3.8-flash-tts` (override `HAL_TTS_GEMINI_MODEL`; the 3.8/3.1 TTS models
+stream 24 kHz PCM, 2.5 models return the whole clip in one event). Default voice
+`Kore`; an unknown voice (e.g. one saved under another provider) falls back to
+it. Voices are the 30 multilingual Gemini prebuilt voices, so the language
+filter does not apply. Gemini has no speed parameter: HAL applies the saved
+speed locally, like ElevenLabs HTTP v3. Bracket audio tags are stripped. In
+Settings → Voice it is the third vendor under `Autonomous (proxy)`.
+
 ### Piper — on-device TTS
 
 A third TTS provider alongside `openai` and `elevenlabs`, selected as
@@ -735,7 +750,7 @@ HAL (Python): FastAPI standard JSON responses.
 1. OS Server starts Gin on :5000
 2. Reads `config/config.json`
    - Seeds `device_type` from the resolved device class (`DEVICE_TYPE` env, else the existing key) so config.json carries it for readers that have no env — HAL's wake words and `software-update`. Provisioning only writes the env, so without this seed the key never exists on a provisioned device. Written once, when the stored value differs
-   - Seeds `tts_provider` + `tts_voice` from ROBOT.md `voice:` block when the user hasn't chosen them (persisted once; the user's saved choice always wins; provider absent/unknown → `openai`). When the seeded provider is `elevenlabs` and no voice is declared, picks a language-aware default (`vi`→Ngan, `zh`→Amy, else Rachel)
+   - Seeds `tts_provider` + `tts_voice` from ROBOT.md `voice:` block when the user hasn't chosen them (persisted once; the user's saved choice always wins; provider absent/unknown → `openai`). When the seeded provider is `elevenlabs` and no voice is declared, picks a language-aware default (`vi`→Ngan, `zh`→Amy, else Rachel); when it is `gemini`, `Kore`
 3. If `SetUpCompleted`:
    - Connect OpenClaw WebSocket
    - Connect MQTT
