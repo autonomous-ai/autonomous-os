@@ -129,6 +129,8 @@ prompt không bảo đảm transcript đúng hay chặn hết history bị hallu
 
 Gemini còn phân biệt từ xưng hô đứng riêng (ví dụ “anh”, “chị”, “em”) với lời gọi rõ hướng tới thiết bị. Khi không có yêu cầu, lời gọi rõ hoặc liên hệ với câu hỏi đang chờ, model phải reject im lặng thay vì tự nói “em nghe đây”, gọi emotion hay completion. Lệnh ngắn và câu trả lời theo ngữ cảnh vẫn hợp lệ, kể cả cùng từ đó khi trả lời câu hỏi của thiết bị. Routing reminder riêng Gemini nhắc lại quy tắc sau memory context. Đây là quy tắc prompt, không phải blacklist xác định hay bảo đảm model luôn tuân thủ.
 
+Quy tắc xưng hô còn cấm suy diễn một từ danh xưng thành yêu cầu sửa danh xưng/danh tính hoặc ghi nhớ sở thích chỉ vì câu trước của assistant hay một lần ngắt lời. Vẫn giữ lời sửa rõ ràng và câu trả lời cho câu hỏi xưng hô đang chờ. Thay đổi nhắm vào case “Chị” → xin lỗi/“em nhớ rồi”; kiểm tra prompt local không chứng minh model tuân thủ, vẫn cần đánh giá trong phiên thực tế.
+
 `robots/lamp/SOUL.md` áp dụng cùng điều kiện lời nói hướng đến thiết bị cho voice
 và `[ambient]` của main agent. Lời nghe lỏm hoặc chưa rõ đang nói với ai phải trả
 đúng `NO_REPLY`, không gọi tool hay phản ứng bằng cử động/cảm xúc. Quy tắc này
