@@ -1666,6 +1666,10 @@ class RealtimeOrchestrator:
             return False
         if self.parked and not allow_resume:
             return False
+        if self.rebuilding:
+            self._rebuild_done.wait(timeout=PREWARM_JOIN_TIMEOUT_S)
+            if self.turn_in_flight:
+                return False
         self._last_activity_monotonic = time.monotonic()
         self._prepare_session()
         agent = self._agent

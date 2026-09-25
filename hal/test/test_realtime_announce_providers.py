@@ -262,3 +262,17 @@ def test_a_finished_capture_reopens_the_announcement_gate(monkeypatch):
     assert orch.turn_in_flight and not orch.prepare_announcement(allow_resume=True)
     orch.finish_capture()
     assert not orch.turn_in_flight and orch.prepare_announcement(allow_resume=True)
+
+
+def test_announcement_waits_for_an_in_flight_rebuild(monkeypatch):
+    monkeypatch.setattr(config, "REALTIME_PROVIDER", "pipecat_v1")
+    orch = _orchestrator(_ScriptedAgent([]))
+    orch._rebuild_done = threading.Event()
+    orch._rebuild_lock.acquire()  # a noise-drop rebuild is connecting
+
+    def finish_rebuild():
+        orch._rebuild_lock.release()
+        orch._rebuild_done.set()
+
+    threading.Timer(0.2, finish_rebuild).start()
+    assert orch.prepare_announcement(allow_resume=True)
