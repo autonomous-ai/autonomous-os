@@ -1639,14 +1639,12 @@ type UpdateConfigRequest struct {
 
 	WhatsappUserID string `json:"whatsapp_user_id"`
 
-	// iMessage via BlueBubbles. UI writes the plain fields on every save (server
-	// URL + user address + caller context); the password ships only when the
-	// operator typed a new one — an empty POST value means "keep the on-disk
-	// password", matching the pattern used for the other channel secrets.
-	BluebubblesServerURL     string `json:"bluebubbles_server_url"`
-	BluebubblesPassword      string `json:"bluebubbles_password"`
-	BluebubblesUserAddress   string `json:"bluebubbles_user_address"`
-	BluebubblesCallerContext string `json:"bluebubbles_caller_context"`
+	// iMessage plain fields distinguish omitted (preserve) from empty (clear).
+	// The password retains the existing empty-means-preserve secret contract.
+	BluebubblesServerURL     *string `json:"bluebubbles_server_url"`
+	BluebubblesPassword      string  `json:"bluebubbles_password"`
+	BluebubblesUserAddress   *string `json:"bluebubbles_user_address"`
+	BluebubblesCallerContext *string `json:"bluebubbles_caller_context"`
 
 	LLMBaseURL         string `json:"llm_base_url"`
 	LLMAPIKey          string `json:"llm_api_key"`

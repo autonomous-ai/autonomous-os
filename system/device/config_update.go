@@ -457,18 +457,20 @@ func applyChannelPatch(c *config.Config, data domain.UpdateConfigRequest) {
 			c.WhatsappUserID = data.WhatsappUserID
 		}
 	case domain.ChannelIMessage:
-		// Plain fields (server URL + user address) apply on every save so
-		// operators can clear them by submitting an empty string. The
-		// password is secret and follows the same "empty = keep" pattern
-		// as the other channel bot tokens.
-		c.BluebubblesServerURL = data.BluebubblesServerURL
-		c.BluebubblesUserAddress = data.BluebubblesUserAddress
+		// Omitted plain fields preserve the saved channel; explicit empty
+		// strings clear individual fields without erasing unrelated settings.
+		if data.BluebubblesServerURL != nil {
+			c.BluebubblesServerURL = *data.BluebubblesServerURL
+		}
+		if data.BluebubblesUserAddress != nil {
+			c.BluebubblesUserAddress = *data.BluebubblesUserAddress
+		}
 		if data.BluebubblesPassword != "" {
 			c.BluebubblesPassword = data.BluebubblesPassword
 		}
-		// Caller-context prompt: plain field, applied on every save so
-		// operators can clear it by submitting an empty string.
-		c.BluebubblesCallerContext = data.BluebubblesCallerContext
+		if data.BluebubblesCallerContext != nil {
+			c.BluebubblesCallerContext = *data.BluebubblesCallerContext
+		}
 	default:
 		if data.TelegramBotToken != "" {
 			c.TelegramBotToken = data.TelegramBotToken

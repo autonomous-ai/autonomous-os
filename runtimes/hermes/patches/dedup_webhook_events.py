@@ -36,16 +36,19 @@ if MARKER in src:
 
 # Match the events list in the webhook registration payload.
 # Original: "events": ["new-message", "updated-message"],
-# Patched: "events": ["new-message"],  # _WEBHOOK_DEDUP_APPLIED
+# Use a standalone marker so inline closing braces remain executable.
 new_src, n = re.subn(
     r'("events":\s*)\[\s*"new-message"\s*,\s*"updated-message"\s*\]',
-    r'\1["new-message"]  # ' + MARKER,
+    r'\1["new-message"]',
     src,
     count=1,
 )
 if n != 1:
     print("ANCHOR_NOT_FOUND — events-list layout differs from expected", file=sys.stderr)
     sys.exit(3)
+
+new_src += '\n# ' + MARKER + '\n'
+compile(new_src, str(TARGET), 'exec')
 
 tmp = TARGET.with_suffix('.py.tmp3')
 tmp.write_text(new_src)

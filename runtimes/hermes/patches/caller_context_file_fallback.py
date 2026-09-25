@@ -55,6 +55,7 @@ if OLD not in src:
     print("OLD_INJECTION_NOT_FOUND", file=sys.stderr)
     sys.exit(3)
 
+compile(src.replace(OLD, NEW, 1), str(TARGET), "exec")
 TARGET.with_suffix(".py.bak.fallback").write_text(src)
 TARGET.write_text(src.replace(OLD, NEW, 1))
 print("PATCHED")

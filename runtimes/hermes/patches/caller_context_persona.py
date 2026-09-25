@@ -61,6 +61,7 @@ if MARKER not in run_src:
         print("RUN_PY_ANCHOR_NOT_FOUND", file=sys.stderr)
         sys.exit(3)
     new_run = run_src[:m.end()] + INJECTION + run_src[m.end():]
+    compile(new_run, str(RUN_PY), "exec")
     RUN_PY.with_suffix(".py.bak.persona").write_text(run_src)
     RUN_PY.write_text(new_run)
     print("RUN_PY_PATCHED")
@@ -81,6 +82,7 @@ if BLUEBUBBLES_PY.exists():
     )
     m = remove_re.search(bb_src)
     if m:
+        compile(remove_re.sub("\n", bb_src, count=1), str(BLUEBUBBLES_PY), "exec")
         BLUEBUBBLES_PY.with_suffix(".py.bak.caller_removed").write_text(bb_src)
         BLUEBUBBLES_PY.write_text(remove_re.sub('\n', bb_src, count=1))
         print("BLUEBUBBLES_TEXT_PREFIX_REMOVED")
@@ -91,6 +93,7 @@ if BLUEBUBBLES_PY.exists():
             re.MULTILINE,
         )
         if remove_old_re.search(bb_src):
+            compile(remove_old_re.sub("\n", bb_src, count=1), str(BLUEBUBBLES_PY), "exec")
             BLUEBUBBLES_PY.with_suffix(".py.bak.caller_removed").write_text(bb_src)
             BLUEBUBBLES_PY.write_text(remove_old_re.sub('\n', bb_src, count=1))
             print("BLUEBUBBLES_OLD_TEXT_PREFIX_REMOVED")

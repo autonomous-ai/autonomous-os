@@ -79,6 +79,7 @@ if ANCHOR not in src:
     sys.exit(3)
 
 new_src = src.replace(ANCHOR, ANCHOR + INSERTION, 1)
+compile(new_src, str(TARGET), "exec")
 TARGET.with_suffix(".py.bak.short_code").write_text(src)
 TARGET.write_text(new_src)
 print("PATCHED")

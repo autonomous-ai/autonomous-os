@@ -36,6 +36,7 @@ if not prefix_block_re.search(src):
 REPLACEMENT = f'        # {MARKER} — chat-guid prefix check removed. Rely on the `service`\n        # field check above; SMS traffic reliably carries service="SMS".\n'
 
 new_src = prefix_block_re.sub(REPLACEMENT, src, count=1)
+compile(new_src, str(TARGET), "exec")
 TARGET.with_suffix(".py.bak.relax").write_text(src)
 TARGET.write_text(new_src)
 print("RELAXED")

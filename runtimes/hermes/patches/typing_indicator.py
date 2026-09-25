@@ -3,6 +3,7 @@
 indicator that pulses to the sender's iPhone every 3s until the LLM reply
 lands. Isolated to bluebubbles.py so only iMessage is affected — Telegram /
 Slack / Discord plugins do not run this code path."""
+import ast
 import re
 import sys
 from pathlib import Path
@@ -73,10 +74,10 @@ if not inject_line_re.search(src):
 
 # Add helper functions at module top-of-code (after imports)
 lines = src.split('\n')
-insert_at = 0
-for i, line in enumerate(lines):
-    if line.startswith('import ') or line.startswith('from '):
-        insert_at = i + 1
+# AST end positions preserve parenthesized imports and future imports.
+imports = [node for node in ast.parse(src).body
+           if isinstance(node, (ast.Import, ast.ImportFrom))]
+insert_at = max((node.end_lineno for node in imports), default=0)
 new_lines = lines[:insert_at] + [HELPER] + lines[insert_at:]
 src2 = '\n'.join(new_lines)
 
@@ -100,6 +101,7 @@ src2 = re.sub(
 )
 
 # Atomic write.
+compile(src2, str(TARGET), "exec")
 tmp = TARGET.with_suffix('.py.tmp2')
 tmp.write_text(src2)
 tmp.replace(TARGET)

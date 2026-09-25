@@ -9,6 +9,7 @@ and are not touched.
 
 Idempotent: reruns of this script no-op once the marker `_STRIP_HERMES_MARKERS_APPLIED`
 is present."""
+import ast
 import re
 import sys
 from pathlib import Path
@@ -92,11 +93,11 @@ if not send_line_re.search(src):
 # ---- 3. insert strip helper at module top-of-code (after imports) --------
 # Find last `import` line, insert helper after that block.
 lines = src.split('\n')
-insert_at = 0
-for i, line in enumerate(lines):
-    if line.startswith('import ') or line.startswith('from '):
-        insert_at = i + 1
-if insert_at == 0:
+# AST end positions preserve parenthesized imports and future imports.
+imports = [node for node in ast.parse(src).body
+           if isinstance(node, (ast.Import, ast.ImportFrom))]
+insert_at = max((node.end_lineno for node in imports), default=0)
+if not insert_at:
     print("NO_IMPORTS_FOUND", file=sys.stderr)
     sys.exit(4)
 new_lines = lines[:insert_at] + [STRIP_FUNC] + lines[insert_at:]
@@ -117,6 +118,7 @@ if patched == src2:
     sys.exit(5)
 
 # ---- 5. atomic write ----------------------------------------------------
+compile(patched, str(TARGET), "exec")
 tmp = TARGET.with_suffix('.py.tmp')
 tmp.write_text(patched)
 tmp.replace(TARGET)

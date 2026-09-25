@@ -280,8 +280,8 @@ export function ChannelSection({
             placeholder="+84901234567 or you@example.com"
           />
           <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 12, lineHeight: 1.5 }}>
-            The phone number or email your iMessage is signed in as. BlueBubbles
-            will only accept messages from this address.
+            Your phone number or email for the operator's home conversation.
+            Customer messages from other addresses are accepted by default.
           </div>
           {/* The amber "Testing from your OWN iPhone?" workaround card used to
               live here — removed. In practice the two-settings-must-disagree
