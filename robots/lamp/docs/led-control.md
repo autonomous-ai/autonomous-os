@@ -103,6 +103,8 @@ Deactivate: `POST /scene/off` — clears active scene, restores idle LED, re-ena
 
 The active scene **survives HAL service restarts** (OTA, deploy, crash): it is persisted to a boot-scoped sidecar (`/tmp/hal-scene-state.json`, keyed to the kernel `boot_id`) and re-activated automatically when HAL comes back up, so the agent's belief ("focus mode is on") stays in sync. A full device reboot intentionally starts scene-less. Transient LED calls (`/led/solid`, `/led/off`, `/led/effect` with `"transient": true`, e.g. the boot breathing effect) overlay the strip without exiting the active scene; only non-transient LED overrides clear it.
 
+When HAL restarts while sleeping, scene restoration retains only the active scene identity; it does not reapply LED, servo, camera, mic, or speaker settings. Sleep keeps ownership of the hardware and its mute flags. The saved user LED state is loaded separately; a subsequent normal wake clears the retained scene through the existing scene-off path.
+
 | Scene | Bright | Color (K) | Servo | Camera | Mic | Speaker |
 |-------|--------|-----------|-------|--------|-----|---------|
 | `reading` | 80% | 4000K warm white | desk + hold | off | on | off |

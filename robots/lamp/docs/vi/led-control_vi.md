@@ -103,6 +103,8 @@ Tắt scene: `POST /scene/off` — xoá scene đang active, khôi phục LED idl
 
 Scene đang active **sống sót qua các lần restart HAL service** (OTA, deploy, crash): trạng thái được persist vào sidecar theo phiên boot (`/tmp/hal-scene-state.json`, gắn với `boot_id` của kernel) và tự động kích hoạt lại khi HAL chạy trở lại, nên niềm tin của agent ("focus mode đang bật") luôn đồng bộ. Reboot toàn bộ thiết bị thì chủ đích khởi động không có scene. Các lệnh LED transient (`/led/solid`, `/led/off`, `/led/effect` với `"transient": true`, vd hiệu ứng breathing lúc boot) chỉ overlay lên strip mà không thoát scene đang active; chỉ LED override non-transient mới xoá scene.
 
+Khi HAL restart trong lúc đang ngủ, restore scene chỉ giữ tên scene active, không áp dụng lại LED, servo, camera, mic hoặc loa. Sleep tiếp tục giữ quyền điều khiển phần cứng và các cờ mute. User LED state được load riêng; khi thức dậy bình thường, flow scene-off hiện có sẽ xoá scene đã giữ lại.
+
 | Scene | Sáng | Màu (K) | Servo | Camera | Mic | Speaker |
 |-------|------|---------|-------|--------|-----|---------|
 | `reading` | 80% | 4000K trắng ấm | desk + hold | off | off | off |
