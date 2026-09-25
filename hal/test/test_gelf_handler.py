@@ -31,10 +31,15 @@ class _FakeSession:
     def post(self, url, json=None, timeout=None):
         self.posts.append((url, json))
 
+    def mount(self, prefix, adapter):
+        pass
+
 
 def _use_fake_requests(monkeypatch):
     _FakeSession.instances = []
-    monkeypatch.setitem(sys.modules, "requests", types.SimpleNamespace(Session=_FakeSession))
+    monkeypatch.setitem(sys.modules, "requests", types.SimpleNamespace(
+        Session=_FakeSession, adapters=types.SimpleNamespace(HTTPAdapter=lambda **kwargs: kwargs),
+    ))
 
 
 def test_gelf_url_env_ships_direct_with_basic_auth():
