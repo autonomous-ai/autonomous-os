@@ -79,6 +79,10 @@ def _pump(monkeypatch, kpi, batches, *, native=False, stop_delay_ms=0, harness_v
             kpi.clock.advance(stop_delay_ms)
             voice_metrics.playback_end()
 
+        def stop_realtime_reply(self, *, turn_id=""):
+            # Fake playback is instantaneous; no queued audio to cancel here.
+            pass
+
         def native_play_begin(self, rate, owner=""):
             self.owner = owner
             spoken.append(("native", owner))

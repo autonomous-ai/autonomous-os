@@ -18,22 +18,6 @@ to DEFAULT_LANG at lookup time, so a partial translation is safe.
 from hal.presets import DEFAULT_LANG, LANG_EN, LANG_VI, LANG_ZH_CN, LANG_ZH_TW
 
 
-# Matching templates, deliberately separate from spoken PHRASES_BY_LANG so
-# startup TTS prerendering never synthesizes the errors we intend to suppress.
-# Include only observed provider wording; do not invent translated variants.
-PROVIDER_ERROR_PHRASES_BY_LANG = {
-    LANG_EN: (
-        "I'm sorry, there was a system error.",
-    ),
-    LANG_VI: (
-        "Rất tiếc, đã có lỗi hệ thống xảy ra.",
-        "Rất tiếc, đã xảy ra lỗi hệ thống.",
-        "Rất tiếc, đã xảy ra lỗi hệ thống, vui lòng thử lại sau nhé.",
-        "Rất tiếc, đã xảy ra lỗi hệ thống trong quá trình xử lý yêu cầu của bạn.",
-    ),
-}
-
-
 def localized_phrase(key: str, lang: str | None = None) -> str:
     """Return PHRASES_BY_LANG[key] for the device's stt_language, falling back to
     DEFAULT_LANG (then ""). Pass `lang` to override the config.json lookup.

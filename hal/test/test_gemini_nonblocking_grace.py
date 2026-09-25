@@ -1286,13 +1286,17 @@ def test_receiver_invalidates_cancelled_look_image(interrupt):
     assert agent.requires_fresh_session
 
 
+@pytest.mark.parametrize('prior_speech', ['', 'Rất tiếc, đã xảy ra một lỗi hệ thống.', 'Arbitrary model reply.'])
 @pytest.mark.parametrize('fresh_kind', ['transcript', 'activity_start'])
 @pytest.mark.parametrize('orphan_text', ['Unrelated acknowledgement.', 'Một câu bất kỳ.', '通知'])
-def test_live_reject_barrier_survives_ack_and_receive_restart(monkeypatch, orphan_text, fresh_kind):
+def test_live_reject_barrier_survives_ack_and_receive_restart(monkeypatch, orphan_text, fresh_kind, prior_speech):
     from hal.realtime.models import FunctionCallResultInput, InterruptedOutput
     monkeypatch.setattr(gemini_live.app_config, 'LIVE_MODE', True)
-    agent = _agent([_tool('reject_turn'), _terminal()])
+    agent = _agent([*([_speech(prior_speech)] if prior_speech else []),
+                    _tool('reject_turn'), _terminal()])
     first = _receive(agent)
+    assert all(not event.execution_completed and not event.fallback_to_main
+               for event in first if isinstance(event, TurnDoneEvent))
     assert [call.name for call in _calls(first)] == ['reject_turn']
     assert agent._reject_followup_barrier
     asyncio.run(agent._async_send_input(FunctionCallResultInput(
@@ -1391,3 +1395,105 @@ def test_live_reject_barrier_keeps_transport_controls(monkeypatch):
     agent._session.messages.put_nowait(goodbye)
     with pytest.raises(ConnectionClosed):
         _receive(agent)
+
+
+@pytest.mark.parametrize('routing', ['reject_turn', 'delegate_to_main'])
+@pytest.mark.parametrize('text', ['Rất tiếc, đã xảy ra một lỗi hệ thống.', 'Any model-generated text.'])
+def test_live_empty_terminal_then_progress_holds_speech_until_routing(monkeypatch, routing, text):
+    monkeypatch.setattr(gemini_live.app_config, 'LIVE_MODE', True)
+    agent = _agent([_terminal(generation=True), _status('IN_PROGRESS'),
+                    _speech(text), _tool(routing)])
+    events = _receive(agent)
+    assert [call.name for call in _calls(events)] == [routing]
+    assert not any(isinstance(event, OutputEvent) and isinstance(
+        event.output, (TextOutput, AudioOutput)) for event in events)
+    if routing == 'reject_turn':
+        assert all(not event.execution_completed for event in events
+                   if isinstance(event, TurnDoneEvent))
+
+
+def test_live_empty_terminal_valid_answer_releases_only_at_idle(monkeypatch):
+    monkeypatch.setattr(gemini_live.app_config, 'LIVE_MODE', True)
+    agent = _agent([_terminal(generation=True), _status('IN_PROGRESS'), _speech('Valid answer.')])
+
+    async def scenario():
+        task = asyncio.create_task(agent._async_receive_turn())
+        # Wait for all three frames to be consumed, then observe the actual queue.
+        while agent._session.reads < 4:
+            await asyncio.sleep(0)
+        assert agent._recv_queue.empty()
+        agent._session.messages.put_nowait(_status('IDLE'))
+        await asyncio.wait_for(task, 0.5)
+
+    asyncio.run(asyncio.wait_for(scenario(), 1.0))
+    events = list(agent._recv_queue.queue)
+    assert [e.output.text for e in events if isinstance(e, OutputEvent)
+            and isinstance(e.output, TextOutput)] == ['Valid answer.']
+    assert all(e.execution_completed and not e.fallback_to_main for e in events
+               if isinstance(e, TurnDoneEvent))
+
+
+def test_live_initial_answer_still_streams_before_idle(monkeypatch):
+    monkeypatch.setattr(gemini_live.app_config, 'LIVE_MODE', True)
+    agent = _agent([_status('IN_PROGRESS'), _speech('Initial answer.')])
+
+    async def scenario():
+        task = asyncio.create_task(agent._async_receive_turn())
+        while agent._session.reads < 3:
+            await asyncio.sleep(0)
+        assert any(isinstance(e, OutputEvent) and isinstance(e.output, TextOutput)
+                   for e in agent._recv_queue.queue)
+        agent._session.messages.put_nowait(_status('IDLE'))
+        await asyncio.wait_for(task, 0.5)
+
+    asyncio.run(asyncio.wait_for(scenario(), 1.0))
+
+
+@pytest.mark.parametrize('ending', ['interrupt', 'overflow'])
+def test_live_empty_terminal_does_not_release_cancelled_or_overflowed_speech(monkeypatch, ending):
+    monkeypatch.setattr(gemini_live.app_config, 'LIVE_MODE', True)
+    text = 'x' * 16_001 if ending == 'overflow' else 'Unfinished answer.'
+    end = _status('IDLE')
+    if ending == 'interrupt':
+        end.server_content.interrupted = True
+    agent = _agent([_terminal(generation=True), _status('IN_PROGRESS'), _speech(text), end])
+    events = _receive(agent)
+    assert not any(isinstance(e, OutputEvent) and isinstance(e.output, (TextOutput, AudioOutput))
+                   for e in events)
+    assert all(not e.execution_completed for e in events if isinstance(e, TurnDoneEvent))
+
+
+@pytest.mark.parametrize('empty_terminal', [False, True])
+@pytest.mark.parametrize('terminal', ['none', 'turn', 'generation'])
+def test_live_same_frame_reject_never_publishes_speech(monkeypatch, empty_terminal, terminal):
+    from hal.realtime.models import FunctionCallResultInput
+
+    monkeypatch.setattr(gemini_live.app_config, 'LIVE_MODE', True)
+    rejected = _speech('Arbitrary rejected speech.')
+    rejected.server_content.model_turn = SimpleNamespace(parts=[
+        SimpleNamespace(inline_data=SimpleNamespace(data=b'\x00\x01' * 160))])
+    rejected.tool_call = _tool('reject_turn').tool_call
+    rejected.server_content.turn_complete = terminal == 'turn'
+    rejected.server_content.generation_complete = terminal == 'generation'
+    prefix = [_terminal(generation=True), _status('IN_PROGRESS')] if empty_terminal else []
+    suffix = [_terminal()] if terminal == 'none' and not empty_terminal else []
+    agent = _agent([*prefix, rejected, *suffix])
+    events = _receive(agent)
+    assert [c.name for c in _calls(events)] == ['reject_turn']
+    assert not any(isinstance(e, OutputEvent) and isinstance(e.output, (TextOutput, AudioOutput))
+                   for e in events)
+    assert all(not e.execution_completed and not e.fallback_to_main for e in events
+               if isinstance(e, TurnDoneEvent))
+    asyncio.run(agent._async_send_input(FunctionCallResultInput(
+        call_id='c1', output='{"result":"turn dropped"}')))
+    fresh = _speech('')
+    fresh.server_content.input_transcription = SimpleNamespace(text='New request.', finished=True)
+    agent._session.messages.put_nowait(fresh)
+    agent._session.messages.put_nowait(_status('IN_PROGRESS'))
+    agent._session.messages.put_nowait(_speech('Only the new answer.'))
+    agent._session.messages.put_nowait(_status('IDLE'))
+    next_events = _receive(agent)
+    assert [e.output.text for e in next_events if isinstance(e, OutputEvent)
+            and isinstance(e.output, TextOutput)] == ['Only the new answer.']
+    assert all(e.output.user_turn_id != 'user-1' for e in next_events
+               if isinstance(e, OutputEvent) and isinstance(e.output, TextOutput))
