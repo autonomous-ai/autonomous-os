@@ -18,7 +18,6 @@ from hal import app_state as hal_app_state
 from hal import config as hal_config
 from hal import presets
 from hal.clock import device_now
-from hal.i18n import PROVIDER_ERROR_PHRASES_BY_LANG
 from hal.realtime.config import gemini_needs_idle_workaround
 from hal.realtime.voice_agent.base import AudioTurnSessionChanged
 from hal.realtime.models import AudioOutput as RTAudioOutput
@@ -40,36 +39,6 @@ CLAUSE_ENDS = (",", ";", ":", "—", "，", "；", "：", "、")
 # is 9 characters and is exactly the greeting worth getting out early, while
 # every grunt this must reject is 5 or fewer.
 FIRST_CHUNK_MIN_CHARS = 8
-
-
-# Suppress only known provider apologies, not arbitrary mentions of errors.
-_SYSTEM_ERROR_TEXTS = tuple(
-    " ".join(phrase.lower().replace("’", "'").split()).rstrip(".!?")
-    for phrases in PROVIDER_ERROR_PHRASES_BY_LANG.values()
-    for phrase in phrases
-)
-_SYSTEM_ERROR_SENTENCE = re.compile(
-    r"(?<!\S)(?:" + "|".join(
-        re.escape(template).replace(r"\ ", r"\s+").replace("'", "['’]")
-        for template in _SYSTEM_ERROR_TEXTS
-    ) + r")(?:[.!?]+|$)", re.IGNORECASE,
-)
-
-
-def _filter_system_error_tts(text: str, *, log: bool = True) -> str:
-    def suppress(match):
-        if log:
-            logger.info("[realtime] Provider error suppressed from TTS: %r", match.group(0))
-        return ""
-
-    return _SYSTEM_ERROR_SENTENCE.sub(suppress, text).strip()
-
-
-def _pending_system_error_tts(text: str) -> bool:
-    # Hold a matching prefix before clause splitting can speak the apology.
-    normalized = " ".join(text.lower().replace("’", "'").split())
-    return bool(normalized) and any(template.startswith(normalized)
-                                    for template in _SYSTEM_ERROR_TEXTS)
 
 
 def split_first_chunk(buf: str) -> tuple[str, str]:
@@ -789,12 +758,6 @@ def run_realtime_turn(
                         if foreign_suppressed:
                             sentence_buf = ""
                             continue
-                        visible_text = strip_markers(sentence_buf)
-                        if _pending_system_error_tts(visible_text):
-                            continue
-                        filtered_text = _filter_system_error_tts(visible_text)
-                        if filtered_text != visible_text.strip():
-                            sentence_buf = filtered_text
                         # Nothing spoken yet: cut the opening at a clause
                         # boundary rather than making the user wait out a whole
                         # sentence. Only ever once per turn (see split_first_chunk).
@@ -897,9 +860,7 @@ def run_realtime_turn(
             # turn from the top): this is what gets forwarded as [REPLY], saved to
             # realtime memory, and shown in web chat — a leak here re-enters the
             # model's context next turn and self-reinforces.
-            transcript = _filter_system_error_tts(
-                clean_transcript(strip_markers("".join(text_parts)), reply_lang), log=False,
-            ) if not native else clean_transcript(strip_markers("".join(text_parts)), reply_lang)
+            transcript = clean_transcript(strip_markers("".join(text_parts)), reply_lang)
 
             # Native playback owns the speaker for the whole turn — release it
             # once all frames are in (records transcript for STT echo cancel).
@@ -942,9 +903,7 @@ def run_realtime_turn(
             else:
                 # Flush any remaining text that didn't end with a sentence boundary
                 # (ElevenLabs path only — native mode never fills sentence_buf).
-                remaining: str = _filter_system_error_tts(
-                    leak_filter.filter_text(strip_markers(sentence_buf)),
-                )
+                remaining: str = leak_filter.filter_text(strip_markers(sentence_buf))
                 if not native and remaining and tts is not None:
                     if not first_sentence_sent:
                         logger.info(

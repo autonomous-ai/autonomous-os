@@ -1293,6 +1293,7 @@ class RealtimeOrchestrator:
 
         self._looked_this_turn = False  # reset the per-turn `look` image-send guard
         produced = False  # did this turn yield any real output (vs stay silent)?
+        rejected = False
         replay_pending = False  # look-replay signalled — the turn continues
         receive_kwargs: dict[str, Any] = {"stop_on_done": True}
         if stop_event is not None:
@@ -1404,10 +1405,10 @@ class RealtimeOrchestrator:
                 isinstance(output, FunctionCallOutput)
                 and output.name == REJECT_TURN_TOOL_NAME
             ):
-                # A rejection is only safe before any user-visible output. The
-                # prompt requires this tool to be the whole turn; this guard
-                # prevents a malformed late call from hiding a real response.
-                if produced:
+                # LIVE output can be queued before the routing tool arrives.
+                # Honor explicit rejection so the consumer can cancel that turn
+                # before playback. Preserve the manual-turn late-call policy.
+                if produced and not config.LIVE_MODE:
                     logger.warning(
                         "[realtime] Ignoring reject_turn after output already began"
                     )
@@ -1423,6 +1424,7 @@ class RealtimeOrchestrator:
                     # second response after the model has already spoken.
                     self._agent.end_turn()
                     break
+                rejected = True
                 logger.info("[realtime] Model explicitly rejected this turn")
                 # Acknowledge like delegation so Gemini does not leave a pending
                 # tool call that poisons the next manual-VAD activity.
@@ -1509,6 +1511,7 @@ class RealtimeOrchestrator:
         self.execution_completed = (
             getattr(execution_agent, "execution_completed", False) is True
             and not replay_pending
+            and not rejected
         )
         self.execution_turn_id = getattr(execution_agent, "execution_turn_id", "")
 

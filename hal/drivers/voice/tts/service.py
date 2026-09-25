@@ -829,23 +829,27 @@ class TTSService:
         if cleared:
             logger.info("TTS stop cleared %d pending queued speech item(s)", cleared)
 
-    def stop_realtime_reply(self) -> None:
+    def stop_realtime_reply(self, *, turn_id: str = "") -> None:
         """Cancel LIVE speech even between segments, preserving main speech.
 
         An interruption can arrive after Gemini finished generating while
         external TTS is still queued. Queue cleanup must not depend on the
         provider's current turn or on whether the speaker is active right now.
+        A supplied interaction ID limits rejection to that turn, preserving
+        newer realtime speech as well as main-agent speech.
         """
         with self._pending_queue_lock:
             before = len(self._pending_queue)
             retained = []
             for item in self._pending_queue:
-                if item.realtime_reply:
+                if item.realtime_reply and (not turn_id or item.owner == "run:" + turn_id):
                     item.cancelled.set()
                 else:
                     retained.append(item)
             self._pending_queue[:] = retained
-            active_realtime = self.realtime_speaking
+            active_realtime = self.realtime_speaking and (
+                not turn_id or self._playback_owner in {"run:" + turn_id, "interaction:" + turn_id}
+            )
             if active_realtime:
                 self._synthesis_generation = getattr(self, "_synthesis_generation", 0) + 1
                 active = getattr(self, '_active_pending_speech', None)

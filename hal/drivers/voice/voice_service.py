@@ -46,8 +46,6 @@ from hal.drivers.voice._internal.audio_dsp import resample_to_stt, rms
 from hal.drivers.voice._internal.audio_recorder import ArecordStream
 from hal.drivers.voice._internal.realtime_turn import (
     _WaitFiller,
-    _filter_system_error_tts,
-    _pending_system_error_tts,
     ROUTE_DELEGATED,
     ROUTE_NOISE_DROPPED,
     split_first_chunk,
@@ -1455,10 +1453,10 @@ class VoiceService:
             return live_replies.play(key, enqueue)
         metrics = LiveVoiceMetrics()
         # Apply the same suppression before OS/Main history sync as before TTS.
-        # Clean the assembled reply so templates split across events still match.
+        # Clean assembled markers; rejected turns are discarded by identity.
         history = LiveHistory(
             self._sensing_sender, harness_voice,
-            lambda text: _filter_system_error_tts(self.strip_rt_markers(text), log=False),
+            self.strip_rt_markers,
         )
 
         def bind_opener(key):
@@ -1476,6 +1474,8 @@ class VoiceService:
             hold_live_focus(key)
 
         def complete_metrics(key, completed):
+            if key in rejected_inputs:
+                return
             # A silent opener is forwarded to main, which owns its execution
             # result. Hold its terminal until its own reply has reached TTS.
             if opener is not None and key and key == opener["key"]:
@@ -1485,7 +1485,7 @@ class VoiceService:
                     return
             metrics.complete(key, completed)
 
-        deferred_error_tail = None
+        deferred_marker_tail = None
         fallback_sequence = 0
         while self._live_running and generation == self._live_generation:
             fallback_sequence += 1
@@ -1505,10 +1505,13 @@ class VoiceService:
                 for out in self._realtime.stream_output(**output_options):
                     if not (self._live_running and generation == self._live_generation):
                         break
-                    if (deferred_error_tail is not None
+                    if (isinstance(out, (RTAudioOutput, RTTextOutput, ExecutionOutput))
+                            and out.user_turn_id and out.user_turn_id in rejected_inputs):
+                        continue
+                    if (deferred_marker_tail is not None
                             and isinstance(out, (RejectSignal, DelegateSignal, RTInterruptedOutput))
-                            and (not out.user_turn_id or out.user_turn_id == deferred_error_tail[0])):
-                        deferred_error_tail = None
+                            and (not out.user_turn_id or out.user_turn_id == deferred_marker_tail[0])):
+                        deferred_marker_tail = None
                     if live_replies is not None:
                         if sentence_buf and not live_replies.allowed(buffer_reply_key):
                             sentence_buf = ""
@@ -1580,6 +1583,17 @@ class VoiceService:
                         if opener is not None:
                             opener["consumed"] = True
                         rejected_inputs.add(out.user_turn_id)
+                        iid = metrics.interaction(out.user_turn_id)
+                        if iid and self._tts is not None:
+                            self._tts.stop_realtime_reply(turn_id=iid)
+                        if out.user_turn_id and buffer_reply_key == out.user_turn_id:
+                            sentence_buf = ""
+                            first_sent = False
+                        if iid and native_started and native_owner == "interaction:" + iid:
+                            self._tts.native_play_end("")
+                            native_started = False
+                        logger.info("[live] rejected output cancelled turn=%s interaction=%s",
+                                    out.user_turn_id, iid)
                         if focus is not None:
                             focus.finish(metrics.interaction(out.user_turn_id), cancelled=True)
                         if cues is not None:
@@ -1722,14 +1736,14 @@ class VoiceService:
                             transcript += out.transcript
                         continue
                     if isinstance(out, RTTextOutput):
-                        if deferred_error_tail is not None:
-                            owner, prefix = deferred_error_tail
+                        if deferred_marker_tail is not None:
+                            owner, prefix = deferred_marker_tail
                             if out.user_turn_id == owner:
                                 sentence_buf = prefix + sentence_buf
                                 buffer_reply_key = owner
                                 speech_iid = metrics.interaction(owner)
                             # Never attach a held fragment to a different turn.
-                            deferred_error_tail = None
+                            deferred_marker_tail = None
                         if out.user_turn_id:
                             response_inputs.add(out.user_turn_id)
                         if not transcript and out.text:
@@ -1756,12 +1770,7 @@ class VoiceService:
                         iid = speech_iid
                         sentence_buf += out.text
                         visible = self.strip_rt_markers(sentence_buf)
-                        if _pending_system_error_tts(visible):
-                            continue
-                        filtered = _filter_system_error_tts(visible)
-                        if filtered != visible.strip():
-                            sentence_buf = filtered
-                        if not filtered:
+                        if not visible:
                             continue
                         if not first_sent:
                             head, rest = split_first_chunk(sentence_buf)
@@ -1824,16 +1833,15 @@ class VoiceService:
                         and self._live_running and generation == self._live_generation
                         and not (stop_event is not None and stop_event.is_set())):
                     visible_tail = self.strip_rt_markers(sentence_buf)
-                    if ((_pending_system_error_tts(visible_tail)
-                         or self._pending_rt_silence_marker(sentence_buf))
+                    if (self._pending_rt_silence_marker(sentence_buf)
                             and not getattr(self._realtime, "execution_completed", False)):
                         # Receive timeout is not a provider terminal. Preserve
                         # only attributed candidates until the next fragment.
                         if isinstance(buffer_reply_key, str) and buffer_reply_key:
-                            deferred_error_tail = (buffer_reply_key, sentence_buf)
+                            deferred_marker_tail = (buffer_reply_key, sentence_buf)
                         tail = ""
                     else:
-                        tail = _filter_system_error_tts(visible_tail)
+                        tail = visible_tail
                     if tail:
                         if cues is not None:
                             cues.finish(getattr(self._realtime, "execution_turn_id", ""))
