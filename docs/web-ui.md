@@ -132,8 +132,7 @@ Defined at `.lm-root` in `index.css`:
 ### 3.4 Settings (`/setting`) — shared shell
 
 **Speech speed** in Voice (`/setting#tts`) loads effective `tts_speed` and
-shows the selectable range (`0.7–1.5×` for ElevenLabs, `0.25–4.0×` otherwise)
-in `0.05` steps. **Save Changes** persists speed through
+shows the selectable range (`0.5–2.0×` for every provider) in `0.05` steps. **Save Changes** persists speed through
 `PUT /api/device/config`. **Test Voice** sends the current slider speed immediately
 without saving; the override applies only to the preview utterance. Saved speed takes
 precedence over `HAL_TTS_SPEED` (default `1.2`); ElevenLabs HTTP v3 applies speed locally while requesting provider speed
