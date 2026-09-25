@@ -226,6 +226,7 @@ type AgentHandler struct {
 // (which serves TTS flush) so the two paths can't interfere.
 type runStreamStats struct {
 	assistantFirstSeen bool
+	assistantFirstAt   time.Time
 	assistantChunks    int
 	assistantChars     int
 	assistantText      strings.Builder

@@ -36,9 +36,8 @@ from hal.realtime.config import (
     gemini_needs_idle_workaround,
 )
 from hal.realtime.context_manager import (
-    ClaudeCodeContextManager,
+    CONTEXT_MANAGERS,
     ContextManagerBase,
-    HermesContextManager,
     OpenClawContextManager,
 )
 from hal.realtime.enums import AgentGateway
@@ -106,8 +105,12 @@ DELEGATE_TOOL_DESCRIPTION: str = (
     "Digital work also requires main even without naming Harness or an agent: "
     "building or editing software, models or CAD parts, engineering simulations, "
     "media or music creation, slides, spreadsheets and data analysis. When DEVICE "
-    "IDENTITY identifies Lamp, main defaults to harness-use for digital work and "
-    "selects an available suitable agent. Do not choose agents, invent Store "
+    "IDENTITY identifies Lamp, main prefers connected Harness for digital work. "
+    "For fresh tasks before dispatch with confirmed offline/unpaired Harness, main "
+    "uses its other available tools unless Harness or a remote target was explicitly "
+    "required. Existing remote tasks and uncertain delivery keep their recovery "
+    "rules; do not duplicate them. Always delegate digital work to main even when "
+    "Harness is unavailable; main decides fallback. Do not choose agents, invent Store "
     "operations or claim app readiness yourself. Music playback and physical "
     "device actions keep their existing skill routes; general knowledge questions "
     "remain direct answers. "
@@ -376,22 +379,7 @@ class RealtimeOrchestrator:
     flow (device → OpenClaw).
     """
 
-    # PicoClaw, Codex and OpenCode reuse OpenClawContextManager: their workspaces
-    # are verbatim copies of OpenClaw's layout (SOUL.md / IDENTITY.md / MEMORY.md /
-    # memory/ / skills/), only the root dir differs. (Like Codex, OpenCode keeps
-    # its skills in a non-workspace dir — ~/.config/opencode/skills — so the
-    # workspace-relative skills catalog is empty here; identity + memory load
-    # correctly.) Claude Code matches that layout except skills, which live in
-    # .claude/skills (native claude CLI convention) — its subclass only changes
-    # the skills path.
-    CONTEXT_MANAGERS: dict[str, type[ContextManagerBase]] = {
-        AgentGateway.OPENCLAW: OpenClawContextManager,
-        AgentGateway.HERMES: HermesContextManager,
-        AgentGateway.PICOCLAW: OpenClawContextManager,
-        AgentGateway.CODEX: OpenClawContextManager,
-        AgentGateway.CLAUDECODE: ClaudeCodeContextManager,
-        AgentGateway.OPENCODE: OpenClawContextManager,
-    }
+    CONTEXT_MANAGERS = CONTEXT_MANAGERS
 
     WORKSPACE_DIRS: dict[str, str] = {
         AgentGateway.OPENCLAW: config.OPENCLAW_WORKSPACE_DIR,
@@ -1293,6 +1281,7 @@ class RealtimeOrchestrator:
 
         self._looked_this_turn = False  # reset the per-turn `look` image-send guard
         produced = False  # did this turn yield any real output (vs stay silent)?
+        rejected = False
         replay_pending = False  # look-replay signalled — the turn continues
         receive_kwargs: dict[str, Any] = {"stop_on_done": True}
         if stop_event is not None:
@@ -1404,10 +1393,10 @@ class RealtimeOrchestrator:
                 isinstance(output, FunctionCallOutput)
                 and output.name == REJECT_TURN_TOOL_NAME
             ):
-                # A rejection is only safe before any user-visible output. The
-                # prompt requires this tool to be the whole turn; this guard
-                # prevents a malformed late call from hiding a real response.
-                if produced:
+                # LIVE output can be queued before the routing tool arrives.
+                # Honor explicit rejection so the consumer can cancel that turn
+                # before playback. Preserve the manual-turn late-call policy.
+                if produced and not config.LIVE_MODE:
                     logger.warning(
                         "[realtime] Ignoring reject_turn after output already began"
                     )
@@ -1423,6 +1412,7 @@ class RealtimeOrchestrator:
                     # second response after the model has already spoken.
                     self._agent.end_turn()
                     break
+                rejected = True
                 logger.info("[realtime] Model explicitly rejected this turn")
                 # Acknowledge like delegation so Gemini does not leave a pending
                 # tool call that poisons the next manual-VAD activity.
@@ -1509,6 +1499,7 @@ class RealtimeOrchestrator:
         self.execution_completed = (
             getattr(execution_agent, "execution_completed", False) is True
             and not replay_pending
+            and not rejected
         )
         self.execution_turn_id = getattr(execution_agent, "execution_turn_id", "")
 

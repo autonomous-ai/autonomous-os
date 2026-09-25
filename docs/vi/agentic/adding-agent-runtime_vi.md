@@ -285,8 +285,13 @@ trong doc backend (vd `docs/agentic/hermes.md`), không phải đảm bảo chun
   thường là no-op — không churn). Xem §3.
 - **Skill watcher** (auto-update từ CDN, gate theo capability): plumbing generic
   fetch/extract/hash share ở `system/skills/skillzip.go`
-  (`FetchSkillVersions`/`DownloadToTempFile`/`FolderHash`/`ExtractSkillZip`). Thêm
-  `runtimes/<name>/skill_watcher.go` mỏng song song với
+  (`FetchSkillVersions`/`DownloadToTempFile`/`FolderHash`/`ExtractSkillZip`).
+  Tạo thông báo đọc lại bằng `skills.SkillUpdatePrompt(agentVisibleSkillsDir, changedSkills)`
+  trong `system/skills/skill_update_prompt.go`; cả sáu runtime dùng chung nội dung và
+  định dạng danh sách. Giữ đường dẫn riêng, kiểm tra danh sách rỗng, logging
+  và gửi qua `SendSystemChatMessage` ở từng runtime.
+  Sau khi đọc lại, agent trả đúng `NO_REPLY`; cập nhật nội bộ không cần đọc
+  lời xác nhận cho người dùng. Thêm `runtimes/<name>/skill_watcher.go` mỏng song song với
   `runtimes/openclaw/skill_watcher.go` — chỉ khác **thư mục đích** và **đường
   notify**. Gate bằng `skills.Supported(device.Capabilities(...))`. Chỉ cập nhật
   version đã theo dõi sau khi download và extract thành công, để lỗi tạm thời được

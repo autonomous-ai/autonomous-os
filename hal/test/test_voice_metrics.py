@@ -334,9 +334,8 @@ def test_excluded_inputs_are_reported_with_a_reason(kpi, reason):
     assert p["exclusion_reason"] == reason
 
 
-def test_muted_speech_is_excluded_when_it_is_refused(kpi):
-    """The speaker refuses the reply: that is a muted device, not a missed
-    response."""
+def test_muted_speech_records_audio_refusal_without_excluding_task(kpi):
+    """Mute is audio evidence, not an exclusion from task acceptance."""
     iid = voice_metrics.speech_end("silence_clock")
     voice_metrics.bind_run(iid, "run-m")
     kpi.clock.advance(700)
@@ -344,11 +343,12 @@ def test_muted_speech_is_excluded_when_it_is_refused(kpi):
     kpi.close_all()
 
     p = kpi.one(voice_metrics.EVENT_INTERACTION)
-    assert p["exclusion_reason"] == voice_metrics.EXCL_SPEAKER_MUTED
-    assert p["eligible"] is False
+    assert p["exclusion_reason"] == ""
+    assert p["speaker_muted"] is True
+    assert p["eligible"] is True
 
 
-def test_unmuting_before_scoring_does_not_resurrect_the_turn(kpi):
+def test_unmuting_before_scoring_preserves_observed_mute(kpi):
     """Regression (device-observed 08/09/2026): the mute flag was sampled when
     the verdict was written, 10s later. Someone unmuting in between made a
     muted turn look like one the device simply never answered."""
@@ -360,8 +360,9 @@ def test_unmuting_before_scoring_does_not_resurrect_the_turn(kpi):
     kpi.close_all()
 
     p = kpi.one(voice_metrics.EVENT_INTERACTION)
-    assert p["outcome"] == voice_metrics.OUTCOME_EXCLUDED
-    assert p["exclusion_reason"] == voice_metrics.EXCL_SPEAKER_MUTED
+    assert p["outcome"] == voice_metrics.OUTCOME_NO_ACK
+    assert p["exclusion_reason"] == ""
+    assert p["speaker_muted"] is True
 
 
 def test_a_late_mute_amends_a_reported_verdict(kpi):
@@ -372,7 +373,8 @@ def test_a_late_mute_amends_a_reported_verdict(kpi):
     rows = kpi.of(voice_metrics.EVENT_INTERACTION)
     assert len(rows) == 2
     assert rows[1]["params"]["amendment_reason"] == "late_mute"
-    assert rows[1]["params"]["exclusion_reason"] == voice_metrics.EXCL_SPEAKER_MUTED
+    assert rows[1]["params"]["exclusion_reason"] == ""
+    assert rows[1]["params"]["speaker_muted"] is True
 
 
 def test_mute_after_the_user_already_heard_something_changes_nothing(kpi):

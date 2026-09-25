@@ -12,7 +12,7 @@ const EMOTION_EMOJI: Record<string, string> = {
   scan: "👀", nod: "👍", headshake: "🙅",
 };
 
-type OtaVersions = Record<string, { current?: string; update_available?: boolean }>;
+type OtaVersions = Record<string, { current?: string; target?: string; update_available?: boolean }>;
 
 async function fetchOtaVersions(): Promise<OtaVersions | null> {
   try {
@@ -122,11 +122,7 @@ export function OverviewSection({
   // limit + admin auth still apply on the server side either way).
   const isDebug = new URLSearchParams(window.location.search).get("debug") === "true";
 
-  // Which components actually HAVE a newer build. Without this the card showed
-  // an `update` button on every row, and pressing one with nothing to install
-  // looked broken: the worker logs "held by min_version floor" and the button
-  // just says OK. Fetched once per mount (a human opening a page, not a hot
-  // path) and only in debug, where the buttons can appear at all.
+  // Show published versions in normal mode; only update actions require debug.
   const [otaVersions, setOtaVersions] = useState<OtaVersions>({});
   const refreshOtaVersions = useCallback(() => {
     void fetchOtaVersions().then((versions) => {
@@ -134,13 +130,12 @@ export function OverviewSection({
     });
   }, []);
   useEffect(() => {
-    if (!isDebug) return;
     let cancelled = false;
     fetchOtaVersions().then((versions) => {
       if (!cancelled && versions) setOtaVersions(versions);
     });
     return () => { cancelled = true; };
-  }, [isDebug]);
+  }, []);
   // held_by_floor is deliberately NOT consulted: that floor stages the
   // automatic fleet rollout, while this button installs the published version
   // on this one device — the same thing `software-update <key>` over SSH has
@@ -597,13 +592,21 @@ export function OverviewSection({
         <div className="lm-mon-card" style={monCard}>
           <div style={{ marginBottom: 10 }}><CardLabel icon={<Tag size={13} />} text="Versions" /></div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6, overflowX: "auto" }}>
+            <div style={{ ...versionRowLayout, fontSize: 10, color: "var(--lm-text-muted)" }}>
+              <span>Service</span>
+              <span>Current</span>
+              <span title="Latest published version in this device's OTA feed">Latest</span>
+              <span style={{ textAlign: "right" }}>Uptime</span>
+              <span />
+              <span />
+            </div>
             <VersionRow name="Host"   color="var(--lm-text)"   version={null}                    uptime={sys?.uptime ?? null}                                   updateTarget={null} />
-            <VersionRow name="Web"    color="var(--lm-teal)"   version={webVersion}              uptime={null}                                                  updateTarget={canUpdate("web") ? "web" : null} updating={isUpdating("web")} onTriggered={onUpdateTriggered} />
-            <VersionRow restartTarget="os-server" name="OS"     color="var(--lm-amber)"  version={sys?.version ?? null}    uptime={sys?.serviceUptime ?? null}                            updateTarget={canUpdate("os-server") ? "os-server" : null} updating={isUpdating("os-server")} onTriggered={onUpdateTriggered} />
-            <VersionRow restartTarget="hal" name="HAL"    color="var(--lm-blue)"   version={halVersion}              uptime={sys?.halUptime ?? null}                                updateTarget={canUpdate("hal") ? "hal" : null} updating={isUpdating("hal")} onTriggered={onUpdateTriggered} />
-            <VersionRow name="Agent"  color="var(--lm-purple)" version={oc?.version ?? null}     uptime={oc?.connected ? (oc?.agentUptime ?? null) : null}      updateTarget={canUpdate("agent") ? "agent" : null} updating={isUpdating("agent")} onTriggered={onUpdateTriggered} />
-            {isDebug && <VersionRow name="Bootstrap" color="var(--lm-text-dim)" version={otaVersions.bootstrap?.current ?? null} uptime={null} updateTarget={canUpdate("bootstrap") ? "bootstrap" : null} updating={isUpdating("bootstrap")} onTriggered={onUpdateTriggered} />}
-            {isDebug && <VersionRow name="Device" color="var(--lm-text-dim)" version={otaVersions.device?.current ?? null} uptime={null} updateTarget={canUpdate("device") ? "device" : null} updating={isUpdating("device")} onTriggered={onUpdateTriggered} />}
+            <VersionRow name="Web" latestVersion={otaVersions["web"]?.target}    color="var(--lm-teal)"   version={webVersion}              uptime={null}                                                  updateTarget={canUpdate("web") ? "web" : null} updating={isUpdating("web")} onTriggered={onUpdateTriggered} />
+            <VersionRow restartTarget="os-server" name="OS" latestVersion={otaVersions["os-server"]?.target}     color="var(--lm-amber)"  version={sys?.version ?? null}    uptime={sys?.serviceUptime ?? null}                            updateTarget={canUpdate("os-server") ? "os-server" : null} updating={isUpdating("os-server")} onTriggered={onUpdateTriggered} />
+            <VersionRow restartTarget="hal" name="HAL" latestVersion={otaVersions["hal"]?.target}    color="var(--lm-blue)"   version={halVersion}              uptime={sys?.halUptime ?? null}                                updateTarget={canUpdate("hal") ? "hal" : null} updating={isUpdating("hal")} onTriggered={onUpdateTriggered} />
+            <VersionRow name="Agent" latestVersion={otaVersions["agent"]?.target}  color="var(--lm-purple)" version={oc?.version ?? null}     uptime={oc?.connected ? (oc?.agentUptime ?? null) : null}      updateTarget={canUpdate("agent") ? "agent" : null} updating={isUpdating("agent")} onTriggered={onUpdateTriggered} />
+            {isDebug && <VersionRow name="Bootstrap" latestVersion={otaVersions["bootstrap"]?.target} color="var(--lm-text-dim)" version={otaVersions.bootstrap?.current ?? null} uptime={null} updateTarget={canUpdate("bootstrap") ? "bootstrap" : null} updating={isUpdating("bootstrap")} onTriggered={onUpdateTriggered} />}
+            {isDebug && <VersionRow name="Device" latestVersion={otaVersions["device"]?.target} color="var(--lm-text-dim)" version={otaVersions.device?.current ?? null} uptime={null} updateTarget={canUpdate("device") ? "device" : null} updating={isUpdating("device")} onTriggered={onUpdateTriggered} />}
           </div>
         </div>
         </div>
@@ -1017,10 +1020,19 @@ function ToggleButton({ active, label, onClick, disabled = false }: {
   );
 }
 
-function VersionRow({ name, color, version, uptime, updateTarget, updating = false, onTriggered, restartTarget }: {
+const versionRowLayout = {
+  display: "grid",
+  gridTemplateColumns: "70px minmax(55px, 1fr) minmax(55px, 1fr) 70px 70px 65px",
+  minWidth: 425,
+  alignItems: "center",
+  gap: 8,
+};
+
+function VersionRow({ name, color, version, latestVersion, uptime, updateTarget, updating = false, onTriggered, restartTarget }: {
   name: string;
   color: string;
   version: string | null;
+  latestVersion?: string;
   uptime: number | null;
   updateTarget: "os-server" | "bootstrap" | "web" | "hal" | "device" | "agent" | null;
   restartTarget?: "os-server" | "hal";
@@ -1033,15 +1045,10 @@ function VersionRow({ name, color, version, uptime, updateTarget, updating = fal
 }) {
   // Keep both action columns aligned, with horizontal scrolling on narrow cards.
   return (
-    <div style={{
-      display: "grid",
-      gridTemplateColumns: "70px minmax(55px, 1fr) 70px 70px 65px",
-      minWidth: 362,
-      alignItems: "center",
-      gap: 8,
-    }}>
+    <div style={versionRowLayout}>
       <span style={{ fontSize: 12.5, color: "var(--lm-text-dim)" }}>{name}</span>
       <span title={version ?? undefined} style={{ fontSize: 12.5, fontWeight: 600, color, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{version ?? "—"}</span>
+      <span title={latestVersion || undefined} style={{ fontSize: 12.5, color: "var(--lm-text-dim)", fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{latestVersion || "—"}</span>
       <span style={{ fontSize: 11, color: "var(--lm-text-muted)", textAlign: "right" }}>
         {uptime != null ? formatUptime(uptime) : "—"}
       </span>

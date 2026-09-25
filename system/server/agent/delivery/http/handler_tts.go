@@ -1,6 +1,8 @@
 package http
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"os"
@@ -295,9 +297,17 @@ func (h *AgentHandler) deliverTTS(send func(string) error, text, flowRunID, errC
 		send = hal.SpeakCached
 	}
 	finishAdmission := hal.BeginVoiceFollowupSpeech(flowRunID)
+	dispatchAt := time.Now()
+	textKey := ttsTextKey(text)
 	go func() {
 		defer finishAdmission()
+		sendAt := time.Now()
+		slog.Info("[tts-timing] delivery_start", "run_id", flowRunID,
+			"text_key", textKey, "dispatch_to_send_ms", sendAt.Sub(dispatchAt).Milliseconds())
 		err := send(text)
+		slog.Info("[tts-timing] delivery_complete", "run_id", flowRunID,
+			"text_key", textKey, "send_ms", time.Since(sendAt).Milliseconds(),
+			"dispatch_to_complete_ms", time.Since(dispatchAt).Milliseconds(), "success", err == nil)
 		if err == nil {
 			return
 		}
@@ -322,4 +332,10 @@ func (h *AgentHandler) deliverTTSQueue(text, flowRunID, errCtx string) {
 		return
 	}
 	h.deliverTTS(h.agentGateway.SendToHALTTSQueue, text, flowRunID, errCtx)
+}
+
+// ttsTextKey correlates text at this boundary without logging its contents.
+func ttsTextKey(text string) string {
+	digest := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(digest[:6])
 }

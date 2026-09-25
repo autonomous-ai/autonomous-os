@@ -61,9 +61,8 @@ là đã phản hồi** — đoán "interaction mở mới nhất" chính là c�
 tính thành phản hồi cho câu lệnh mới. Số đếm đi kèm mọi dòng interaction ở
 `unknown_owner_playbacks`.
 
-Lần phát bị mute cũng phải có owner resolve được thì mới loại interaction với
-`speaker_muted`. Thông báo bị mute không có owner hoặc thuộc lượt khác không
-được loại lệnh thoại mới nhất. Mỗi đoạn trong hàng đợi mang metadata phân loại
+Ack schema 2 không loại interaction chỉ vì loa mute: tác vụ im lặng đã được
+nhận xử lý vẫn có thể có ack. Mỗi đoạn trong hàng đợi mang metadata phân loại
 riêng (câu trả lời/filler/hệ thống), không kế thừa loại của speech mở stream.
 Snapshot này không thay đổi hành vi feedback hay ngắt phát.
 
@@ -82,8 +81,8 @@ KPI-1: độ trễ mạng và thời gian server xác nhận im lặng sẽ làm
 ngắn giả. Không đổi cue hoặc VAD. Chỉ có transcript/thời điểm nhận thì giữ
 `exclusion_reason=speech_endpoint_unavailable`, latency ack/answer null; eligibility
 KPI-3 độc lập. Endpoint thật tới muộn được amendment nếu timestamp trước hoặc
-bằng playback đầu tiên thuộc lượt đó. HAL giữ timestamp playback ack/answer gốc,
-kể cả filler đúng owner. Timestamp sai, NaN/Inf, tương lai hoặc sau ack không
+bằng ack đầu tiên thuộc lượt đó. HAL giữ timestamp nhận xử lý và audio/answer
+độc lập, kể cả filler đúng owner. Timestamp sai, NaN/Inf, tương lai hoặc sau ack không
 được đổi thành latency 0.
 
 Converter google-genai 2.12.1 giữ `voiceActivity` và `audioOffset`; test đi qua
@@ -125,7 +124,7 @@ Sau khi được phép deploy, thu bộ đếm wire/SDK và interaction của c�
 đối chiếu first write/cancel theo cùng owner. Kiểm tra im lặng/ồn, filler hợp lệ,
 barge-in, suppress trước write, output cũ tới muộn, delegate và LIVE OFF. Báo độ
 phủ thiếu endpoint cùng `no_ack` đủ điều kiện và latency. Test local không chứng
-minh độ phủ hay độ chính xác âm học trên device. Ack vẫn là first successful
+minh độ phủ hay độ chính xác âm học trên device. Mốc audio vẫn là first successful
 stream write; phần đệm ALSA/loa cần acoustic loopback để đo. Timer báo cáo
 10 giây hiện bắt đầu khi tạo interaction (có thể lúc nhận transcript); amendment
 có thể tới sau, nên không bảo đảm cửa sổ 10 giây sau kết thúc tiếng nói âm học.
@@ -165,15 +164,28 @@ nó không đóng audio stream vật lý.
 
 ## Thế nào là "đã phản hồi"
 
-Là frame đầu tiên **thực sự được ghi vào audio stream**
-(`TTSService._note_audio_written`, gọi từ mọi đường ghi thật: synth streaming,
-drain hàng đợi câu, phát WAV cached, và frame native realtime).
+**Ack schema 2** lấy xác nhận sớm nhất sau endpoint lời người dùng: audio đúng
+owner thực sự được ghi, OS xác nhận đã nhận handoff sang main/harness (`run_id`
+kèm `delivered`), hoặc kết quả đã xử lý local được xác nhận. Chỉ chọn route
+delegate, gọi tool, bắt đầu POST hay nhận HTTP 200 chung chung chưa chứng minh
+đã nhận xử lý. History-sync không được tính là ack nhận xử lý. Tác vụ main có
+`NO_REPLY` hợp lệ vẫn có ack mà không cần phát tiếng hoặc hoàn tất execution.
 
-`on_speak_start` **không** phải tín hiệu đó và không dùng cho KPI: đường cached
-gọi nó TRƯỚC khi lấy stream lock và trước khi ghi byte nào, nên speech bị stop
-hoặc lỗi ở giữa vẫn trông như đã phát. HTTP 200 cũng vậy — `speak_queue()` cố
-tình trả `True` cho request nó drop, và `deliverTTS` bên os-server có thể bị
-mute sau khi đã nhận text.
+Nhận xử lý dùng `ack_kind=delegate_accepted` / `local_accepted` và
+`ack_modality=processing_accepted`. Filler/câu trả lời đúng owner phát sớm hơn
+vẫn giữ ack sớm nhất. `audio_latency_ms`/`audio_kind` đo riêng lần ghi audio đúng
+owner đầu tiên; `answer_latency_ms`/`answer_kind` vẫn cần câu trả lời thực sự.
+Hook đo không đổi routing, playback, cancel hay thời điểm main chạy tác vụ.
+
+Với audio, dùng frame đầu tiên **thực sự ghi vào audio stream** qua
+`TTSService._note_audio_written` ở các đường synth streaming, drain queue, WAV
+cached và native realtime. `on_speak_start` và HTTP nhận TTS không chứng minh
+đã phát: queue có thể drop hoặc mute trước khi ghi. Đây khác với xác nhận đã
+nhận tác vụ nêu trên.
+
+**Version 1 chỉ đo audio.** Thiếu `ack_schema_version` nghĩa là 1. Không được
+đổi nghĩa `no_ack` lịch sử thành version 2 khi thiếu bằng chứng nhận xử lý;
+phải báo riêng từng version, kể cả khác biệt eligibility khi mute.
 
 Ngay cả lần ghi đầu **cũng không phải thời điểm âm thanh ra loa**: đệm ALSA (và
 Bluetooth còn hơn) nằm sau đó. Phép đo là "audio đã được giao cho thiết bị",
@@ -192,18 +204,11 @@ Tiếng chime xác nhận cử chỉ vật lý không phải phản hồi cho l�
 Các lần ghi chime bỏ qua hook đo speech: không kế thừa owner của câu trả lời
 đang chờ và không dùng mất hook ghi frame đầu tiên của câu trả lời đó.
 
-**Waiting audio ĐƯỢC tính là phản hồi — đây là quyết định, không phải tình cờ.**
-Chỉ số này trả lời câu *"thiết bị có cho người dùng biết là đã nghe thấy
-không?"*, chứ không phải *"nó có trả lời không?"*. Câu filler ("một giây nhé")
-là một biên nhận thật: người dùng hết phải phân vân không biết đèn có nghe
-mình. Nên lượt nào có tiếng đầu tiên là filler thì tính là đã phản hồi, dù câu
-trả lời thật tới muộn hơn nhiều.
-
-Phải đọc kèm hệ quả: trên lamp hiện tại **mọi** lần phản hồi đo được đều là
-`waiting_audio`, nên chỉ số này đang cho biết đèn nói "tôi nghe rồi" nhanh cỡ
-nào, KHÔNG phải nó trả lời nhanh cỡ nào. `ack_modality` được lưu ở mọi dòng
-chính là để tách hai thứ đó — tách theo nó trước khi trích một con số, và coi
-tỉ lệ `waiting_audio` 100 % là một phát hiện về sản phẩm, không phải điểm tốt.
+**Waiting audio vẫn được tính là ack.** Filler có thể xác nhận trước handoff
+hoặc câu trả lời, nhưng handoff đã được xác nhận không cần filler mới có ack.
+Tách theo `ack_kind` và `ack_modality`: nhận xử lý không chứng minh người dùng
+đã nghe gì. Báo audio latency và answer latency bên cạnh KPI-1 để giữ rõ khác
+biệt UX này.
 
 **Phản hồi bằng hình ảnh KHÔNG được tính.** LED listening đúng là một tín hiệu
 người dùng cảm nhận được, nhưng thời điểm nó thật sự bật chưa được đo ở đây;
@@ -235,10 +240,12 @@ gian phản hồi của thiết bị.
 | `speech_end_method` | Cách phát hiện điểm kết thúc |
 | `eligible` | `false` khi có `exclusion_reason` |
 | `outcome` | `acknowledged` \| `no_ack` \| `excluded` |
-| `exclusion_reason` | `rejected_noise`, `rejected_non_user`, `no_transcript`, `not_addressed`, `speaker_muted`, `interrupted_by_user`, `speech_endpoint_unavailable` (chỉ KPI-1). `speaker_muted` được ghi đúng lúc loa **từ chối** phát, không phải đọc cờ mute lúc chốt sổ — nếu không, thiết bị được bật tiếng lại trước khi chốt sẽ trông như thiết bị không thèm trả lời |
-| `failure_reason` | `dispatch_failed` — lệnh hợp lệ nhưng **không được phục vụ** (POST không tới nơi). Đây *không* phải exclusion: dòng vẫn eligible và bị tính vào KPI. Lệnh os-server tự trả lời (local intent: âm lượng, LED, giờ) **không** phải lỗi — câu trả lời mang interaction id làm owner và được tính là đã phản hồi. |
-| `ack_latency_ms` | Quan sát thô, giữ nguyên bất kể kết luận (`null` khi không có gì phát hoặc thiếu endpoint) |
-| `ack_modality`, `ack_kind` | Người dùng thực sự nghe thấy cái gì |
+| `exclusion_reason` | `rejected_noise`, `rejected_non_user`, `no_transcript`, `not_addressed`, `interrupted_by_user`, `speech_endpoint_unavailable` (chỉ KPI-1). Schema 2 không loại chỉ vì mute; schema 1 lịch sử còn dùng `speaker_muted`. |
+| `failure_reason` | `dispatch_failed`: dispatch thất bại vẫn eligible; nếu không có ack hợp lệ khác thì là `no_ack`. Kết quả OS xử lý local được xác nhận có `local_accepted`. |
+| `ack_schema_version` | `2`: audio đúng owner hoặc xác nhận nhận xử lý; thiếu field nghĩa là `1` chỉ đo audio. |
+| `ack_latency_ms` | Từ endpoint tới ack được xác nhận sớm nhất; null khi chưa có bằng chứng ack hoặc thiếu endpoint hợp lệ. |
+| `ack_modality`, `ack_kind` | Loại audio đúng owner, hoặc `processing_accepted` với `delegate_accepted` / `local_accepted`. |
+| `audio_latency_ms`, `audio_kind` | Đo độc lập từ endpoint tới lần ghi audio đúng owner đầu tiên và loại audio; null nếu chưa phát hoặc thiếu endpoint hợp lệ. |
 | `answer_latency_ms`, `answer_kind` | Lúc nghe được **câu trả lời** (`agent_reply` / `native_realtime` / `realtime_tts`), khác với biên nhận. `null` = thiếu endpoint hoặc chưa ghi nhận câu trả lời trong cửa sổ — đó là phát hiện, không phải thiếu dữ liệu |
 | `ack_deadline_ms`, `observe_window_ms` | 3000 / 10000 — ngưỡng (tạm thời) đang áp dụng lúc ghi dòng đó |
 | `unknown_owner_playbacks` | Số lần phát không ai nhận — audio bị loại khỏi quyết định ack |
@@ -320,13 +327,14 @@ không thể phát ra câu trả lời cũ, nên không tính là thứ mà biê
 
 **KPI-1 — phản hồi trong 3 giây**
 
-- Mẫu số: các dòng `voice_metrics_interaction` có `eligible = true`, sau khi áp
-  dụng đính chính (dòng nào có bản `amends_event_id` cho cùng `interaction_id`
-  thì bị bản đính chính thay thế).
+- Mẫu số: verdict cuối của từng `(device, interaction_id, ack_schema_version)`
+  có `eligible = true`, ưu tiên `task_revision` lớn nhất rồi amendment/thời gian.
+  `no_ack` hợp lệ vẫn nằm trong mẫu số. Báo riêng từng schema version.
 - Tử số: trong đó `outcome = 'acknowledged'` và `ack_latency_ms <= 3000`.
 - Loại trừ (vẫn báo cáo, không bao giờ vứt): turn bị noise guard loại, turn
   model từ chối vì không phải người dùng, transcript rỗng, câu không nói với
-  thiết bị (không wake word / ngoài cửa sổ follow-up), và loa đang mute.
+  thiết bị (không wake word / ngoài cửa sổ follow-up), bị user ngắt và thiếu
+  endpoint thật. Schema 2 không loại chỉ vì loa mute.
 - **Lỗi thì GIỮ LẠI.** Lệnh hợp lệ mà thiết bị không phục vụ được (POST sang
   os-server không tới — `failure_reason = 'dispatch_failed'`) vẫn *eligible* và
   tính là `no_ack`. Loại nó ra là thổi phồng tỉ lệ thành công bằng đúng những
@@ -632,8 +640,9 @@ là hostname thiết bị, `platform` là `device` (xem `system/lib/analytics`).
 - **Phát hiện stale ở mức playback, không ở mức mẫu audio.** Nó chấm các khoảng
   phát vượt mốc grace; không nói được còn bao nhiêu mili-giây PCM nằm trong đệm
   phần cứng.
-- **Audio đã giao cho driver, không phải âm trong phòng.** Mốc ack là lần ghi
-  stream đầu tiên; đệm ALSA/Bluetooth sau đó không đo được.
+- **Audio đã giao cho driver, không phải âm trong phòng.** Ack bằng audio và
+  `audio_latency_ms` dùng lần ghi đầu; không đo đệm ALSA/Bluetooth sau đó.
+  Ack nhận xử lý không chứng minh đã phát tiếng hay hoàn tất tác vụ.
 - **Playback không ai nhận thì để không quy chủ, có chủ đích.** Nó được đếm
   (`unknown_owner_playbacks`) và loại khỏi quyết định ack, thay vì đoán.
 - **Cửa sổ 60 giây vẫn có thể hết sớm.** Những dòng đó mang
@@ -709,5 +718,6 @@ pass. Không tạo giả AA event cho dữ liệu lịch sử bị thiếu.
 
 Truy vấn KPI-1 trong bản EN trả cùng lúc `observed_interactions`,
 `endpoint_known_interactions`, `endpoint_unknown_interactions`, `endpoint_excluded_interactions`, `eligible_samples`,
-`no_ack` và `kpi1_pct`. Dedup ưu tiên `task_revision` rồi amendment/thời gian;
+`no_ack` và `kpi1_pct`, tách theo `ack_schema_version` (thiếu field = 1).
+Dedup theo device, interaction và schema; ưu tiên `task_revision` rồi amendment/thời gian;
 `no_ack` hợp lệ vẫn trong mẫu số, không có mẫu hợp lệ trả NULL (N/A).

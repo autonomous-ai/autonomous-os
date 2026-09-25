@@ -119,9 +119,13 @@ def _note_dispatch_outcome(interaction_id: str, result) -> None:
                      stays in the denominator as a failure.
     """
     if getattr(result, "handled_locally", False):
+        if getattr(result, "delivered", False) is True:
+            voice_metrics.dispatch_accepted(interaction_id, local=True)
         _finish_local_intent_cue()
         return
     if result.run_id:
+        if getattr(result, "delivered", False) is True:
+            voice_metrics.dispatch_accepted(interaction_id)
         return
     voice_metrics.mark_failed(interaction_id, voice_metrics.FAIL_DISPATCH_FAILED)
 

@@ -16,7 +16,6 @@ const (
 
 	// Single strings — consumed via One. Format templates (e.g. %s)
 	// go through One + fmt.Sprintf at the call site.
-	PhraseHarnessReply  Phrase = "harness.reply"
 	PhraseBrainRestart  Phrase = "sensing.brain_restart"
 	PhraseCompactNotice Phrase = "openclaw.compact_notice"
 	PhraseTrackFailFmt  Phrase = "tracking.track_fail_fmt"
@@ -51,12 +50,6 @@ const fallbackLang = LangEN
 // whitelist, ElevenLabs interprets them. Either way they don't read
 // aloud.
 var phrases = map[Phrase]map[string][]string{
-	PhraseHarnessReply: {
-		LangEN:   {"Harness says:"},
-		LangVI:   {"Harness trả lời:"},
-		LangZhCN: {"Harness 回复："},
-		LangZhTW: {"Harness 回覆："},
-	},
 	// Shared idle self-talk: brief, playful, and independent of the robot's body.
 	// No sensor claims, listening acknowledgements, or requests for a reply.
 	// Audition with the device voice; text alone cannot guarantee delivery.

@@ -233,6 +233,30 @@ class LiveRealtimeStopTest(unittest.TestCase):
         self.assertEqual(tts._pending_queue, [main, other])
         tts._wake_drain_queues.assert_called_once()
 
+    def test_scoped_reject_keeps_newer_active_and_queued_reply(self):
+        from hal.drivers.voice.tts.service import _PendingSpeech
+        tts, old, main, other = self.make_service(True, True)
+        old.owner = "run:old"
+        new = _PendingSpeech('new', False, owner='run:new', realtime_reply=True)
+        tts._pending_queue.append(new)
+        tts._active_pending_speech = new
+        tts._playback_owner = 'run:new'
+        tts.stop_realtime_reply(turn_id='old')
+        self.assertTrue(old.cancelled.is_set())
+        self.assertFalse(new.cancelled.is_set())
+        self.assertFalse(tts._stop_event.is_set())
+        self.assertEqual(tts._pending_queue, [main, other, new])
+
+    def test_scoped_reject_stops_matching_active_synthesis(self):
+        tts, old, main, other = self.make_service(True, True)
+        old.owner = 'run:old'
+        tts._active_pending_speech = old
+        tts._playback_owner = 'run:old'
+        tts.stop_realtime_reply(turn_id='old')
+        self.assertTrue(old.cancelled.is_set())
+        self.assertTrue(tts._stop_event.is_set())
+        self.assertEqual(tts._pending_queue, [main, other])
+
 
 if __name__ == '__main__':
     unittest.main()

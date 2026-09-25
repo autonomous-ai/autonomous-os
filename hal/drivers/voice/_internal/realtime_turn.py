@@ -18,7 +18,6 @@ from hal import app_state as hal_app_state
 from hal import config as hal_config
 from hal import presets
 from hal.clock import device_now
-from hal.i18n import PROVIDER_ERROR_PHRASES_BY_LANG
 from hal.realtime.config import gemini_needs_idle_workaround
 from hal.realtime.voice_agent.base import AudioTurnSessionChanged
 from hal.realtime.models import AudioOutput as RTAudioOutput
@@ -40,36 +39,6 @@ CLAUSE_ENDS = (",", ";", ":", "—", "，", "；", "：", "、")
 # is 9 characters and is exactly the greeting worth getting out early, while
 # every grunt this must reject is 5 or fewer.
 FIRST_CHUNK_MIN_CHARS = 8
-
-
-# Suppress only known provider apologies, not arbitrary mentions of errors.
-_SYSTEM_ERROR_TEXTS = tuple(
-    " ".join(phrase.lower().replace("’", "'").split()).rstrip(".!?")
-    for phrases in PROVIDER_ERROR_PHRASES_BY_LANG.values()
-    for phrase in phrases
-)
-_SYSTEM_ERROR_SENTENCE = re.compile(
-    r"(?<!\S)(?:" + "|".join(
-        re.escape(template).replace(r"\ ", r"\s+").replace("'", "['’]")
-        for template in _SYSTEM_ERROR_TEXTS
-    ) + r")(?:[.!?]+|$)", re.IGNORECASE,
-)
-
-
-def _filter_system_error_tts(text: str, *, log: bool = True) -> str:
-    def suppress(match):
-        if log:
-            logger.info("[realtime] Provider error suppressed from TTS: %r", match.group(0))
-        return ""
-
-    return _SYSTEM_ERROR_SENTENCE.sub(suppress, text).strip()
-
-
-def _pending_system_error_tts(text: str) -> bool:
-    # Hold a matching prefix before clause splitting can speak the apology.
-    normalized = " ".join(text.lower().replace("’", "'").split())
-    return bool(normalized) and any(template.startswith(normalized)
-                                    for template in _SYSTEM_ERROR_TEXTS)
 
 
 def split_first_chunk(buf: str) -> tuple[str, str]:
@@ -114,6 +83,34 @@ def split_first_chunk(buf: str) -> tuple[str, str]:
         cut = spaces[-1]
     head: str = buf[: cut + 1].strip()
     return (head, buf[cut + 1:]) if head else ("", buf)
+
+
+def split_completed_prefix(buf: str) -> tuple[str, str]:
+    """Release completed sentences bundled with the next unfinished sentence.
+
+    Keep raw tags and the exact tail for the next chunk. Incomplete tags,
+    numbers, initials and common abbreviations remain buffered conservatively.
+    The existing end-of-buffer sentence path handles terminal punctuation.
+    """
+    depth = 0
+    cut = 0
+    abbreviations = {"mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc", "e.g", "i.e"}
+    for i, char in enumerate(buf):
+        if char == "[":
+            depth += 1
+        elif char == "]" and depth:
+            depth -= 1
+        elif not depth and char in SENTENCE_ENDS:
+            if i + 1 >= len(buf) or not buf[i + 1].isspace():
+                continue
+            if char == ".":
+                token = buf[:i].rsplit(maxsplit=1)[-1].lower() if buf[:i].strip() else ""
+                if (i and buf[i - 1].isdigit()) or token in abbreviations or len(token) == 1:
+                    continue
+            cut = i + 1
+    if depth or not cut or not buf[cut:].strip():
+        return "", buf
+    return buf[:cut], buf[cut:]
 
 
 # How a turn resolved, for the single routing log line in dispatch_turn. Every
@@ -735,6 +732,8 @@ def run_realtime_turn(
                             text_parts.append(output.transcript)
                         continue
                     if isinstance(output, RTTextOutput):
+                        if not text_parts and output.text:
+                            logger.info("[tts-timing] stage=realtime_first_text mode=turn owner=%s", interaction_id)
                         text_parts.append(output.text)
                         if native:
                             # Audio already carries the reply — keep text only for
@@ -759,12 +758,6 @@ def run_realtime_turn(
                         if foreign_suppressed:
                             sentence_buf = ""
                             continue
-                        visible_text = strip_markers(sentence_buf)
-                        if _pending_system_error_tts(visible_text):
-                            continue
-                        filtered_text = _filter_system_error_tts(visible_text)
-                        if filtered_text != visible_text.strip():
-                            sentence_buf = filtered_text
                         # Nothing spoken yet: cut the opening at a clause
                         # boundary rather than making the user wait out a whole
                         # sentence. Only ever once per turn (see split_first_chunk).
@@ -787,6 +780,10 @@ def run_realtime_turn(
                         # Trailing voice/HW tags are not spoken punctuation.
                         # Keep the raw buffer until ready so split tags reassemble.
                         sentence = strip_markers(sentence_buf)
+                        complete = sentence.rstrip().endswith(SENTENCE_ENDS)
+                        ready, tail = ("", "") if complete else split_completed_prefix(sentence_buf)
+                        if ready:
+                            sentence = strip_markers(ready)
                         if tts is not None and sentence.rstrip().endswith(SENTENCE_ENDS):
                             sentence = leak_filter.filter_text(sentence)
                             if sentence:
@@ -816,7 +813,7 @@ def run_realtime_turn(
                                         sentence[:80],
                                     )
                                     tts.speak_queue(sentence, turn_id=interaction_id, realtime_reply=True)
-                            sentence_buf = ""
+                            sentence_buf = tail if ready else ""
 
                 execution_completed = (
                     getattr(realtime, "execution_completed", False) is True
@@ -863,9 +860,7 @@ def run_realtime_turn(
             # turn from the top): this is what gets forwarded as [REPLY], saved to
             # realtime memory, and shown in web chat — a leak here re-enters the
             # model's context next turn and self-reinforces.
-            transcript = _filter_system_error_tts(
-                clean_transcript(strip_markers("".join(text_parts)), reply_lang), log=False,
-            ) if not native else clean_transcript(strip_markers("".join(text_parts)), reply_lang)
+            transcript = clean_transcript(strip_markers("".join(text_parts)), reply_lang)
 
             # Native playback owns the speaker for the whole turn — release it
             # once all frames are in (records transcript for STT echo cancel).
@@ -908,9 +903,7 @@ def run_realtime_turn(
             else:
                 # Flush any remaining text that didn't end with a sentence boundary
                 # (ElevenLabs path only — native mode never fills sentence_buf).
-                remaining: str = _filter_system_error_tts(
-                    leak_filter.filter_text(strip_markers(sentence_buf)),
-                )
+                remaining: str = leak_filter.filter_text(strip_markers(sentence_buf))
                 if not native and remaining and tts is not None:
                     if not first_sentence_sent:
                         logger.info(
