@@ -64,7 +64,9 @@ Classifies emotion from a face crop.
 
 - The winning label is gated by a per-label confidence threshold
   (`label_gating.py`); below its bar → `Neutral`. See
-  [configuration.md](configuration.md) (`FER__LABEL_THRESHOLDS`).
+  [configuration.md](configuration.md) (`FER__LABEL_THRESHOLDS`). This gate
+  only runs for requests without `raw: true`; lamps running current HAL send
+  `raw: true` and gate on the device instead.
 
 - Output: `EmotionDetection` → `emotions: list[Emotion{emotion, confidence,
   face_confidence, bbox, valence?, arousal?}]`.

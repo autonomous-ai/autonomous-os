@@ -503,6 +503,13 @@ EMOTION_ENABLED = os.environ.get("HAL_EMOTION_ENABLED", "true").lower() == "true
 EMOTION_CONFIDENCE_THRESHOLD = float(
     os.environ.get("HAL_EMOTION_CONFIDENCE_THRESHOLD", "0.5")
 )
+# Per-label facial emotion gate, applied on the device (emotion_gating.py). JSON
+# object keyed by label, e.g. {"happy":0.5,"surprise":0.6,"sad":0.8,"anger":0.8,
+# "disgust":0.7,"fear":0.5}. A set value replaces the whole map; unset or
+# malformed uses emotion_gating.DEFAULT_LABEL_THRESHOLDS. Only takes effect
+# against a perception server that supports raw mode — an older server still
+# gates with its own map.
+EMOTION_LABEL_THRESHOLDS_JSON = os.environ.get("HAL_EMOTION_LABEL_THRESHOLDS", "")
 EMOTION_FLUSH_S = float(os.environ.get("HAL_EMOTION_FLUSH_S", "10.0"))
 EMOTION_DEDUP_WINDOW_S = float(os.environ.get("HAL_EMOTION_DEDUP_WINDOW_S", "300.0"))
 # How long `thinking` may stay on continuously before the device falls back to
