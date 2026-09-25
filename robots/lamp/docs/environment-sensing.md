@@ -362,33 +362,61 @@ This is separate from HAL timing in each component JSON. Defaults are:
     "initial_report": true,
     "evaluate_interval_s": 10,
     "sustain_s": 60,
-    "cooldown_s": 900,
+    "cooldown_s": 1800,
     "retry_interval_s": 60,
     "max_sample_age_s": 10,
     "metrics": {
-      "pm1_0_ug_m3": {"delta": 10, "warmup_s": 60},
-      "pm2_5_ug_m3": {"delta": 10, "warmup_s": 60},
-      "pm4_0_ug_m3": {"delta": 15, "warmup_s": 60},
-      "pm10_ug_m3": {"delta": 15, "warmup_s": 60},
-      "temperature_c": {"delta": 2, "warmup_s": 60},
-      "humidity_pct": {"delta": 10, "warmup_s": 60},
-      "voc_index": {"delta": 50, "warmup_s": 3600},
-      "nox_index": {"delta": 20, "warmup_s": 21600},
-      "co2_ppm": {"delta": 200, "warmup_s": 60}
+      "pm1_0_ug_m3": {"delta": 10, "relative_delta_pct": 20, "warmup_s": 60},
+      "pm2_5_ug_m3": {"delta": 10, "relative_delta_pct": 20, "warmup_s": 60, "comfort": {"above": 35, "hysteresis": 5, "sustain_s": 300}},
+      "pm4_0_ug_m3": {"delta": 25, "relative_delta_pct": 25, "warmup_s": 60},
+      "pm10_ug_m3": {"delta": 25, "relative_delta_pct": 25, "warmup_s": 60},
+      "temperature_c": {"delta": 2, "relative_delta_pct": 0, "warmup_s": 60, "comfort": {"below": 19, "above": 27, "hysteresis": 1, "sustain_s": 300}},
+      "humidity_pct": {"delta": 10, "relative_delta_pct": 0, "warmup_s": 60, "comfort": {"below": 35, "above": 65, "hysteresis": 5, "sustain_s": 300}},
+      "voc_index": {"delta": 50, "relative_delta_pct": 0, "warmup_s": 3600},
+      "nox_index": {"delta": 20, "relative_delta_pct": 0, "warmup_s": 21600},
+      "co2_ppm": {"delta": 200, "relative_delta_pct": 20, "warmup_s": 60, "comfort": {"above": 1000, "hysteresis": 150, "sustain_s": 300}}
     }
   }
 }
 ```
 
-`delta` uses each measurement's unit (humidity uses percentage points). These
-are change-detection defaults, **not medical or absolute air-quality limits**.
-Omitting the whole object uses defaults. Within a supplied object, omitted
-top-level fields use defaults; supplying `metrics` replaces the entire metric
-map, allowing a monitored subset. Each rule needs a positive finite `delta`;
-omitted per-metric fields inherit that metric’s defaults. Explicit null fields
-or maps, an empty map, and unknown fields/metrics are rejected. New configs
-persist the full default object; old configs without it use defaults without
-a migration rewrite.
+`EnvironmentMetricRule.delta` is a positive finite absolute floor in the
+measurement's unit (humidity uses percentage points). `relative_delta_pct`
+is finite and within 0–100, inclusive. The effective change threshold is
+`max(delta, abs(accepted_baseline) * relative_delta_pct / 100)`; equality
+qualifies. The same threshold applies to rises and falls until an accepted
+event advances that metric's baseline. With PM2.5 baseline 200, the threshold
+is 40: 220 does not qualify, while 240 or 160 can qualify. With CO₂ baseline
+2000, the threshold is 400: 2200 does not qualify, while 2400 or 1600 can.
+All other readiness, sustain and dispatch gates still apply.
+
+These are **provisional product heuristics, not medical or absolute air-quality
+limits**. Omitting the whole environment object or its whole `metrics` map uses
+the new defaults above. Supplied `metrics` replaces the entire map, permitting
+a monitored subset. Within a supplied rule, omitted `delta` and `warmup_s`
+inherit that metric's defaults, but omitted `relative_delta_pct` deliberately
+means **0**, retaining legacy absolute-only behavior. An omitted `comfort`
+in a supplied rule means absent, not the new default comfort rule. Omitted environment
+fields use defaults. Explicit null fields/maps, empty maps, unknown fields or
+metrics, and invalid numbers are rejected. New configs serialize the complete
+default object, including `relative_delta_pct: 0` where applicable.
+
+Existing persisted rules are not rewritten: old coarse-particle `delta: 15`
+and missing relative fields remain 15 and 0 respectively. To adopt the full
+recommended policy, update `os-server` first (no HAL change is required), read
+the current config, then merge the recommended environment settings with the
+user's desired choices. Submit only `{"environment": <complete desired environment object>}`
+through admin `PUT /api/device/config`; do not resubmit the whole GET response,
+which may contain masked credentials. Omitted `metrics` uses defaults; supplied
+`metrics` replaces the map, so retain all desired rules in this object. Verify
+saved values with `GET /api/device/config`.
+Save a config backup before upgrading: older `os-server` versions reject the
+new `relative_delta_pct` and `comfort` fields under strict JSON decoding. Before
+a rollback, restore the old config or remove both new fields from every metric,
+including zero-valued relative fields.
+Uploading skills alone cannot change this Go policy. This documentation does
+not perform deployment or rewrite device configuration.
+
 Evaluation, sustain, retry and maximum age must be 1–86400 seconds; sustain and
 retry must be at least the evaluation interval. Cooldown permits 0–604800
 seconds, warm-up 0–86400 seconds. Runtime edits apply on the next worker tick
@@ -408,11 +436,50 @@ stale or errored and resets after interrupted acquisition. OS can use this
 continuity plus locally observed valid duration to satisfy warm-up after an
 OS-only restart; legacy HAL without it uses local observation. Freshness and
 per-metric validity still apply; component uptime alone is not usable data.
-Changes must meet `delta` in the same direction for `sustain_s`; falling below
+Changes must meet the effective threshold in the same direction for
+`sustain_s`; falling below
 that difference or reversing direction resets the pending duration. Null
 metrics reset their own warm-up/baseline; an unavailable snapshot or read failure
 resets readings for all metrics. Large gaps also reset continuity. Warm-up is an
 OS gating period, not a certificate of sensor calibration.
+
+Each metric may additionally define `comfort` with optional numeric `below`
+and/or `above`, plus `hysteresis` and `sustain_s`. The recommended defaults above
+enable temperature (below 19/above 27, hysteresis 1), humidity (below 35/above 65,
+hysteresis 5), measured CO₂ (above 1000, hysteresis 150), and PM2.5 (above 35,
+hysteresis 5); each requires 300 seconds. Other metrics omit this branch.
+At least one finite bound is required; if both exist, `below < above`.
+`hysteresis` must be finite and positive, and with two bounds no greater than
+half their gap. `sustain_s` must be between `evaluate_interval_s` and 86400.
+Explicit `comfort: null` is invalid; omission disables it in a supplied rule.
+It runs independently of delta qualification after readiness/warm-up checks.
+
+A high candidate requires `current > above`; a low candidate requires
+`current < below`. Equality at the trigger does not qualify. After an accepted
+high state, recovery requires `current <= above - hysteresis`; after an
+accepted low state, recovery requires `current >= below + hysteresis`.
+Recovery must also sustain for the same 300 seconds with the recommended
+rules. A sustained transition directly to the opposite state is allowed.
+Accepted comfort dispatch latches the new state; no repeated notification is
+sent while that state remains acknowledged. Rejected dispatch keeps the
+pending transition. A delta-only event does not reset comfort state. Missing,
+invalid or reset source data clears its comfort state.
+
+Comfort-only events may have `changes: {}` and add a `comfort` map keyed by
+metric. Each entry contains `state` (`high`, `low` or `recovered`),
+`previous_state` (`normal`, `high` or `low`), `current`, `current_at`, `threshold`,
+`sustained_s` and optional `source`. Existing delta fields and `reason: "initial"`
+are unchanged. An initial report is not an acknowledged comfort state, so a
+later sustained condition may notify. Both branches share the 1800-second
+cooldown (30 minutes), retry, busy, sleep and conversation-floor gates. This
+spacing favors fewer interruptions during work; it is a provisional product
+choice, not a health standard. User-requested status reads do not wait for it.
+Persisted explicit cooldown values remain unchanged; set `cooldown_s: 1800`
+in the existing environment config to adopt this spacing. Accepted startup
+reporting starts this cooldown too: a condition qualifying after five minutes
+may wait longer before dispatch. No promptness or health-urgency guarantee is
+implied. The skill interprets the comfort event in ordinary language; numeric
+payloads are not a script to read aloud.
 
 `environment.initial_report` defaults to `true`. The system greeting never
 waits for a sensor or fetches HAL: it may attach a fresh, warmed-up snapshot
@@ -466,6 +533,88 @@ must check readiness, freshness and individual null values. Missing capability
 returns HTTP 403; HAL read/format failures return HTTP 502. Disabled/error/stale
 snapshots can still be successful diagnostic responses. Browser and MQTT
 clients continue using their existing authenticated routes.
+
+## Provisional policy evidence and validation
+
+Sources reviewed **2026-09-25**. The
+[SEN6x datasheet v0.92, December 2025, §§1.2, 1.3, 1.5.2](https://sensirion.com/media/documents/FAFC548D/693FBB15/PS_DS_SEN6x.pdf)
+reports PM1/PM2.5 precision of ±(5 µg/m³ + 5% of reading) through 100 µg/m³,
+then ±10%; PM4/PM10 use ±25 µg/m³, then ±25%. This is between-parts variation,
+not temporal noise; coarse-particle outputs are calculated. Temperature
+repeatability is 0.1°C and humidity repeatability ±1 percentage point under
+specified conditions. SEN63C CO₂ accuracy is ±(100 ppm + 10% of reading) over
+400–5000 ppm, with typical τ63 response 60 seconds; do not borrow SEN66's
+repeatability. Accuracy requires 12 hours' initial operation followed by fresh
+air, plus continuous operation with ASC and weekly fresh-air exposure.
+
+The [SEN6x Testing and Evaluation Guide v1.0, July 2026](https://sensirion.com/media/documents/AE5564E4/6A58BFB5/PS_AN_SEN6x_Testing_And_Evaluation_Guide_D1.pdf)
+distinguishes integration checks from laboratory performance evaluation;
+results depend on the setup and integration can affect temperature/humidity.
+[HSE's CO₂ monitor guidance](https://www.hse.gov.uk/ventilation/using-co2-monitors.htm)
+supports repeated observations and attention to placement, rather than treating
+one reading as a ventilation verdict. Neither source prescribes this event
+policy.
+
+Three different decisions must remain separate:
+
+| Concept | What it controls | Evidence and limits |
+|---|---|---|
+| OS delta policy | Whether a sustained change merits an event | Baseline-relative product heuristics above; no concentration or health classification. |
+| Room comfort bands | Casual wording and sustained companion assistance | User-selected bands in `skills/environment/reference/room-comfort.md`, also used by the optional comfort branch; not WHO thresholds. |
+| Exposure guidelines | Interpretation over defined averaging periods | Requires appropriate history, coverage and validation; not implemented by this snapshot/change detector. |
+
+[WHO 2021 air-quality guidelines](https://www.who.int/news-room/questions-and-answers/item/who-global-air-quality-guidelines)
+give PM2.5 annual/24-hour values of 5/15 µg/m³ and PM10 values of 15/45 µg/m³;
+the 24-hour recommendations use the 99th percentile. They are neither
+instantaneous snapshot thresholds nor deltas.
+[AirNow's current AQI](https://www.airnow.gov/aqi/aqi-basics/using-air-quality-index/)
+uses hourly observations and NowCast, not an isolated sensor value.
+[EPA on low-cost indoor monitors](https://www.epa.gov/indoor-air-quality-iaq/low-cost-air-pollution-monitors-and-indoor-air-quality)
+notes the absence of widely accepted indoor concentration limits for most
+pollutants and that manufacturers set monitor alerts.
+
+[ASHRAE's 2025 indoor CO₂ position](https://www.ashrae.org/file%20library/about/position%20documents/pd-on-indoor-carbon-dioxide-english.pdf)
+does not treat Standard 62.1 as a generic 1000 ppm limit or CO₂ as a proxy for
+overall indoor air quality. HSE's consistently-above-1500 ppm guidance for
+occupied rooms concerns improving ventilation, not a safety boundary.
+[EPA's preferred 30–50% humidity range](https://www.epa.gov/indoor-air-quality-iaq/care-your-air-guide-indoor-air-quality)
+is a room-condition recommendation, not a humidity change delta.
+
+This change implements bounded change and sustained comfort notifications, not
+an exposure monitor.
+No 24-hour history is available here to establish a WHO exceedance or compliant
+exposure from a snapshot. Future exposure monitoring needs timestamped history,
+coverage rules, averaging and validation; none is claimed complete. Existing
+user-selected comfort bands are not relabeled as WHO recommendations.
+
+The absolute floors, percentages, 10-second evaluation, 60-second sustain,
+1800-second cooldown, 60-second retry and 10-second maximum sample age are
+**product heuristics**, not manufacturer-prescribed settings or guaranteed
+noise exclusion. Warm-up is not calibration. The larger coarse-particle floor
+and relative margins are a provisional response to measurement limitations,
+not a field-calibrated assurance. Clinical thresholds do not drive this detector. The comfort branch above uses
+the user-approved conversational bands for ongoing room assistance, not exposure
+limits; its five-minute duration and hysteresis are explicit product choices
+without field validation or endorsement from the cited sources.
+
+Comfort-enabled metrics can notify about sustained high/low conditions even
+without a delta. Legacy rules without `comfort` still cannot notify about a
+stationary level after the initial report. This remains a companion comfort
+feature, not a health alarm or continuous safety clearance; startup reporting
+and direct questions remain separate paths.
+
+Before calling the policy field-validated, passively log ordinary operation
+across multiple devices, rooms and days: retain timestamps, component state,
+per-metric freshness, actual config, accepted baselines, candidate direction,
+threshold, dispatch outcome and naturally occurring room changes. Replay the
+same logs through old and proposed policies; compare candidate and accepted
+event counts, repeated notifications, delays and missed annotated changes.
+Include stationary high/low comfort, sustained recovery, direct opposite-state
+transitions, latch behavior, boundary equality, both directions, high baselines, stale gaps,
+restarts, queued/rejected dispatch and cooldown in offline replay. Inspect
+results by metric/device, then tune deliberately with recorded evidence. Do not
+create smoke, aerosol or breath challenges for this validation plan; passive
+replay assesses notification behavior, not sensor accuracy or medical safety.
 
 ## Environment skill and well-being use cases
 

@@ -48,6 +48,19 @@ average. `sustained_s` describes consecutive qualifying readings, not a health
 exposure assessment. Missing context does not
 justify invented thresholds, durations, health classifications or user activity.
 
+A normal update can also contain a `comfort` map for sustained room conditions.
+Each metric carries `state` (`high`, `low` or `recovered`), `previous_state`,
+`current`, `current_at`, `threshold`, `sustained_s` and optional `source`.
+An event with `changes: {}` and nonempty `comfort` is a valid sustained-condition
+event, not an initial report or a missing trend. Its per-metric duration is
+evidence of a persistent condition, not an exposure average. Use its measured
+state and the room-comfort reference to choose one useful, short observation
+and at most one action; no numbers, sensor names or spoken tags by default.
+Do not diagnose symptoms, claim WHO/AQI exceedance, or equate `recovered` with
+safe air or the person's recovery. A recovery acknowledgment is useful mainly
+after a relevant concern/action; otherwise silence may be appropriate.
+The OS owns persistence, hysteresis and repeat suppression; do not add timers.
+
 An initial report has `reason: "initial"`, `changes: {}`, and only the metrics
 that have passed OS freshness and warm-up checks. It is either embedded in the
 startup greeting under `[environment:initial]`, or sent after the greeting as
@@ -125,7 +138,7 @@ rules above for any interpretation; hiding the number does not relax them.
 
 1. **Direct room-status question, room-feeling report or follow-up:** read [reference/room-comfort.md](reference/room-comfort.md) and apply its stricter output contract: check relevant fresh data first, then one short casual sentence, no numbers, units, sensor names or tags. It also defines the exact unavailable reply and explicit-number exception. Do not turn the answer into a multi-condition report or advice list. A single snapshot cannot establish a trend or that the whole room is safe.
 2. **Initial report (`reason: "initial"`):** use the supplied snapshot to add at most one short plain-language factual observation supported by the supplied readings; omit numbers by default. In `[environment:initial]` greeting context, preserve the normal greeting and do not create another turn or fetch/wait for sensor data. Without usable greeting context, just greet normally. For a separate initial update, skip a second greeting; a simple observation can be useful even without a change or advice. If delayed data is no longer current, omit it rather than refresh or poll for this startup report. Respect quiet/sleep preferences with `NO_REPLY` for a separate update; in a greeting omit only the environmental sentence. Do not claim improvement, a trend, safety, or health effects from this first snapshot. OS owns one-time delivery and retries; do not schedule another report for missing or warming metrics.
-3. **Automatic changed `[environment:update]`:** use the supplied change facts. A significant change means OS's configurable change policy fired; it is not automatically a harmful level. Consider whether the change merits action using the environmental-care section of `skills/wellbeing/SKILL.md`. If there is no useful new advice, output exactly `NO_REPLY`.
+3. **Automatic changed or sustained-condition `[environment:update]`:** use the supplied `changes` and/or `comfort` facts. A significant change means OS's configurable change policy fired; it is not automatically a harmful level. Consider whether the change merits action using the environmental-care section of `skills/wellbeing/SKILL.md`. If there is no useful new advice, output exactly `NO_REPLY`.
 4. **After an action:** compare a fresh value with an actual earlier, timestamped value in the event or conversation. State the observed direction without claiming causation: “Particles are lower than before.” If there is no comparison point, say that a change cannot yet be established. A later significant-change event may support an update, but no event is a guarantee of scheduled follow-up.
 
 Do not route environmental updates to sensing's camera/presence reaction matrix or guard alerts, even while guard mode is active. No mandatory emotion, servo, light, camera or speech action. An environmental event alone never establishes a person’s presence or authorizes a greeting; startup context only supplements an already requested system greeting. Process only this event; it does not authorize resuming an unrelated task.
