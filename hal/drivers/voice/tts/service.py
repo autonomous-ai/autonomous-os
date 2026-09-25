@@ -694,6 +694,18 @@ class TTSService:
         skips them."""
         return self._realtime_feedback
 
+    def history_completion(self):
+        """Snapshot history before end callbacks can change playback ownership.
+
+        A successful device write is evidence of speech submission, not proof
+        of acoustic playback. Cues use track_playback=False and never count.
+        """
+        if self.native_mode or not self.realtime_feedback or not self.last_spoken_text:
+            return None
+        started = bool(getattr(self, "_audio_written_fired", False))
+        interrupted = started and self._stop_event.is_set()
+        return self.last_spoken_text, started and not interrupted, interrupted
+
     @property
     def realtime_speaking(self) -> bool:
         """The active playback comes from realtime, including native PCM."""

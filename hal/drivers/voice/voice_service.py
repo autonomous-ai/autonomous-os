@@ -312,16 +312,14 @@ class VoiceService:
             original_on_speak_end = tts_service._on_speak_end
 
             def _tts_speak_end_with_realtime_feedback() -> None:
+                # Snapshot before callbacks can change the playback owner/text.
+                completion = tts_service.history_completion()
                 self._wakeword_focus.playback_finished()
                 if original_on_speak_end:
                     original_on_speak_end()
-                if (
-                    hal_config.REALTIME_ENABLED
-                    and tts_service.last_spoken_text
-                    and not tts_service.native_mode
-                    and tts_service.realtime_feedback
-                ):
-                    self.feed_realtime_history(tts_service.last_spoken_text)
+                if hal_config.REALTIME_ENABLED and completion is not None:
+                    text, spoken, interrupted = completion
+                    self.feed_realtime_history(text, spoken=spoken, interrupted=interrupted)
 
             tts_service._on_speak_end = _tts_speak_end_with_realtime_feedback
 
@@ -335,7 +333,8 @@ class VoiceService:
 
             tts_service._on_unspoken_reply = _unspoken_reply_to_realtime
 
-    def feed_realtime_history(self, text: str, spoken: bool = True) -> bool:
+    def feed_realtime_history(self, text: str, spoken: bool = True,
+                              interrupted: bool = False) -> bool:
         """Give the realtime agent a main-agent reply it must stay aware of.
 
         Two callers, one rule: the on_speak_end hook (the reply was played on
@@ -346,7 +345,9 @@ class VoiceService:
         "its spoken reply follows" placeholder and no reply, so the next turn
         reasons from a question it believes went unanswered.
 
-        `spoken` is False for that second caller. The persisted fragment is the
+        `spoken` is also False when HAL completes without writing speech.
+        `interrupted` distinguishes a cancelled partial playback from silence.
+        The persisted fragment is the
         full text either way — it is the processed result, and memory wants all
         of it — but the in-session line is labelled, because [TTS HISTORY]
         exists to stop the model repeating what the USER ALREADY HEARD, and on
@@ -368,9 +369,12 @@ class VoiceService:
         if len(text) > max_hist:
             text = text[:max_hist] + "…"
         marker = "TTS HISTORY" if spoken else "TTS HISTORY, not spoken"
+        if interrupted:
+            marker = "TTS HISTORY, interrupted; only part may have been heard"
         logger.info(
-            "[realtime<-tts] Notifying realtime agent (spoken=%s): %r",
+            "[realtime<-tts] Notifying realtime agent (spoken=%s, interrupted=%s): %r",
             spoken,
+            interrupted,
             text[:100],
         )
         self._realtime.send_text(f"[{marker}] {text}")
