@@ -53,6 +53,10 @@ type Server struct {
 	harnessPreparationMu    sync.Mutex
 	harnessPreparationWaits map[string]*harnessPreparationWait
 	harnessService          *harness.Service
+	harnessResults          *harness.ResultStore
+	harnessResultsMu        sync.Mutex
+	harnessResultWake       chan struct{}
+	harnessResultsPublished map[string]bool
 	harnessSelector         *harnessSelector
 	harnessVoice            *harness.VoiceController
 	harnessVoiceCtx         context.Context
@@ -354,7 +358,10 @@ func (s *Server) Serve(closeFn func()) error {
 		return err
 	}
 	harnessService, harnessErr := harness.NewService("config", harness.Callbacks{
-		OnEvent: s.forwardHarnessEvent,
+		OnEvent:       s.forwardHarnessEvent,
+		BeforeEvent:   s.captureHarnessResult,
+		BeforeRequest: s.reserveHarnessResult,
+		OnReceipt:     s.bindHarnessResultReceipt,
 		OnRevoked: func() {
 			if s.harnessVoice != nil {
 				_, _ = s.harnessVoice.SetMode(eventCtx, false)
@@ -365,6 +372,10 @@ func (s *Server) Serve(closeFn func()) error {
 		slog.Error("harness service initialization failed", "component", "harness", "error", harnessErr)
 	} else {
 		s.harnessService = harnessService
+		if err := s.initializeHarnessResults("config/harness/results.json"); err != nil {
+			slog.Error("Harness result storage unavailable", "error", err)
+		}
+		go s.watchHarnessResults(eventCtx)
 		s.restoreHarnessHistoryReplies()
 		harnessService.Start(eventCtx)
 		s.deviceMQTTHandler.SetHarnessService(harnessService)

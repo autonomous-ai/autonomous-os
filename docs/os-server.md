@@ -1410,7 +1410,7 @@ Records are atomically saved under `local/external-history/` (directory 0700, fi
 
 A send error, missing lifecycle acknowledgement for two minutes while idle, or restart during sending leaves the record `uncertain`. It remains on disk and can still accept a late acknowledgement; it is not blindly replayed because not all runtime transports support idempotent sends. This preserves evidence without promising exactly-once history delivery across an ambiguous crash. If the external result never arrives, its input remains `waiting`; startup does not guess a latest recap for it.
 
-Storage is bounded to 1024 records, 16 KiB input and 64 KiB synchronized output per record. Oversized Harness output is explicitly truncated for history (the original response delivery stays complete). Completed records expire after 30 days and the oldest completed records may be evicted sooner at capacity; unfinished records are never evicted. Duplicate detection applies to retained source/run IDs. A full unfinished queue rejects new direct voice input instead of silently losing history. A persistence failure keeps the final reply route available for a repeated callback/recap recovery. Unreadable journal state fails startup rather than silently resetting it. Already synchronized context is managed by the main runtime, not reloaded wholesale from this journal.
+Storage is bounded to 1024 records, 16 KiB input and 64 KiB synchronized output per record. Oversized Harness output is explicitly truncated for history (the original response delivery stays complete). Completed records expire after 30 days and the oldest completed records may be evicted sooner at capacity; unfinished records are never evicted. Duplicate detection applies to retained source/run IDs. A full unfinished queue rejects new direct voice input instead of silently losing history. A persistence failure keeps the final reply route available for a repeated final-summary callback. Unreadable journal state fails startup rather than silently resetting it. Already synchronized context is managed by the main runtime, not reloaded wholesale from this journal.
 
 Validation: `go test -race ./system/externalhistory`; focused history/observer/Harness tests in `system/server` and `system/server/agent/delivery/http`. Physical voice playback and every runtime's restart correlation still require integration verification.
 
@@ -1520,8 +1520,10 @@ sending. Events match the device run ID and/or key (`payload.idempotencyKey` or
 legacy events require a unique pending route on an agent that has never overlapped.
 Overlap is sticky for that agent for the OS-server process lifetime, including
 future routes after siblings finish. This prevents late ambiguous duplicates from
-completing the wrong turn. Summary `fullText` is preferred; latest-recap fallback
-and bounded `turn.done` recovery are disabled for agents that have overlapped.
+completing the wrong turn. Summary `fullText` is preferred, with legacy `text` supported. Receipt and
+`turn.done` events never fetch recap or trigger final speech. A final summary with
+explicit membership uses the durable grouped-result path; malformed metadata never
+falls back to the legacy matcher.
 
 Concurrent Harness-only voice input waits cancellably for the previous dispatch/
 receipt RPC, not remote terminal completion. Up to 64 unresolved deliveries stay
@@ -1529,7 +1531,9 @@ in RAM; existing `Pending` exposes the oldest, and receipt/resolve advances it.
 New inputs do not overwrite uncertain delivery or blindly resend. Receipt progress
 reports queued separately from delivered/started. The app must carry the existing
 key or matching run ID on overlapping summary/tool/question events; missing
-correlation is ignored. No new wire field is introduced. Local/mock tests cover OS
+correlation is ignored. Group membership is carried in the existing final
+`turn.summary` payload as agreed with Harness, without a separate event, flag,
+capability or version. Local/mock tests cover OS
 behavior, not live app steering or end-to-end overlap. No device deployment is implied.
 
 ### Harness result sound
@@ -1541,3 +1545,19 @@ utterance. It is not a separate gesture sound or model call. Muted/rejected or
 cancelled-before-playback replies have no cue; Web Chat and local OS notices do
 not request one. The cue does not count as the first speech PCM for timing. Both
 OS and HAL need the update; physical listening tests remain required.
+
+### Harness result retrieval
+
+The integration provides strict-loopback `GET /api/harness/results/:id` and
+reserves tracked dispatched inputs by default in `config/harness/results.json`.
+The ID is a local shared-result reference, not an agent or input selector. Results
+are scoped to the saved authenticated pair, retained while offline, and include
+explicit member bindings and speech admission state. HTTP 200 uses the standard
+API envelope; missing results/storage return 404. It never sends work or retries
+speech. See [Harness grouped results](harness.md#grouped-result-storage-and-delivery)
+for durable inbox/outbox behavior and integration-test limitations.
+
+Structured `question.answer` commands are journaled separately from task inputs.
+Their completed/rejected receipts close only the answer command UI, without TTS.
+The explicit original task binding owns the later summary; receipt reconciliation
+uses the original answer key and never resends the command.

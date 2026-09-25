@@ -26,7 +26,7 @@ func (s *Server) observeHarnessExecution(agentID, kind string, frame harness.Fra
 	var outcome, evidence string
 	switch kind {
 	case "turn.done":
-		outcome, evidence = "completed", "harness_turn_done"
+		return // Lifecycle end alone does not establish result membership.
 	case "turn.summary":
 		if strings.TrimSpace(harnessEventText(kind, frame)) == "" {
 			return
