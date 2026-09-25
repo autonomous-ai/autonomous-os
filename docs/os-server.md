@@ -265,7 +265,7 @@ Config field: `guard_mode` in `config/config.json` (bool, default `false`). The 
 | `presence.leave` | Camera (3 consecutive ticks without face) | No | Person left |
 | `light.level` | Camera (mean brightness) | No | Significant ambient light change (>30/255) |
 | `sound` | Mic (RMS energy) | No | Loud noise |
-| `presence.away` | PresenceService (15 min no motion) | No | No one around for 15+ min — device going to sleep |
+| `presence.away` | PresenceService (15 min without motion or voice/touch activity) | No | No one around for 15+ min — device going to sleep |
 | `motion.activity` | MotionPerception (while PRESENT) | No | Activity detected while user is present — emotional actions logged via Mood skill |
 
 **Processing flow:**

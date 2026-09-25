@@ -261,7 +261,7 @@ Config field: `guard_mode` trong `config/config.json` (bool, mặc định `fals
 | `presence.leave` | Camera (3 tick liên tục không thấy mặt) | Không | Người rời đi |
 | `light.level` | Camera (mean brightness) | Không | Ánh sáng môi trường thay đổi đáng kể (>30/255) |
 | `sound` | Mic (RMS energy) | Không | Tiếng động lớn |
-| `presence.away` | PresenceService (15 phút không chuyển động) | Không | Không ai xung quanh 15+ phút — thiết bị đi ngủ |
+| `presence.away` | PresenceService (15 phút không có chuyển động hay hoạt động voice/chạm) | Không | Không ai xung quanh 15+ phút — thiết bị đi ngủ |
 | `motion.activity` | MotionPerception (khi PRESENT) | Không | Phát hiện hoạt động khi user có mặt — emotional actions được ghi qua Mood skill |
 
 **Flow xử lý:**

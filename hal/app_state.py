@@ -996,6 +996,38 @@ def led_should_stay_dark() -> bool:
     return _user_led_state is None and ambient_resting_is_dark()
 
 
+def note_user_activity(source: str):
+    """Tell presence the user is here: a voice turn or a physical gesture.
+
+    Presence otherwise only hears the camera, so a user talking with the camera
+    off or outside the frame timed out to AWAY and the device went to sleep
+    mid-conversation. Never raises: presence is a courtesy to the caller.
+    """
+    svc = sensing_service
+    if svc is None:
+        return
+    try:
+        svc.presence.on_activity(source)
+    except Exception as e:
+        logger.warning("Presence activity (%s) failed: %s", source, e)
+
+
+def note_presence_wake():
+    """Restart the presence countdown when the device wakes from sleep.
+
+    Called from the one place every wake converges (express_emotion), so the
+    web UI, API and agent wakes reset it too, not only a face on camera.
+    Never raises: a presence failure must not break the wake.
+    """
+    svc = sensing_service
+    if svc is None:
+        return
+    try:
+        svc.presence.on_wake()
+    except Exception as e:
+        logger.warning("Presence wake reset failed: %s", e)
+
+
 def _get_current_led_color() -> tuple:
     """Return the current LED color for the speaking wave effect."""
     # Nothing may self-light a dark strip → the wave renders on black

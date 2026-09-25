@@ -113,6 +113,16 @@ class SensingSender:
         if not skip_echo and self.is_echo(message):
             return SendResult()
 
+        # Someone spoke to the device: keep presence from timing out to AWAY
+        # (and the sleep announcement) while the camera cannot see them.
+        if event_type in ("voice", "voice_command", "voice_followup", "voice_agent_handled"):
+            try:
+                from hal import app_state as presence_state
+
+                presence_state.note_user_activity(event_type)
+            except Exception:
+                logger.exception("[voice] presence activity update failed")
+
         payload = {"type": event_type, "message": message}
         # Observational classification only; never replace the routing event.
         if voice_turn_type in ("voice", "voice_command", "voice_followup"):
