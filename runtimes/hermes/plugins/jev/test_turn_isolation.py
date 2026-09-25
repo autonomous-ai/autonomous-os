@@ -101,7 +101,9 @@ class TurnIsolationTest(unittest.TestCase):
         instance, hook = self.make_hook(lambda *args: self.fail("must not call Jev"))
         message = ("[system] The following skills have been updated. Re-read them now — "
                    "files on disk have changed. Follow the updated instructions strictly. "
-                   "Keep your reply under 5 words.\n- skills/openclaw-imports/computer-use/SKILL.md")
+                   "After re-reading, output exactly NO_REPLY and nothing else; "
+                   "do not announce or acknowledge this maintenance update to the user."
+                   "\n- skills/openclaw-imports/computer-use/SKILL.md")
         with patch.object(instance, "catalog", side_effect=AssertionError("must not scan")), \
              patch.object(router, "read_config", side_effect=AssertionError("must not read")):
             for value in (message, "  " + message, message.replace("[system]", "[SYSTEM]")):
