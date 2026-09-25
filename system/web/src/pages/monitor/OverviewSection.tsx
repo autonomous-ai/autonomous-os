@@ -14,6 +14,12 @@ const EMOTION_EMOJI: Record<string, string> = {
 
 type OtaVersions = Record<string, { current?: string; target?: string; update_available?: boolean }>;
 
+// Owned by the monitor, so tab unmounts retain successful metadata snapshots.
+export type OverviewCache = {
+  versions?: OtaVersions;
+  presets?: { emotions: string[]; colors: Record<string, string> };
+};
+
 async function fetchOtaVersions(): Promise<OtaVersions | null> {
   try {
     const response = await fetch(`${API}/system/ota-versions`);
@@ -30,22 +36,27 @@ function rgbToHex(rgb: number[]): string {
   return "#" + rgb.map(c => c.toString(16).padStart(2, "0")).join("");
 }
 
-function useEmotionPresets() {
-  const [emotions, setEmotions] = useState<string[]>([]);
-  const [colors, setColors] = useState<Record<string, string>>({});
+function useEmotionPresets(cache: OverviewCache) {
+  const [emotions, setEmotions] = useState<string[]>(() => cache.presets?.emotions ?? []);
+  const [colors, setColors] = useState<Record<string, string>>(() => cache.presets?.colors ?? {});
   useEffect(() => {
+    let cancelled = false;
     fetch(`${HW}/emotion/presets`)
-      .then(r => r.json())
+      .then(r => { if (!r.ok) throw new Error("Emotion presets unavailable"); return r.json(); })
       .then((data: Record<string, { color: number[]; effect: string; speed: number }>) => {
-        setEmotions(Object.keys(data));
+        if (cancelled) return;
+        const names = Object.keys(data);
         const c: Record<string, string> = {};
         for (const [name, preset] of Object.entries(data)) {
           c[name] = rgbToHex(preset.color);
         }
+        cache.presets = { emotions: names, colors: c };
+        setEmotions(names);
         setColors(c);
       })
       .catch(() => {});
-  }, []);
+    return () => { cancelled = true; };
+  }, [cache]);
   return { emotions, colors };
 }
 import type { SystemInfo, NetworkInfo, HWHealth, OCStatus, PresenceInfo, VoiceStatus, ServoState, DisplayState, AudioVolume, LEDColor, SceneInfo } from "./types";
@@ -54,6 +65,7 @@ import { RestartServiceButton } from "./RestartServiceButton";
 import { formatUptime, formatAgo, useCountUp } from "./utils";
 
 export function OverviewSection({
+  cache,
   sys,
   net,
   hw,
@@ -80,6 +92,7 @@ export function OverviewSection({
   onServoPlay,
   onServoRelease,
 }: {
+  cache: OverviewCache;
   sys: SystemInfo | null;
   net: NetworkInfo | null;
   hw: HWHealth | null;
@@ -112,7 +125,7 @@ export function OverviewSection({
   onServoPlay: (recording: string) => void;
   onServoRelease: () => void;
 }) {
-  const { emotions: ALL_EMOTIONS, colors: EMOTION_COLOR } = useEmotionPresets();
+  const { emotions: ALL_EMOTIONS, colors: EMOTION_COLOR } = useEmotionPresets(cache);
   const emotion = oc?.emotion ?? "";
   const emotionColor = EMOTION_COLOR[emotion] ?? "var(--lm-text-muted)";
   const emotionEmoji = EMOTION_EMOJI[emotion] ?? "✦";
@@ -123,19 +136,22 @@ export function OverviewSection({
   const isDebug = new URLSearchParams(window.location.search).get("debug") === "true";
 
   // Show published versions in normal mode; only update actions require debug.
-  const [otaVersions, setOtaVersions] = useState<OtaVersions>({});
+  const [otaVersions, setOtaVersions] = useState<OtaVersions>(() => cache.versions ?? {});
   const refreshOtaVersions = useCallback(() => {
     void fetchOtaVersions().then((versions) => {
-      if (versions) setOtaVersions(versions);
+      if (versions) { cache.versions = versions; setOtaVersions(versions); }
     });
-  }, []);
+  }, [cache]);
   useEffect(() => {
     let cancelled = false;
     fetchOtaVersions().then((versions) => {
-      if (!cancelled && versions) setOtaVersions(versions);
+      if (!cancelled && versions) {
+        cache.versions = versions;
+        setOtaVersions(versions);
+      }
     });
     return () => { cancelled = true; };
-  }, []);
+  }, [cache]);
   // held_by_floor is deliberately NOT consulted: that floor stages the
   // automatic fleet rollout, while this button installs the published version
   // on this one device — the same thing `software-update <key>` over SSH has
