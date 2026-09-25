@@ -49,7 +49,9 @@ speaker embedding. `/emotion-recognize` accepts `raw: true`, which returns the
 ungated argmax and every class probability; HAL uses it and applies the
 per-label gate on the device. Face and person detection run internally to feed
 those pipelines. Requests from concurrent sessions are batched before GPU dispatch —
-tune `BATCH_SIZE` and `BATCH_TIMEOUT` per model. Model choices and outputs:
+tune `BATCH_SIZE` and `BATCH_TIMEOUT` per model. SER input is bounded to 2–8 s
+at batch 1 server-side, which stays inside the cached TensorRT engine's shape
+range, so no clip length can trigger an engine rebuild during a request. Model choices and outputs:
 [`integrations/perception-service/docs/perceptions.md`](../integrations/perception-service/docs/perceptions.md).
 
 ## Using it from a device

@@ -109,6 +109,12 @@ Classifies emotion from a speech waveform (independent of any transcript).
   Defaults: **high-pass and denoise are OFF** (they reshape the spectrum in ways CMN
   cannot cancel, diverging from the WeSpeaker reference); mono, resample, VAD and
   RMS-normalize are ON.
+- Input is bounded to **2–8 s** (`MIN_AUDIO_S` / `MAX_AUDIO_S` in `predictors/base.py`,
+  applied by `length.fit_length`), and inference runs at **batch 1**. Every request
+  therefore reaches TensorRT as `audio: 1 × 32000…128000`, inside the cached engine's
+  shape range (prod: batch 1–4 × 32000–549120), so no request can trigger an
+  in-request engine rebuild (#492). Warmup runs at both ends (2 s and 8 s), so on a
+  host without a cached engine the build happens at startup, before traffic.
 
 ## 5. Object detection
 
