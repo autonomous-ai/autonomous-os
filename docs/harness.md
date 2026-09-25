@@ -384,16 +384,21 @@ pair (including while offline). Unpairing removes retrieval access to the old pa
 A missing store/result returns 404; this endpoint does not execute work or play audio.
 The main-runtime history receives shared-result references, while the short follow-up
 context retains the full answer with `agentId`, `resultId` and plural `responseRunIds`.
-Live chat shows the answer once and references for sibling inputs. Receipt updates
+Live chat shows the answer once on the newest member input and references for sibling inputs. Receipt updates
 and `turn.done` do not complete or speak a result. Final summaries with membership
 are validated atomically; metadata-free single summaries retain the legacy safe matcher. Structured questions remain pending and
 use their question ID for in-process duplicate suppression. These question notices
 are separate from the durable final-result outbox.
 
 The outbox claim precedes both final UI notification and HAL submission. Current
-voice mode/generation, focus and per-member cancellation are checked at admission;
-HAL then owns playback under the first member's turn ID. Cancellation after admission
-continues to follow HAL's existing ownership rules. No end-to-end playback receipt
+voice mode/generation and focus are checked at admission. The newest member input
+owns the full displayed answer and HAL playback; device run timestamps determine
+that order, with registration time as the fallback/tie-breaker. Membership order
+from the producer is not speech priority. Cancellation is checked against that
+newest owner: stopping A before submitting B must not mute a shared A/B answer,
+whereas stopping after B still suppresses it. Eligibility checks for every member
+(web/local/restored/expired routes) and result deduplication remain in force.
+Cancellation after admission continues to follow HAL's existing ownership rules. No end-to-end playback receipt
 exists yet: HTTP acceptance must not be described as hearing the answer.
 
 The producer handoff was checked against OpenHarness PR #336 at
