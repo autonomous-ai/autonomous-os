@@ -113,7 +113,7 @@ checkpoint override and threshold(s).
 | `SER__ENABLED` | `true` | Enable speech emotion |
 | `SER__MODEL` | `emotion2vec` | SER engine |
 | `SER__CKPT_PATH`, `SER__LABELS_PATH` | _(auto)_ | Overrides |
-| `SER__BATCH_SIZE` | `1` | Max items per GPU batch |
+| `SER__BATCH_SIZE` | `1` | Max items per GPU batch — **clamped to 1** by the recognizer (batched audio is zero-padded to the longest clip) |
 | `SER__BATCH_TIMEOUT` | `0.1` | Seconds to wait for batch to fill |
 | `POSE__ENABLED` | `true` | Enable pose estimation |
 | `POSE__MODEL` | `rtmpose` | 2D estimator |
@@ -149,7 +149,9 @@ them to the GPU predictor in batches. Two knobs per model:
 | `BATCH_TIMEOUT` | Max seconds to wait for the batch to fill before dispatching what's available. Lower = less latency under light load. |
 
 Both default to `1` / `0.1` when omitted. The predictor's ONNX warmup runs at
-`BATCH_SIZE` so TensorRT pre-allocates the right amount of VRAM.
+`BATCH_SIZE` so TensorRT pre-allocates the right amount of VRAM. SER is the
+exception: it warms up at batch 1 with two shapes (2 s and 8 s), the two ends of
+its input bound (`MIN_AUDIO_S`/`MAX_AUDIO_S`), not `SER__BATCH_SIZE`.
 
 Requests with different kwargs (e.g. different `classes` for object detection)
 are automatically grouped into separate sub-batches.
@@ -160,7 +162,7 @@ Recommended values for an RTX A5000 (24 GB) with all models loaded:
 |-------|-------------|-----------------|--------|
 | UniformerV2 (action) | 1 | 0.05 | ~3 GB model, large temporal activations |
 | PosterV2 (FER) | 8 | 0.05 | ~50 MB model, small 224×224 input |
-| emotion2vec (SER) | 4 | 0.05 | ~300 MB model, variable-length audio |
+| emotion2vec (SER) | 1 (forced) | 0.05 | ~300 MB model, audio bounded to 2–8 s |
 | RTMPose (pose) | 8 | 0.05 | ~30 MB model, small 256×192 input |
 | YOLO person | 2 | 0.05 | ~200 MB model, 640×640 input |
 | ECAPA-TDNN (audio) | 8 | 0.05 | ~50 MB model, small mel input |
