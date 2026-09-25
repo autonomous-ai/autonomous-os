@@ -468,6 +468,8 @@ one column below 760px.
 - Revoking a pairing requires confirmation and calls `DELETE /api/buddy`.
 
 **Harness pairing**
+- The connection badge shows **CONNECTED** only for a successful live status read, **OFFLINE** for a saved pairing without a connection, and **STATUS UNAVAILABLE** when polling fails. Saved pairing is explained separately; it does not establish that the computer is online. Offline guidance explains that new requests cannot reach the computer and that offline alone does not require pairing again.
+
 - **Generate pairing code** calls admin-authenticated `POST /api/harness/pair` with no
   computer selection. The OS generates a six-character code valid for 60 seconds.
 - On the same local network, open Harness Desktop → Settings → Devices, select this
