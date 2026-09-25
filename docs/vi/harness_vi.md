@@ -2,7 +2,7 @@
 
 `system/harness` nối trực tiếp một thiết bị Autonomous với một máy tính Harness đã ghép đôi rõ ràng. Harness Desktop/CLI tìm thiết bị qua dịch vụ mDNS `_autonomous._tcp` đã có, cũng được Autonomous Buddy sử dụng. Harness giữ khóa riêng và dùng giao thức pairing/phiên gốc của `E2eeManager`. Code và khóa Buddy độc lập.
 
-Với lượt main agent giao qua skill, OS thêm câu dẫn theo ngôn ngữ vào kết quả cuối trên UI/TTS (ví dụ “Harness trả lời:”). Nguồn lượt được ghi nhận lúc dispatch, nên đổi voice mode trong khi chờ không thay đổi cách thông báo. Kết quả voice trực tiếp trong Harness-only mode giữ nguyên. Nội dung gốc trong external history và context follow-up không bị thêm câu dẫn; không tạo thêm lượt model.
+Kết quả voice Harness dùng giọng TTS hiện có, phát âm báo kết quả ngắn 200 ms trước lời nói thay cho tiền tố giới thiệu nguồn. Áp dụng cả lượt giao qua skill và Harness-only. Kết quả web không phát âm, giữ metadata `source:harness`; nội dung hiển thị, external history và context follow-up giữ nguyên câu trả lời. Event final lặp không tạo playback lần nữa. Thông báo lỗi/kết nối cục bộ của OS không dùng âm báo kết quả từ xa. Âm thuộc cùng lượt phát đã được chấp nhận, tuân thủ mute/hủy và khác âm bắt đầu/kết thúc thu giọng; không thêm lượt model hay giọng TTS riêng. Triển khai OS và HAL cùng nhau để hỗ trợ cờ speak tùy chọn `harness_result`. Test audio local không xác nhận độ lớn cảm nhận trên loa thật.
 
 Tải Harness và xem hướng dẫn cài đặt tại [OpenHarness](https://github.com/autonomous-ai/openharness).
 

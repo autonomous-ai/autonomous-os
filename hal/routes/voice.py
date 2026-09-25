@@ -300,6 +300,8 @@ def get_voices(provider: Optional[str] = None, lang: Optional[str] = None):
 @router.post("/voice/speak", response_model=StatusResponse)
 def speak_text(req: SpeakRequest):
     """Synthesize text to speech and play through the speaker."""
+    if req.harness_result and (req.cached or req.prerender):
+        raise HTTPException(400, "Harness result cue requires uncached speech")
     if req.speed is not None and (req.cached or req.prerender):
         raise HTTPException(400, "Speed preview requires uncached speech")
     if not state.tts_service:
@@ -401,6 +403,7 @@ def speak_text(req: SpeakRequest):
         realtime_feedback=req.realtime_feedback,
         turn_id=req.turn_id,
         **({"speed": req.speed} if req.speed is not None else {}),
+        **({"harness_result": True} if req.harness_result else {}),
     )
     if not started:
         raise HTTPException(409, "TTS is busy speaking")
