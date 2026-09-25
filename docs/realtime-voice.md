@@ -128,6 +128,8 @@ transcription accuracy or prevent all hallucinated history entries.
 
 Gemini also distinguishes an isolated form of address (for example Vietnamese “anh”, “chị”, “em”) from a clear call to the device. Without a request, a clear summons or relevance to a pending question, it should reject silently instead of inventing an “I’m listening” greeting, emotion or completion call. Short commands and contextual answers remain valid, including the same word when it answers the device’s question. The final Gemini routing reminder repeats this rule after memory context. This is a prompt policy, not a deterministic blacklist or a guarantee of model compliance.
 
+The address rule also prohibits inferring an identity/address correction or remembered preference from an isolated title solely because of earlier assistant wording or an interruption. Explicit corrections and answers to an immediately pending address question remain valid. This targets the observed “Chị” → apology/“I remember” misinterpretation; local prompt inspection does not establish model compliance, which still requires real-session evaluation.
+
 Lamp's `robots/lamp/SOUL.md` applies the same addressed-speech prerequisite to
 main-agent voice and `[ambient]` messages. Overheard speech or an unclear
 addressee requires exactly `NO_REPLY`, without tool calls or physical/emotional
