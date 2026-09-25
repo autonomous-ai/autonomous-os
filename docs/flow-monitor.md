@@ -554,3 +554,16 @@ Observed `agent.prepare` / `operation.get` snapshots record `harness_store_progr
 ### Harness preparation wait expiry
 
 `harness_preparation_wait_expired` records a local response deadline, with `task_dispatched:false`; it is not a remote operation failure or task result. Native Hermes ends the scoped owner through the normal `lifecycle_error` path after bounded cancellation. Errors prefixed `OS_RUN_EXPIRED:` bypass partial-answer recovery so a timed-out wait cannot be displayed as a recovered success. Preparation progress suppresses repeated identical snapshots per active run/operation and separates changed messages with paragraph breaks.
+
+### Main-agent TTS timing diagnostics
+
+OS-server service logs include `[tts-timing]` markers for both progressive replies and final TTS delivery. These are diagnostic logs, not new Flow Monitor events or acknowledgement KPI endpoints:
+
+- `sentence_ready`: `first_delta_to_ready_ms` measures the first non-empty assistant delta received by OS-server to a speakable first sentence. This includes sentence buffering and existing safety gates, not model time before the first delta.
+- `sentence_dispatch`: `ready_to_dispatch_ms` includes leading hardware calls and filler cancellation before TTS dispatch.
+- `delivery_start` / `delivery_complete`: `dispatch_to_send_ms`, `send_ms`, and `dispatch_to_complete_ms` separate background scheduling from the runtime delivery call.
+- `hal_post_start` / `hal_post_complete`: `http_ms` measures the actual HAL HTTP request through response parsing. `success` means the call returned without an error (including the existing muted-response check), not that audio was heard.
+
+Markers contain `run_id` and a 12-hex-character SHA-256 `text_key`, without repeating reply text or credentials. The handler hash identifies text before runtime sanitization; the HAL POST hash identifies the final payload and can be correlated with HAL `queue_requested` for unchanged text. If a runtime strips markdown or tags, use the final POST hash for that correlation. Legacy unowned speech may have an empty run ID. First-sentence timing is absent when streaming is ineligible or no complete safe sentence appears before the final flush. Runtime ownership/silence gates and TTS buffering are unchanged.
+
+`assistant_end` and the existing `agent_last_token` event also carry `first_delta_to_end_ms` when a first-delta timestamp is known. This covers final-only replies and measures the entire assistant output interval even when sentence 1 streamed early. `final_dispatch` records `end_to_buffer_ready_ms` and `buffer_ready_to_dispatch_ms`, with `streamed_len` indicating whether this is the remainder. “Buffer ready” means the raw final assistant buffer was extracted; the following interval includes sanitization, hardware calls and routing checks. The dispatch marker is emitted only on the actual TTS delivery path, never for suppressed or empty replies. Unknown first-delta timing is omitted, not replaced with zero.

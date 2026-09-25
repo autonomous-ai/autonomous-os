@@ -409,3 +409,22 @@ def test_pending_audio_ownership_survives_queue_pop_before_first_frame():
     speaker._drain_pending_queue(object())
     assert observed == [True]
     assert not speaker.has_pending_speech("run:waiting")
+
+
+def test_live_bundled_sentence_starts_before_next_delta(monkeypatch, kpi):
+    from unittest.mock import Mock
+    monkeypatch.setattr(config, 'REALTIME_FIRST_CHUNK_MAX_CHARS', 0)
+    tts = Mock(speaking=False)
+
+    def assert_first_already_sent():
+        tts.speak_queue.assert_called_once()
+        assert tts.speak_queue.call_args.args == ('I am right here.',)
+
+    outputs = [UserSpeechOutput(turn_id='u-prefix'),
+               TextOutput(text='I am right here. Let me', user_turn_id='u-prefix'),
+               assert_first_already_sent,
+               TextOutput(text=' help you.', user_turn_id='u-prefix')]
+    _pump(monkeypatch, kpi, [(outputs, 'u-prefix', True)], tts=tts,
+          strip_markers=VoiceService.strip_rt_markers)
+    assert [call.args[0] for call in tts.speak_queue.call_args_list] == [
+        'I am right here.', 'Let me help you.']

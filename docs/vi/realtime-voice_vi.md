@@ -886,6 +886,8 @@ theo chính sách tốc độ cũ. Thay đổi này điều chỉnh thời lư�
 thời gian chờ byte đầu tiên (TTFB) từ provider. Các backend TTS khác giữ nguyên
 hành vi tốc độ hiện có.
 
+Phát text realtime (cả turn mode và LIVE, không phụ thuộc provider) gửi câu hoàn chỉnh ngay cả khi cùng delta đã chứa đầu câu tiếp theo chưa xong. Phần đuôi được giữ nguyên để ghép tiếp; tag chưa đóng, dấu chấm trong số và viết tắt phổ biến vẫn được giữ thận trọng. Luồng phát buffer hoàn chỉnh, native audio, điều kiện hoàn tất/delegate và cancel không đổi. `[tts-timing] stage=realtime_first_text` đánh dấu text đầu tiên tới đường playback; đối chiếu owner với `speak_requested`/`queue_requested` và timing HTTP để tách thời gian giữ text khỏi tổng hợp giọng.
+
 Log TTS `[tts-timing]` ghi lúc nhận yêu cầu/queue, worker phát, bắt đầu HTTP,
 headers/byte giải mã đầu tiên, buffer 4096 byte đầu, đầu ra tempo đầu tiên và
 lần ghi loa đầu hoàn tất. `request` riêng cho từng HTTP phân biệt các lần tải

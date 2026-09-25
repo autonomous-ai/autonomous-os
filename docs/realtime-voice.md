@@ -918,6 +918,8 @@ audio is not reused under this speed policy. This changes playback duration;
 it does not reduce provider time to first byte (TTFB). Other TTS backends keep
 their existing speed behavior.
 
+Realtime text playback (turn mode and LIVE, regardless of provider) releases a complete sentence even when the same text delta also starts an unfinished next sentence. The exact unfinished tail stays buffered; partial tags, numeric periods and common abbreviations are held conservatively. Existing complete-buffer playback, native audio, provider completion/delegation and cancellation gates remain unchanged. `[tts-timing] stage=realtime_first_text` marks the first text received by the playback path; compare its owner with `speak_requested`/`queue_requested` and HTTP timing to isolate text buffering from synthesis latency.
+
 TTS diagnostics use `[tts-timing]`: request/queue admission, playback worker,
 HTTP start/headers/first decoded bytes, first 4096-byte buffer, first tempo
 output, and first completed speaker write. A per-HTTP `request` ID separates
