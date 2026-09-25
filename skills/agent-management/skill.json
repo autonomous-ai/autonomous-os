@@ -1,0 +1,4 @@
+{
+  "disabled": true,
+  "note": "Disabled with the hidden Buddy Agent Manager UI (#414). Remove this flag and run `make skills-catalog` to ship it again."
+}

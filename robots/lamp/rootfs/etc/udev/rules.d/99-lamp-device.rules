@@ -1,0 +1,36 @@
+# Lamp udev roles. Tracked source: robots/lamp/rootfs/etc/udev/rules.d/, installed
+# onto / at image build and on every device-profile OTA — edit HERE, not on the
+# device, or the next OTA overwrites the hand edit.
+#
+# Every rule maps a vid:pid to a ROLE name (device-camera, device_speaker, ...)
+# that /etc/asound.conf and /opt/hal/.env refer to, so a hardware swap is one
+# line here and nothing else. Several vid:pid may fill the same role; only the
+# one actually plugged in wins.
+
+# Camera role -> /dev/device-camera (HAL_CAMERA_NAME). index==0 picks the capture
+# node, not the UVC metadata sibling.
+# SunplusIT OPENAICAM (also exposes a built-in mic, device_micro3)
+SUBSYSTEM=="video4linux", ATTRS{idVendor}=="1bcf", ATTRS{idProduct}=="28cc", ATTR{index}=="0", SYMLINK+="device-camera"
+SUBSYSTEM=="sound", ACTION=="change", ATTRS{idVendor}=="1bcf", ATTRS{idProduct}=="28cc", ATTR{id}="device_micro3"
+# ZVCAI USB_Camera (current fit on lamp-ac82 / lamp-4ace / lamp-dbda, 2026-09)
+SUBSYSTEM=="video4linux", ATTRS{idVendor}=="01da", ATTRS{idProduct}=="5875", ATTR{index}=="0", SYMLINK+="device-camera"
+# ZVCAI USB_Camera (current standard fit, seen on lamp-ac82/4ace/dbda 2026-09)
+SUBSYSTEM=="video4linux", ATTRS{idVendor}=="01da", ATTRS{idProduct}=="5875", ATTR{index}=="0", SYMLINK+="device-camera"
+
+# Servo driver: QinHeng CH340 -> /dev/device-servo
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d3", SYMLINK+="device-servo"
+
+# Voice mic: Jieli Technology -> ALSA card device_micro2
+SUBSYSTEM=="sound", ACTION=="change", ATTRS{idVendor}=="4c4a", ATTRS{idProduct}=="4155", ATTR{id}="device_micro2"
+
+# Speaker: TTGK Technology -> ALSA card device_speaker
+SUBSYSTEM=="sound", ACTION=="change", ATTRS{idVendor}=="3302", ATTRS{idProduct}=="1292", ATTR{id}="device_speaker"
+
+# C-Media Audio Adapter (Unitek Y-247A) -> ALSA card device_cmedia. One card,
+# two roles: its capture side is the sensing mic (alias device_micro1) and its
+# playback side is the speaker (alias device_speaker) — both in /etc/asound.conf.
+# A card gets exactly one udev id, so the id is the HARDWARE, aliases are ROLES.
+SUBSYSTEM=="sound", ACTION=="change", ATTRS{idVendor}=="0d8c", ATTRS{idProduct}=="0014", ATTR{id}="device_cmedia"
+# When its control node appears, pin the hardware level and create the softvol
+# "Speaker" control (see /etc/asound.conf) before hal.service restores volume.
+SUBSYSTEM=="sound", ACTION=="add", KERNEL=="controlC*", ATTRS{idVendor}=="0d8c", ATTRS{idProduct}=="0014", TAG+="systemd", ENV{SYSTEMD_WANTS}+="lamp-cmedia-speaker.service"

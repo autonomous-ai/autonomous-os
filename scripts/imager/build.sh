@@ -42,7 +42,7 @@
 #         - Verify btrfs binary works (shared libs check)
 #         - Generate locale
 #         - stage_rpi5_wifi_stability: disable IPv6 (legacy RPi 5 workaround)
-#         - stage_enable_spi: dtparam=spi=on in config.txt
+#         - stage_enable_spi: dtparam=spi=on + dtparam=i2c_arm=on in config.txt
 #         - stage_backend_units: systemd services (bootstrap, os-server, hal) + software-update
 #         - stage_pulseaudio: PulseAudio echo cancellation (WebRTC AEC for mic/speaker)
 #         - stage_hal_uv: install uv (Python package manager for HAL)
@@ -151,6 +151,12 @@ DEVICES_DIR="${DEVICES_DIR:-/opt/devices}"
 # seeding falls through to ROBOT.md gateway.default exactly as before.
 # Mirrors build-orangepi.sh; forwarded by the Makefile (-e) for both targets.
 DEFAULT_AGENT="${DEFAULT_AGENT:-}"
+# Optional assembly within the device package; empty/standard keeps legacy defaults.
+VARIANT="${VARIANT:-}"
+if [[ -n "$VARIANT" && ! "$VARIANT" =~ ^[a-z][a-z0-9_-]{0,63}$ ]]; then
+  echo "Invalid VARIANT: expected a lowercase name (1-64 characters)" >&2
+  exit 1
+fi
 AP_BAND="${AP_BAND:-2.4}"   # 2.4 or 5 (5 GHz needs supported regulatory domain + chip)
 AP_CHANNEL="${AP_CHANNEL:-}" # default: 6 for 2.4 GHz, 36 for 5 GHz
 COUNTRY_CODE="US"           # Regulatory country code for hostapd
@@ -834,19 +840,21 @@ EOF
 sysctl -p /etc/sysctl.d/99-${DEVICE_TYPE}-wifi.conf 2>/dev/null || true
 fi
 
-# ── stage: SPI ────────────────────────────────────────────────────────────────
-# Enable the SPI bus in firmware config for hardware peripherals.
-# Checks if dtparam=spi=on is already present (commented or not) before adding.
-echo "[stage] Enable SPI"
+# ── stage: SPI + I2C ──────────────────────────────────────────────────────────
+# Enable the SPI and I2C buses in firmware config for hardware peripherals.
+# Checks if each dtparam is already present (commented or not) before adding.
+echo "[stage] Enable SPI + I2C"
 CFG=""
 [ -f /boot/firmware/config.txt ] && CFG=/boot/firmware/config.txt
 [ -z "\$CFG" ] && [ -f /boot/config.txt ] && CFG=/boot/config.txt
 if [ -n "\$CFG" ]; then
-  if grep -qE '^\s*#?\s*dtparam=spi=on' "\$CFG" 2>/dev/null; then
-    sed -i -E 's/^\s*#\s*(dtparam=spi=on)/\1/' "\$CFG" || true
-  else
-    printf '\n# SPI enabled by lamp build\ndtparam=spi=on\n' >> "\$CFG"
-  fi
+  for param in spi=on i2c_arm=on; do
+    if grep -qE "^\s*#?\s*dtparam=\$param" "\$CFG" 2>/dev/null; then
+      sed -i -E "s/^\s*#\s*(dtparam=\$param)/\1/" "\$CFG" || true
+    else
+      printf '\n# enabled by lamp build\ndtparam=%s\n' "\$param" >> "\$CFG"
+    fi
+  done
 fi
 
 # NOTE: OTA metadata fetch, backend binary downloads, and web UI download
@@ -1967,6 +1975,7 @@ trap 'echo "OVERLAY ERROR: command failed at line \$LINENO (exit code \$?): \$BA
 export DEBIAN_FRONTEND=noninteractive
 export OTA_METADATA_URL="${OTA_METADATA_URL}"
 export DEVICE_TYPE="${DEVICE_TYPE}"
+export VARIANT="${VARIANT}"
 export DEVICES_DIR="${DEVICES_DIR}"
 export DEFAULT_AGENT="${DEFAULT_AGENT}"
 
@@ -2068,8 +2077,11 @@ if [ -n "\$HAL_URL" ]; then
   find /root/.cache/uv -name 'lerobot.egg-info' -type d 2>/dev/null | xargs -r rm -rf || true
   rm -rf "\$HAL_DIR/.venv"
   cd "\$HAL_DIR"
-  echo "[overlay] HAL: running uv sync --python 3.12 --extra hardware --extra aec"
-  uv sync --python 3.12 --extra hardware --extra aec 2>&1 || {
+  # Use the release lock when available; keep legacy archives installable.
+  HAL_LOCK_ARG=""
+  [ ! -f uv.lock ] || HAL_LOCK_ARG="--locked"
+  echo "[overlay] HAL: running uv sync --python 3.12 --extra hardware --extra aec --extra pipecat"
+  uv sync --python 3.12 --extra hardware --extra aec --extra pipecat \$HAL_LOCK_ARG 2>&1 || {
     echo "ERROR: uv sync failed (exit code \$?)"
     echo "[overlay] HAL: uv version: \$(uv --version 2>&1 || echo unknown)"
     echo "[overlay] HAL: python check: \$(python3 --version 2>&1 || echo not found)"
@@ -2137,6 +2149,17 @@ if [ -n "\${DEVICES_URL:-}" ]; then
   unzip -o -q /tmp/device.zip -d "\$DEVICE_DEST"
   rm -f /tmp/device.zip
   echo "[overlay] Device profile '\$DEVICE_TYPE' installed at \$DEVICE_DEST"
+  # Bake the selection in the overlay, never in the reusable base image.
+  if [ -n "\$VARIANT" ] && [ "\$VARIANT" != standard ]; then
+    mkdir -p /etc/autonomous
+    printf '%s\n' "\$VARIANT" > /etc/autonomous/hardware-profile
+    [ -f "\$DEVICE_DEST/apply-overrides.py" ] \
+      || { echo "[overlay] ERROR: Hardware overrides require an override-capable device package" >&2; exit 1; }
+    python3 "\$DEVICE_DEST/apply-overrides.py" --profile "\$DEVICE_DEST" --root / \
+      || { echo "[overlay] ERROR: Hardware override configuration failed" >&2; exit 1; }
+  else
+    rm -f /etc/autonomous/hardware-profile
+  fi
   # Device rootfs overlay: robots/<type>/rootfs/ mirrors the target filesystem,
   # so copying it onto / lands each file at its real path. This is where the
   # device's HAL tuning lives (/opt/hal/.env — ALSA device names, VAD/camera

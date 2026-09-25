@@ -525,6 +525,16 @@ const (
 	KindSystemReboot   = "system.reboot"   // cue-aware OS reboot via HAL
 	KindSystemShutdown = "system.shutdown" // cue- and servo-aware OS shutdown via HAL
 
+	// KindSystemOTAVersions reports per-component current vs published versions
+	// plus what bootstrap is installing right now — the cloud twin of the web
+	// Versions card (GET /api/system/ota-versions + /ota-updating).
+	KindSystemOTAVersions = "system.ota_versions"
+	// KindSystemSoftwareUpdate force-updates one component. Data:
+	// MQTTSoftwareUpdateData. The cloud twin of
+	// POST /api/system/software-update/:target; replies "success" (started)
+	// immediately, then publishes an unsolicited completion report.
+	KindSystemSoftwareUpdate = "system.software_update"
+
 	// KindSkillsInstall installs a role's skill bundle. Data: {"role":"<role>"}.
 	KindSkillsInstall = "skills.install"
 
@@ -883,6 +893,16 @@ type MQTTInfoResponse struct {
 	// drift). Populated only by handleInfo; omitempty keeps it out of the `data`
 	// replies that embed this struct.
 	Skills []SkillSummary `json:"skills,omitempty"`
+	// SchedulesDigest fingerprints the scheduled-task rows this device holds
+	// (schedule.Digest: "v1:" + sha256 over each row's id|rev|requires). The
+	// backend compares it with the same digest over its own rows and forces a
+	// full schedule.sync when they differ — the only way a device that was
+	// reset, lost schedules.json, or was swapped under the same record gets its
+	// schedules back, since schedule.sync is otherwise sent only on edits.
+	// Populated only by handleInfo, and omitted when the store cannot be read
+	// (never "no schedules" by mistake); omitempty keeps it out of the `data`
+	// replies that embed this struct, and old firmware never sends it.
+	SchedulesDigest string `json:"schedules_digest,omitempty"`
 }
 
 // NewDeviceMessage creates a base message with required fields populated from config.
@@ -1107,6 +1127,13 @@ type MQTTSkillsInstallData struct {
 	Role string `json:"role"`
 }
 
+// MQTTSoftwareUpdateData is the data block of system.software_update. Target is
+// one of os-server | bootstrap | web | hal | device | <agent CLI key> | agent
+// ("agent" resolves to the configured runtime's CLI).
+type MQTTSoftwareUpdateData struct {
+	Target string `json:"target"`
+}
+
 // MQTTSkillsSaveData is the Data payload for kind:"skills.save" — an authored
 // skill pushed from the backend instead of the web UI's form. Same three fields
 // as SkillDraft (which this maps onto); Name must be a slug matching
@@ -1324,12 +1351,15 @@ type MQTTTTSSetAck struct {
 // `realtime.set` downlink (data block) and the HTTP UpdateConfig `realtime` field.
 type RealtimeSetData struct {
 	Enabled   *bool  `json:"enabled,omitempty"`   // nil = leave unchanged
-	Provider  string `json:"provider,omitempty"`  // gemini | openai | none
+	Provider  string `json:"provider,omitempty"`  // gemini | openai | gptlive | pipecat_v1 | none
 	Model     string `json:"model,omitempty"`     // active provider's model
 	Voice     string `json:"voice,omitempty"`     // active provider's voice
-	Reasoning string `json:"reasoning,omitempty"` // gemini thinking_level OR openai reasoning_effort
+	Reasoning string `json:"reasoning,omitempty"` // gemini thinking_level OR openai reasoning_effort (gptlive / pipecat_v1: none)
 	APIKey    string `json:"api_key,omitempty"`   // optional override; empty → llm_api_key
 	BaseURL   string `json:"base_url,omitempty"`  // optional override; empty → llm_base_url-derived
+	// WebSearch toggles the in-session `web_search` tool (pipecat_v1 only —
+	// rejected for any other provider). nil = leave unchanged.
+	WebSearch *bool `json:"web_search,omitempty"`
 }
 
 // MQTTRealtimeSetCommand wraps the full realtime.set downlink envelope for unmarshalling.
@@ -1469,13 +1499,15 @@ type AgentRuntimeSetAck struct {
 }
 
 // MQTTTTSPreviewData is the nested data payload for cmd:"data", kind:"tts.preview".
-// Text is required; Provider/Voice/Language are optional overrides — empty
+// Text is required; Speed is an optional per-utterance rate (0.25–4.0).
+// Provider/Voice/Language are optional overrides — empty
 // fields make HAL fall back to the device's current TTS config.
 type MQTTTTSPreviewData struct {
-	Text     string `json:"text"`
-	Provider string `json:"provider,omitempty"`
-	Voice    string `json:"voice,omitempty"`
-	Language string `json:"language,omitempty"`
+	Speed    *float64 `json:"speed,omitempty"`
+	Text     string   `json:"text"`
+	Provider string   `json:"provider,omitempty"`
+	Voice    string   `json:"voice,omitempty"`
+	Language string   `json:"language,omitempty"`
 }
 
 // MQTTTTSPreviewCommand wraps the full tts.preview downlink envelope for unmarshalling.
@@ -1508,6 +1540,9 @@ type RealtimePublic struct {
 	Reasoning string `json:"reasoning"`
 	BaseURL   string `json:"base_url"` // resolved (may be llm-derived)
 	HasAPIKey bool   `json:"has_api_key"`
+	// WebSearch is the resolved in-session web-search toggle: present only for
+	// pipecat_v1 (the provider that has the knob), omitted otherwise.
+	WebSearch *bool `json:"web_search,omitempty"`
 }
 
 type ConfigPublicResponse struct {

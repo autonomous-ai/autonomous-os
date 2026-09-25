@@ -1,4 +1,4 @@
-"""Reference filter reuse preserves the existing PCM and playback input."""
+"""AEC reference timing and waveform must not depend on speaker write sizes."""
 
 from math import gcd
 from types import SimpleNamespace
@@ -35,12 +35,55 @@ def test_cached_filter_matches_default_exactly(src_rate, frame_count, monkeypatc
     monkeypatch.setattr(aec, "_reference", reference)
     monkeypatch.setattr(aec, "_canceller", SimpleNamespace(_rate=dst_rate))
     aec.reference_write(samples.reshape(-1, 1), src_rate)
-    expected_pcm = (np.clip(expected, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
+    causal = scipy.signal.upfirdn(coefficients * up, samples, up=up, down=down)
+    causal = causal[:(frame_count * up + down - 1) // down]
+    expected_pcm = (np.clip(causal, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
     pcm, underran = reference.read(len(expected_pcm))
     assert not underran
     assert pcm == expected_pcm
     np.testing.assert_array_equal(samples, original)
     assert not coefficients.flags.writeable
+
+
+@pytest.mark.parametrize("src_rate,dst_rate", [(44100, 16000), (48000, 16000), (16000, 48000)])
+@pytest.mark.parametrize("sizes", [(1, 7, 137), (1764,), (3763, 3764), (4096, 13, 941)])
+def test_streaming_reference_matches_one_continuous_fir(src_rate, dst_rate, sizes):
+    samples = np.random.default_rng(21).uniform(-0.5, 0.5, src_rate * 2).astype(np.float32)
+    resampler = aec._ReferenceResampler(src_rate, dst_rate)
+    output = []
+    pos = index = 0
+    while pos < len(samples):
+        chunk = samples[pos:pos + sizes[index % len(sizes)]]
+        output.append(resampler.process(chunk))
+        pos += len(chunk)
+        index += 1
+        assert resampler._emitted == (pos * dst_rate + src_rate - 1) // src_rate
+        assert len(resampler._history) < resampler._history_needed + resampler._down
+    g = gcd(src_rate, dst_rate)
+    up, down = dst_rate // g, src_rate // g
+    coefficients = aec._reference_resample_filter(up, down, samples.dtype.str)
+    expected = scipy.signal.upfirdn(coefficients * up, samples, up=up, down=down)[:dst_rate * 2]
+    np.testing.assert_allclose(np.concatenate(output), expected, atol=1e-7)
+
+
+def test_clear_and_rate_change_discard_reference_filter_history():
+    reference = aec.EchoReference(16000)
+    reference.write_samples(np.ones(100, dtype=np.float32), 44100)
+    reference.clear()
+    reference.write_samples(np.zeros(441, dtype=np.float32), 44100)
+    assert not any(reference.read(320)[0])
+    reference.write_samples(np.ones(100, dtype=np.float32), 44100)
+    reference.read(10000)
+    reference.write_samples(np.zeros(480, dtype=np.float32), 48000)
+    assert not any(reference.read(320)[0])
+
+
+def test_downsampling_reference_rejects_out_of_band_tone():
+    rate = 48000
+    x = np.sin(2 * np.pi * 12000 * np.arange(rate) / rate).astype(np.float32)
+    resampler = aec._ReferenceResampler(rate, 16000)
+    out = np.concatenate([resampler.process(x[i:i+137]) for i in range(0, len(x), 137)])
+    assert np.sqrt(np.mean(out[100:] ** 2)) < 0.002
 
 
 def test_repeated_writes_design_the_filter_once(monkeypatch):
@@ -52,6 +95,7 @@ def test_repeated_writes_design_the_filter_once(monkeypatch):
             aec.reference_write(np.zeros(size, dtype=np.float32), 44100)
         # The doubled source and destination rates share the reduced ratio.
         monkeypatch.setattr(aec, "_canceller", SimpleNamespace(_rate=32000))
+        monkeypatch.setattr(aec, "_reference", aec.EchoReference(32000))
         aec.reference_write(np.zeros(882, dtype=np.float32), 88200)
         assert design.call_count == 1
 

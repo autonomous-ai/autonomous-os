@@ -102,3 +102,14 @@ func (codexAdapter) userProfilePath(opts Options) string {
 	}
 	return filepath.Join(opts.CodexWorkspace, "USER.md")
 }
+
+// memoryFilePath implements runtimeAdapter — MEMORY.md at the workspace root.
+func (codexAdapter) memoryFilePath(opts Options) string {
+	if opts.CodexWorkspace == "" {
+		return ""
+	}
+	return filepath.Join(opts.CodexWorkspace, "MEMORY.md")
+}
+
+// workspaceRoot implements runtimeAdapter.
+func (codexAdapter) workspaceRoot(opts Options) string { return opts.CodexWorkspace }

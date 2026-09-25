@@ -127,9 +127,12 @@ FACE_MAX_TRUNCATION = 0.05          # Bỏ qua mặt bị cắt >5% bbox ra ngo�
 FACE_MIN_SHARPNESS = 100.0          # Bỏ qua mặt nhoè quá mức, không nhận diện được
 FACE_STRANGER_MIN_TICKS = 2         # Số lần thấy trước khi cấp id cho mặt lạ
 FACE_STRANGER_CORROBORATION_S = 6.0 # Ứng viên chờ được tính trong bao lâu
+FACE_COPRESENCE_MIN_TICKS = 2       # Số nhịp box chủ nhà + box lạ phải cùng frame trước khi ghi "already present"
 HAL_FACE_LANDMARK_CONF_THRESHOLD = 0.99  # Bỏ qua crop mà face mesh không chắc
+FACE_MATCH_THRESHOLD = 0.40         # Ngưỡng cho match do ảnh upload đã enroll gánh
 FACE_EXTENDED_THRESHOLD = 0.45      # Ngưỡng cho match do RIÊNG bank extended gánh
-FACE_EXTEND_MIN_ENROLL_SIM = 0.40   # Ngưỡng ảnh upload phải đạt để tự thu view mới
+FACE_STRANGER_THRESHOLD = 0.45      # Ngưỡng để khớp một stranger_N đã biết
+FACE_EXTEND_MIN_ENROLL_SIM = 0.45   # Ngưỡng ảnh upload phải đạt để tự thu view mới
 FACE_COOLDOWN_S = 10.0              # Số giây tối thiểu giữa hai presence event
 FACE_OWNER_FORGET_S = 3600.0        # Bắn lại presence sau N giây không thấy chủ
 FACE_STRANGER_FORGET_S = 1800.0     # Tương tự cho người lạ
@@ -177,26 +180,38 @@ Tỉ lệ nhận diện *tăng lên* khi siết gate, vì các crop vô danh r�
 
 **Tầm xa.** Ở 640×480 với FOV ngang ~65°, ngưỡng 0.10 tương ứng box mặt 48 px ở khoảng 2.2 m. Lưu ý gate này bất biến theo tỉ lệ: tăng `HAL_CAMERA_WIDTH`/`HEIGHT` không đổi việc mặt nào lọt qua, nhưng làm tăng chất lượng pixel của crop đưa vào recognizer. Ở 1280×720 cùng ngưỡng 0.10 cho crop 72 px thay vì 48 px.
 
-**Hai ngưỡng, không phải một.** Một khuôn mặt là FRIEND khi ảnh **upload** đã enroll đạt trên 0.30, **hoặc** các view **extended** tự thu đạt trên `FACE_EXTENDED_THRESHOLD` (0.45). Ảnh upload là ground truth; view extended chỉ là phỏng đoán mà thiết bị tự đưa ra về chính nó, nên nếu tự mình gánh một match thì phải vượt ngưỡng cao hơn. Danh tính lấy từ bank nào *cho phép* match — một view extended dưới ngưỡng của chính nó thì không cấp cả quyết định lẫn cái tên.
+**Ba bank, ba ngưỡng.** Một khuôn mặt là FRIEND khi ảnh **upload** đã enroll đạt trên `FACE_MATCH_THRESHOLD` (0.40), **hoặc** các view **extended** tự thu đạt trên `FACE_EXTENDED_THRESHOLD` (0.45). Nếu không, nó là một người lạ đã biết khi **bank người lạ** đạt trên `FACE_STRANGER_THRESHOLD` (0.45). Danh tính lấy từ bank nào *cho phép* match — một view extended dưới ngưỡng của chính nó thì không cấp cả quyết định lẫn cái tên.
 
-Một ngưỡng dùng chung thì không có giá trị nào an toàn. Đo trên 990 frame đã log (2026-09-04): riêng ảnh enroll giữ người lạ cao điểm nhất trong sáu người đã xác minh ở 0.201, nhưng **bất kỳ** bank extended nào cũng đẩy con số đó lên 0.32–0.40, vì mỗi view lưu thêm là thêm một cơ hội để người lạ match trúng thứ gì đó. Còn nâng ngưỡng dùng chung lên 0.40 thì sửa được điều đó nhưng làm recall đường chính diện tụt 92.0% → 86.4% — đúng cái vấn đề mà bank extended sinh ra để giải quyết.
+| bank | chứa gì | miền so khớp | ngưỡng |
+|------|------|------|------|
+| upload | ảnh enroll của user | ảnh điện thoại ↔ camera | `FACE_MATCH_THRESHOLD` 0.40 |
+| `.extended` | view thiết bị tự thu của một user đã nhận ra | camera ↔ camera | `FACE_EXTENDED_THRESHOLD` 0.45 |
+| người lạ | một view cho mỗi `stranger_N` đã cấp | camera ↔ camera | `FACE_STRANGER_THRESHOLD` 0.45 |
+
+Ảnh upload là ground truth, nhưng cũng là phép so khó nhất: ảnh điện thoại so với camera trần. Đo trên một lamp (16/09/2026) với ảnh enroll: chủ nhà đạt **0.60–0.85** khi chính diện, **0.29–0.34** khi nghiêng ¾, và **−0.31–0.28** khi nhìn nghiêng hẳn — cùng dải với người lạ và với một tấm ảnh giơ lên trên điện thoại. 0.40 nằm trong khoảng trống giữa cụm ¾ và cụm chính diện. Mức 0.30 cũ nằm ngay trong cụm ¾, nơi một frame nghiêng thật của chủ nhà và một người lạ trông giống chồng lên nhau; người lạ bị nhận thành chủ nhà là lỗi tệ hơn. Cái giá là dải ¾ — replay của #299 cho đường upload đạt recall 92.0% ở 0.30 và 86.4% ở 0.40 — và dải đó chính là thứ bank extended sinh ra để bù lại.
+
+Hai bank tự thu là cùng một loại bằng chứng — một view duy nhất thiết bị tự chụp, camera so camera, không bao giờ được kiểm tra lại — nên cần cùng một ngưỡng cao hơn. Cùng một người được camera đó thấy lại thường đạt khoảng 0.6.
+
+Một ngưỡng dùng chung không có giá trị nào an toàn. Đo trên 990 frame đã log (04/09/2026): riêng ảnh enroll giữ người lạ tốt nhất trong sáu người lạ đã xác minh ở 0.201, nhưng **bất kỳ** bank extended nào cũng nâng con số đó lên 0.32–0.40, vì mỗi view lưu thêm là một cơ hội nữa để người lạ khớp với thứ gì đó.
 
 | `FACE_EXTENDED_THRESHOLD` | nhận diện đúng | biên so với người lạ tệ nhất (0.404) |
 |------|------|------|
-| 0.40 | 98.2% | **−0.004 — chấp nhận nhầm người lạ đó** |
+| 0.40 | 98.2% | **−0.004 — chấp nhận người lạ đó** |
 | **0.45** | **97.8%** | **+0.046** |
 | 0.50 | 97.5% | +0.096 |
 | 0.60 | 96.8% | +0.196 |
 
-Bốn frame mà mức 0.40 nhận diện thêm được đều có một lần nhận diện chắc chắn cách đó 2–6 giây, nên chúng không mất gì nhìn thấy được; còn một lần chấp nhận nhầm thì có.
+Bốn frame mà 0.40 nhận thêm được đều có một lần nhận diện chắc chắn cách 2–6 giây, nên bỏ chúng không mất gì nhìn thấy được; một lần nhận nhầm thì có.
 
-**Cái gì được tự động thu.** Một frame đã nhận diện chỉ được vào bank extended của user khi **cả hai** điều kiện đúng: ảnh upload đã enroll là bên gánh match và đạt trên `FACE_EXTEND_MIN_ENROLL_SIM` (0.40), và view đó đủ khác so với những gì đã lưu để đáng giữ lại.
+**Vì sao bank người lạ không khớp ở ngưỡng upload (#429).** Trước đây thì có, và trên một thiết bị có bank 20 dòng một-view được cấp trước khi có các cổng chất lượng, một người khách bị báo là `stranger_9` → `stranger_10` → `stranger_4` chỉ trong vài phút: các frame của cô ấy đạt **0.346 / 0.385 / 0.318** với ba dòng cũ của ba người khác nhau — mỗi lần vừa đủ vượt 0.30, argmax đổi theo góc đầu — trong khi hai frame của chính cô ấy đạt **0.658** với nhau. Ở 0.45 không dòng cũ nào khớp, cô ấy được cấp id sau `FACE_STRANGER_MIN_TICKS`, và các frame tiếp theo khớp với dòng mới ở ~0.66.
+
+**Cái gì được tự động thu.** Một frame đã nhận diện chỉ được vào bank extended của user khi **cả hai** điều kiện đúng: ảnh upload đã enroll là bên gánh match và đạt trên `FACE_EXTEND_MIN_ENROLL_SIM` (0.45), và view đó đủ khác so với những gì đã lưu để đáng giữ lại.
 
 Cần cả hai. Trước đây chỉ có mỗi phép thử tính mới lạ, mà "khác xa mọi thứ ta đang có" cũng chính là dấu hiệu của một *người khác* — nên luật đó chọn đúng thứ lẽ ra nó phải loại. Bước prune farthest-point tỉa bank lại neo vào ảnh upload, nên nó xếp người lạ lên hạng cao nhất và đuổi các view thật đi để giữ họ lại. Trên một lamp, bank đã thành 6/10 là người khác, match ở mức 1.000; và khi chỉ cho ăn toàn frame thật của chính chủ, luật cũ vẫn dựng ra một bank chấp nhận một người lạ đã xác minh ở 0.362.
 
 Bắt buộc ảnh upload phải gánh match cũng chặn luôn bản sao đời thứ hai: một frame được nhận diện **bởi** bank extended không còn được bổ sung vào chính nó, nên một view xấu không thể sinh sôi.
 
-Điều này không làm bank trở nên vô dụng — view được lưu không phải để phục vụ chính nó. Một view mà ảnh upload nhận ra ở mức 0.40–0.59 trở thành **mỏ neo mới**, lấn thêm một bước ra vùng tư thế xa hơn. Replay 990 frame đã log: 879 frame được ảnh upload nhận trực tiếp, và **11 frame nữa được riêng bank extended cứu**, ở mức enroll similarity 0.157–0.298 — dưới ngưỡng 0.30, tức nếu không có bank thì đã trượt. Một trong số đó là frame mà thiết bị thật đã gán nhãn `stranger_4`.
+Điều này không làm bank trở nên vô dụng — view được lưu không phải để phục vụ chính nó. Một view mà ảnh upload nhận ra ở mức 0.45–0.69 trở thành **mỏ neo mới**, lấn thêm một bước ra vùng tư thế xa hơn. Replay 990 frame đã log: 879 frame được ảnh upload nhận trực tiếp, và **11 frame nữa được riêng bank extended cứu**, ở mức enroll similarity 0.157–0.298 — dưới ngưỡng upload (0.30 lúc đó, 0.40 hiện nay), tức nếu không có bank thì đã trượt. Một trong số đó là frame mà thiết bị thật đã gán nhãn `stranger_4`.
 
 **Mỗi view lưu những gì.** Mỗi view tự thu nằm trong `<USERS_DIR>/<user>/.extended/` gồm ba file chung một stem:
 
@@ -214,9 +229,13 @@ Không có nó, một bank hoá ra chứa nhầm view thì chỉ có thể xoá 
 
 **Cấp một danh tính cần được xác nhận lại.** Một khuôn mặt không nhận ra được sẽ không có `stranger_N` chỉ từ một frame. Nó phải được thấy `FACE_STRANGER_MIN_TICKS` lần (2) trong vòng `FACE_STRANGER_CORROBORATION_S` (6 giây), và khớp **theo embedding** chứ không theo vị trí, để chữ "lại" có nghĩa là đúng người đó chứ không phải một khuôn mặt khác ở cùng một góc.
 
-Cấp id là verdict đắt nhất — một danh tính tồn tại lâu dài, một stranger presence event, một dòng trong card Unknown Faces — và nó được chạm tới bằng cách chấm điểm *dưới* mọi thứ, thứ mà một người lạ thật trông y hệt một frame tạm thời không dùng được. Các gate ở trên loại những frame hỏng mà chúng đo được; phần còn lại được bắt bằng câu hỏi mà không frame đơn lẻ nào trả lời nổi: khuôn mặt này một nhịp sau còn ở đó không? Đo trên 990 frame đã log, 19 trong 28 chuỗi chạm nhánh này chỉ dài đúng một nhịp đơn lẻ.
+Cấp id là verdict đắt nhất — một danh tính tồn tại lâu dài, một stranger presence event, một dòng trong card Unknown Faces — và đạt tới bằng cách chấm *dưới* ngưỡng âm (0.20) của cả hai bank chủ nhà **và** dưới `FACE_STRANGER_THRESHOLD` — bank người lạ không nằm trong phép thử âm, vì khi nó đã có hơn chục dòng thì gần như luôn có một dòng trên 0.20 và một người mới thật sự sẽ không bao giờ được cấp id (#429). Chấm ở vùng đó là nơi một người lạ thật trông y hệt một frame tạm thời không dùng được. Các gate ở trên loại những frame hỏng mà chúng đo được; phần còn lại được bắt bằng câu hỏi mà không frame đơn lẻ nào trả lời nổi: khuôn mặt này một nhịp sau còn ở đó không? Đo trên 990 frame đã log, 19 trong 28 chuỗi chạm nhánh này chỉ dài đúng một nhịp đơn lẻ.
+
+Cái giá đã biết của cổng này: một người khách quay lại ở góc mà view duy nhất đã lưu của họ không phủ được (0.20–0.45 so với chính dòng của họ) sẽ nhận một `stranger_N` thứ hai. Một dòng không thể bảo chứng cho góc nó chưa từng thấy; id thứ hai là kết quả trung thực, và vẫn tốt hơn là bị gộp vào danh tính của người khác.
 
 Một người khách thật không bị ảnh hưởng quá một nhịp: 2 giây sau họ vẫn ở đó và được cấp id ngay lúc ấy. Cửa sổ cố tình đặt ~3 nhịp sensing thay vì bắt buộc liền kề tuyệt đối, để một frame bị rớt hoặc bị nhoè ở giữa không reset số đếm của một người khách thật.
+
+**Ghi user là "already present" cũng cần xác nhận như vậy.** Khi một người lạ vào trong lúc chủ nhà đang có box trong cùng frame, `presence.enter` thêm `already present: <tên> (friend)` để agent nói với user thay vì chào người khách (#426). Đoạn đó chỉ được ghi khi một box chủ nhà và một box không-phải-chủ-nhà đã cùng frame `FACE_COPRESENCE_MIN_TICKS` (2) nhịp liên tiếp — box `unsure` cũng tính, nên nhịp recognizer dùng để xác nhận người lạ là nhịp đầu trong hai nhịp, và một người khách thật được liệt kê ngay ở event enter báo về họ. Đặt `HAL_FACE_STRANGER_MIN_TICKS=1` thì bộ đếm chỉ bằng 1 ở nhịp cấp id, nên đoạn này chỉ xuất hiện khi lần flush người lạ tình cờ rơi vào nhịp sau; tăng `HAL_FACE_COPRESENCE_MIN_TICKS` nếu màn hình hay poster sau lưng user cứ bị báo là "có bạn tới".
 
 **Điều chỉnh (Tuning):**
 
@@ -224,9 +243,12 @@ Một người khách thật không bị ảnh hưởng quá một nhịp: 2 gi�
 |-------------|------------|
 | Người ở xa không được nhận diện | Giảm `FACE_HEIGHT_RATIO_THRESHOLD` (0.10 → 0.07) |
 | Người khác bị nhận thành user đã enroll | Tăng `FACE_EXTENDED_THRESHOLD` (0.45 → 0.50) và kiểm tra `match_source` trong face debug log — `extended` nghĩa là một view tự thu đã gánh match đó |
+| User đã enroll bị `unsure` khi quay đầu ¾ | Bình thường trong lúc bank extended đang lấp lại — các góc đó chỉ đạt 0.29–0.34 so với ảnh upload chính diện. Kiểm tra `.extended/` có đang lớn; chỉ giảm `FACE_MATCH_THRESHOLD` (0.40 → 0.35) sau khi đo lại với người lạ đã biết |
+| Một người khách bị báo dưới nhiều id `stranger_N` trong vài phút | Các dòng người lạ cũ đang bị nhận nhầm (#429). Kiểm tra `stranger_similarity` trong face debug log chỉ vừa vượt ngưỡng; tăng `FACE_STRANGER_THRESHOLD` (0.45 → 0.50), và xoá `/root/local/strangers/*.npy` nếu các dòng có từ trước 04/09/2026 (chưa có cổng chất lượng) |
+| Một người khách quay lại cứ bị cấp `stranger_N` mới | View duy nhất đã lưu của họ không phủ góc đó. Chỉ giảm `FACE_STRANGER_THRESHOLD` (0.45 → 0.40) khi debug log còn biên so với các lần nhận nhầm; dưới 0.40 thì #429 quay lại |
 | User đã enroll bị trượt ở các góc mà ảnh chính diện không phủ được | Giảm `FACE_EXTENDED_THRESHOLD`, nhưng không xuống dưới 0.45 nếu chưa đo lại với người lạ đã biết |
 | Bank extended đầy người khác | Lẽ ra không còn xảy ra; nếu vẫn có, tăng `FACE_EXTEND_MIN_ENROLL_SIM` và kiểm tra `match_source` của từng view đã lưu |
-| Bank extended rỗng hoặc ngừng lớn | Giảm `FACE_EXTEND_MIN_ENROLL_SIM` (0.40 → 0.35). Chỉ frame mà *ảnh upload* nhận ra mới đủ điều kiện, nên user chỉ có một ảnh chính diện thì bank lớn chậm là đúng thiết kế |
+| Bank extended rỗng hoặc ngừng lớn | Giảm `FACE_EXTEND_MIN_ENROLL_SIM` (0.45 → 0.40). Chỉ frame mà *ảnh upload* nhận ra mới đủ điều kiện, nên user chỉ có một ảnh chính diện thì bank lớn chậm là đúng thiết kế |
 | False detection từ các mảng nhỏ trông như mặt | Tăng `FACE_HEIGHT_RATIO_THRESHOLD` (0.10 → 0.15) |
 | Nhận diện chập chờn / liên tục cấp id `stranger_N` mới | Crop quá nhỏ để embed đáng tin — tăng `FACE_HEIGHT_RATIO_THRESHOLD`, hoặc nâng độ phân giải camera lên 1280×720 |
 | Nhận nhầm người khi ai đó ngồi sát mép frame | Mặt bị cắt — giảm `FACE_MAX_TRUNCATION` (0.05 → 0.03), hoặc chỉnh lại hướng camera để đầu luôn nằm trọn trong frame |
@@ -234,6 +256,8 @@ Một người khách thật không bị ảnh hưởng quá một nhịp: 2 gi�
 | Lamp cấp `stranger_N` cho chính chủ trong lúc đang quay | Nhoè do chuyển động — đó là thứ `FACE_MIN_SHARPNESS` lọc ra; xem thư mục `FAIL-blurred` để biết độ nét thực tế |
 | Khách lạ mất quá lâu mới được ghi nhận | Giảm `FACE_STRANGER_MIN_TICKS` xuống 1 để cấp id ngay từ một frame (hành vi cũ) |
 | Vẫn xuất hiện id `stranger_N` giả | Tăng `FACE_STRANGER_MIN_TICKS` lên 3; mỗi bậc khiến khách thật chậm thêm một nhịp sensing |
+| Lamp bảo user "có bạn tới" khi sau lưng là poster hoặc màn hình | Tăng `FACE_COPRESENCE_MIN_TICKS` (2 → 3); khách thật chờ thêm một nhịp trước khi user được gọi tên |
+| Khách bị chào trong lúc user đang ngồi đó, `already present` không bao giờ xuất hiện | Kiểm tra `FACE_STRANGER_MIN_TICKS` ≥ 2 (nhịp xác nhận của nó nuôi bộ đếm); với 1 thì bộ đếm không thể chạm 2 khi cấp id |
 | Nhận diện chết hẳn trong phòng tối sau khi cập nhật | Phương sai Laplacian giảm theo ánh sáng; giảm `FACE_MIN_SHARPNESS` (100 → 70) rồi kiểm tra lại `FAIL-blurred` |
 | Lamp cấp id `stranger_N` cho chính chủ ở cự ly gần | Detector đang bắt trúng vành tai hoặc tương tự — đó là thứ `HAL_FACE_LANDMARK_CONF_THRESHOLD` 0.99 lọc ra |
 | Mặt rõ ràng bình thường lại ngừng được nhận diện sau khi cập nhật | Giảm `HAL_FACE_LANDMARK_CONF_THRESHOLD` (0.99 → 0.95); mặc định được tinh chỉnh trên một thiết bị |

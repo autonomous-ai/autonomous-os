@@ -1,11 +1,13 @@
 """MPR121 register setup, touch grouping, and worker lifecycle without hardware."""
 
 import threading
+import errno
 import time
 import unittest
+from pathlib import Path
 from unittest import mock
 
-from hal.board.mpr121 import MPR121Config
+from hal.board.mpr121 import MPR121Config, load_mpr121_config
 from hal.drivers.mpr121 import I2CBus, MPR121Handler, _GestureRecognizer, _GestureEvent
 
 
@@ -89,10 +91,15 @@ class TestGestures(unittest.TestCase):
 
     def test_hold_tiers_are_logged_once_per_threshold(self):
         events = self.events([(False, 0), (True, 1), (True, 3), (True, 4), (True, 6), (True, 11)])
-        self.assertEqual([event.count for event in events if event.kind == 'hold_tier'], [1, 2, 3])
+        self.assertEqual([event.count for event in events if event.kind == 'hold_tier'], [1, 2])
 
 
 class TestMPR121(unittest.TestCase):
+    def setUp(self):
+        mode = mock.patch("hal.drivers.harness.gestures.read_mode", return_value={"enabled": False, "generation": 1})
+        mode.start()
+        self.addCleanup(mode.stop)
+
     def make_handler(self, **kwargs):
         return MPR121Handler(MPR121Config(bus=5, **kwargs))
 
@@ -103,7 +110,7 @@ class TestMPR121(unittest.TestCase):
                        (True, 2.999), (True, 3), (True, 6), (True, 11)]:
             handler._process_touch(*sample)
         self.assertEqual(feedback.set_tier.call_args_list,
-                         [mock.call(1), mock.call(2), mock.call(3)])
+                         [mock.call(1), mock.call(2)])
         feedback.commit.assert_not_called()
         feedback.release.reset_mock()
         handler._process_touch(False, 11.1)
@@ -130,7 +137,7 @@ class TestMPR121(unittest.TestCase):
             calls.attach_mock(hold, 'action')
             handler._execute(_GestureEvent('hold', 1, held_s=5))
         self.assertEqual(calls.mock_calls,
-                         [mock.call.led(5), mock.call.action(5, source='MPR121')])
+                         [mock.call.led(5, factory_reset=False), mock.call.action(5, source='MPR121')])
 
     def test_cancelled_feedback_commit_does_not_start_hold_action(self):
         handler = self.make_handler()
@@ -163,10 +170,23 @@ class TestMPR121(unittest.TestCase):
         for electrode in range(12):
             self.assertIn(mock.call(0x5A, 0x41 + electrode * 2, 2), calls)
             self.assertIn(mock.call(0x5A, 0x42 + electrode * 2, 1), calls)
-        for register, value in ((0x5B, 0), (0x5C, 0x10), (0x5D, 0x20),
+        for register, value in ((0x2F, 1), (0x30, 1), (0x31, 0xFF), (0x32, 0x02),
+                                (0x33, 0), (0x34, 0), (0x35, 0),
+                                (0x5B, 0), (0x5C, 0x10), (0x5D, 0x30),
                                 (0x7D, 200), (0x7F, 180), (0x7E, 130), (0x7B, 0x0B)):
             self.assertIn(mock.call(0x5A, register, value), calls)
         self.assertEqual(calls[-1], mock.call(0x5A, 0x5E, 0x8F))
+
+    def test_lamp_thresholds_are_loaded_and_written_to_chip(self):
+        device_dir = Path(__file__).resolve().parents[2] / "robots" / "lamp"
+        config = load_mpr121_config(device_dir, "orangepi_sun60")
+        handler = MPR121Handler(config)
+        handler._bus = bus = mock.Mock()
+        bus.read_regs.return_value = b'\x24'
+        handler._initialize()
+        for electrode in range(12):
+            self.assertIn(mock.call(0x5A, 0x41 + electrode * 2, 6), bus.write_reg.call_args_list)
+            self.assertIn(mock.call(0x5A, 0x42 + electrode * 2, 3), bus.write_reg.call_args_list)
 
     def test_autoconfig_disabled(self):
         handler = self.make_handler(autoconfig=False)
@@ -216,6 +236,48 @@ class TestMPR121(unittest.TestCase):
         bus.close.assert_called_once()
         handler.stop()
         bus.close.assert_called_once()
+
+    def test_missing_bus_warns_without_traceback_or_workers(self):
+        handler = self.make_handler()
+        error = FileNotFoundError(errno.ENOENT, 'No such file or directory', '/dev/i2c-5')
+        with mock.patch('hal.drivers.mpr121.I2CBus', side_effect=error), \
+                mock.patch('hal.drivers.mpr121.threading.Thread') as thread, \
+                self.assertLogs('hal.drivers.mpr121', level='WARNING') as logs:
+            with self.assertRaises(FileNotFoundError):
+                handler.start()
+        self.assertIn('event=unavailable bus=5 address=0x5a', logs.output[0])
+        self.assertIsNone(logs.records[0].exc_info)
+        self.assertEqual(logs.records[0].levelname, 'WARNING')
+        self.assertTrue(handler._stop.is_set())
+        self.assertIsNone(handler._bus)
+        thread.assert_not_called()
+
+    def test_absent_sensor_warns_and_closes_bus(self):
+        for code in (errno.ENODEV, errno.ENXIO, 121):
+            with self.subTest(errno=code):
+                handler = self.make_handler()
+                bus = mock.Mock()
+                bus.write_reg.side_effect = OSError(code, 'Sensor unavailable')
+                with mock.patch('hal.drivers.mpr121.I2CBus', return_value=bus), \
+                        self.assertLogs('hal.drivers.mpr121', level='WARNING') as logs:
+                    with self.assertRaises(OSError):
+                        handler.start()
+                self.assertIsNone(logs.records[0].exc_info)
+                self.assertIn('event=unavailable', logs.output[0])
+                self.assertTrue(handler._stop.is_set())
+                handler.stop()
+                bus.close.assert_called_once()
+
+    def test_unexpected_startup_failure_retains_traceback(self):
+        for error in (PermissionError(errno.EACCES, 'Permission denied'), RuntimeError('broken driver')):
+            with self.subTest(error=error):
+                handler = self.make_handler()
+                with mock.patch('hal.drivers.mpr121.I2CBus', side_effect=error), \
+                        self.assertLogs('hal.drivers.mpr121', level='ERROR') as logs:
+                    with self.assertRaises(type(error)):
+                        handler.start()
+                self.assertIn('event=start_failed', logs.output[0])
+                self.assertIsNotNone(logs.records[0].exc_info)
 
     def test_initial_touch_read_failure_closes_bus(self):
         handler = self.make_handler()

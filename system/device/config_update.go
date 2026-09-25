@@ -90,6 +90,7 @@ func (s *Service) GetPublicConfig() domain.ConfigPublicResponse {
 			// URL that breaks HAL's /ws/gemini handshake. See RealtimeBaseURL doc.
 			BaseURL:   s.config.RealtimeBaseURLOverride(),
 			HasAPIKey: s.config.RealtimeHasAPIKey(),
+			WebSearch: s.config.RealtimeWebSearch(),
 		},
 	}
 }
@@ -739,13 +740,6 @@ func (s *Service) RestoreAutonomousDefaults(section string) error {
 		req.TTSAPIKey, req.TTSBaseURL = d.APIKey, d.BaseURL
 		req.STTAPIKey, req.STTBaseURL = d.APIKey, d.BaseURL
 	case "realtime":
-		// Qwen talks straight to the Alibaba host with its own credentials; the
-		// shipped set is campaign-api and would produce a 401 there. Refusing is
-		// kinder than restoring something that cannot work.
-		if s.config.Realtime != nil &&
-			strings.EqualFold(strings.TrimSpace(s.config.Realtime.Provider), "qwen") {
-			return errors.New("qwen realtime uses its own credentials — nothing to restore")
-		}
 		req.Realtime = &domain.RealtimeSetData{APIKey: d.APIKey, BaseURL: d.BaseURL}
 	default:
 		return fmt.Errorf("unknown section %q (want llm, voice or realtime)", section)

@@ -8,7 +8,8 @@ import type { Turn } from "./types";
 import { TYPE_LUCIDE, TURN_INPUT_FALLBACK } from "./types";
 import { HW } from "../types";
 import { useTheme } from "@/lib/useTheme";
-import { turnIO, turnTokenStats, turnCurrentUser, externalHistory } from "./helpers";
+import { turnIO, turnTokenStats, turnCurrentUser, externalHistory, turnDisplayType } from "./helpers";
+import { turnMemoryState, memoryBadge } from "./memory";
 import { PoseBucketModal } from "./PoseBucketModal";
 import { UserAvatar } from "./UserAvatar";
 
@@ -29,10 +30,11 @@ function formatTurnTime(iso: string): string {
   return (m?.[1] ?? iso).trim();
 }
 
-export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
+export function TurnBadge({ turn, pairTint, userPhotos, isDebug, onViewPipeline }: {
   turn: Turn;
   pairTint?: string;
   userPhotos?: Record<string, string>;
+  isDebug: boolean;
   onViewPipeline?: () => void;
 }) {
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
@@ -47,7 +49,8 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
   const statusColor = turn.status === "done" ? "var(--lm-green)"
     : turn.status === "error" ? "var(--lm-red)"
     : "var(--lm-amber)";
-  const SourceIcon = TYPE_LUCIDE[turn.type] ?? Circle;
+  const displayType = turnDisplayType(turn);
+  const SourceIcon = TYPE_LUCIDE[displayType] ?? Circle;
   // Source icon takes the turn's source-category color (mic / cam / channel /
   // web / cron / system) instead of a dim grey, so it stands out and doubles
   // as a quick at-a-glance source cue. Falls back to teal for unmapped types.
@@ -79,6 +82,7 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
     ? [...baseSnaps.slice(0, 1), ...extraStrip].slice(0, 3)
     : baseSnaps;
   const tokenStats = turnTokenStats(turn);
+  const memory = turnMemoryState(turn);
   const currentUser = turnCurrentUser(turn);
   const hasBroadcast = turn.events.some((ev) =>
     ev.type === "flow_event" && ev.detail?.node === "telegram_alert_broadcast"
@@ -144,7 +148,7 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
         <span style={{
           fontSize: 10, fontWeight: 700, color: "var(--lm-text)",
           textTransform: "uppercase" as const,
-        }}>{history ? "History sync" : turn.type}</span>
+        }}>{history ? "History sync" : displayType}</span>
         <span style={{
           fontSize: 8, padding: "1px 5px", borderRadius: 3,
           background: `${pathColor}18`, color: pathColor, fontWeight: 700,
@@ -507,6 +511,18 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
                     bucket — this footer covers the text-agent LLM only. */}
                 <span style={{ color: "var(--lm-text-muted)" }}>LLM tokens</span>
               </span>
+            </span>
+          );
+        })()}
+        {memory && (() => {
+          // All the state gating lives in memoryBadge (see memory.ts): gray and
+          // amber are debug-only, red is always shown. Null = render nothing.
+          const badge = memoryBadge(memory, isDebug);
+          if (!badge) return null;
+          return (
+            <span title={badge.title} style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+              <span style={{ opacity: 0.4 }}>·</span>
+              <span style={{ color: badge.color, fontWeight: 600 }}>{badge.text}</span>
             </span>
           );
         })()}

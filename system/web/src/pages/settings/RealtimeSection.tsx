@@ -3,11 +3,12 @@ import { C, LockedField, LockedPasswordField, SectionCard } from "@/components/s
 import { getRealtimeOptions } from "@/lib/api";
 import type { LlmLoadedState } from "@/hooks/setup/types";
 
-// Realtime voice-agent (Gemini Live / OpenAI Realtime) config. Values map 1:1 to
-// the config.json `realtime` block (HAL reads it; os-server restarts HAL on save).
-// Voice + reasoning are provider-specific — keep these lists in sync with
+// Realtime voice-agent (Gemini Live / OpenAI Realtime / GPT-Live / on-device
+// Pipecat v1) config. Values map 1:1 to the config.json `realtime` block (HAL
+// reads it; os-server restarts HAL on save). Voice + reasoning are
+// provider-specific — keep these lists in sync with
 // system/server/config/realtime.go (ValidateRealtimeKnobs) and the HAL enums.
-const PROVIDERS = ["gemini", "openai", "qwen", "none"];
+const PROVIDERS = ["gemini", "openai", "gptlive", "pipecat_v1", "none"];
 
 // Display labels for the Provider dropdown. Values on the wire stay lowercase
 // (server-side switch keys off "gemini" / "openai" / …); only the human-facing
@@ -16,7 +17,8 @@ const PROVIDERS = ["gemini", "openai", "qwen", "none"];
 const PROVIDER_LABEL: Record<string, string> = {
   gemini: "Gemini",
   openai: "OpenAI",
-  qwen: "Qwen",
+  gptlive: "GPT-Live",
+  pipecat_v1: "Pipecat v1 (on-device)",
   none: "None",
 };
 const displayProvider = (v: string): string =>
@@ -24,14 +26,24 @@ const displayProvider = (v: string): string =>
 const VOICES: Record<string, string[]> = {
   gemini: ["Puck", "Charon", "Kore", "Fenrir", "Aoede"],
   openai: ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"],
-  qwen: ["Cherry", "Serena", "Ethan", "Chelsie"],
+  // GPT-Live: the BuiltInVoice literal of openai SDK 3.14.1 (openai.types.live).
+  // The voices gpt-live-1 accepts (BFF integration doc); Realtime-only names
+  // such as alloy/ash are rejected at session.start and must not appear here.
+  gptlive: [
+    "marin", "quartz", "ripple", "vesper", "willow", "stone", "gleam",
+    "meridian", "bossa", "tempo", "beacon", "delta", "cinder",
+  ],
+  // Pipecat v1 emits text; the device's own TTS voice speaks it → no voice.
+  pipecat_v1: [],
 };
 // Reasoning depth = cost knob. First entry (cheapest) is the default.
-// qwen realtime has no reasoning knob → empty list hides the selector.
+// GPT-Live has no reasoning knob (the Live model exposes none) and neither
+// does Pipecat v1 → empty list hides the selector.
 const REASONING: Record<string, string[]> = {
   gemini: ["MINIMAL", "LOW", "MEDIUM", "HIGH"],
   openai: ["minimal", "low", "medium", "high", "xhigh"],
-  qwen: [],
+  gptlive: [],
+  pipecat_v1: [],
 };
 
 export interface RealtimeLoadedState {
@@ -56,6 +68,7 @@ export function RealtimeSection({
   reasoning, setReasoning,
   apiKey, setApiKey,
   baseUrl, setBaseUrl,
+  webSearch, setWebSearch,
 }: {
   active: boolean;
   realtimeLoaded: RealtimeLoadedState;
@@ -66,6 +79,8 @@ export function RealtimeSection({
   reasoning: string; setReasoning: (v: string) => void;
   apiKey: string; setApiKey: (v: string) => void;
   baseUrl: string; setBaseUrl: (v: string) => void;
+  // pipecat_v1 only: the in-session `web_search` tool (realtime.pipecat_v1.web_search).
+  webSearch: boolean; setWebSearch: (v: boolean) => void;
 }) {
   // Options come from the API (single source = server config); the const lists
   // above are only a fallback if the fetch fails.
@@ -88,7 +103,7 @@ export function RealtimeSection({
     <SectionCard id="realtime" title="Realtime" active={active}>
       <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, cursor: "pointer", fontSize: 12.5, color: C.text }}>
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-        Enabled (audio-native brain — Gemini Live / OpenAI Realtime / Qwen Omni Realtime)
+        Enabled (realtime brain — Gemini Live / OpenAI Realtime / GPT-Live / Pipecat v1 on-device)
       </label>
       <div style={{ marginBottom: 12 }}>
         <label htmlFor="realtime_provider" style={labelStyle}>Provider</label>
@@ -118,7 +133,31 @@ export function RealtimeSection({
           )}
 
           <LockedPasswordField lockedInitially={realtimeLoaded.apiKey || llmLoaded.apiKey} label="API Key (optional — leave blank to reuse AI brain key)" id="realtime_api_key" value={apiKey} onChange={setApiKey} placeholder="sk-... / AIza..." />
-          <LockedField lockedInitially={llmLoaded.baseUrl} label="Base URL (optional — leave blank to derive from AI brain base URL)" id="realtime_base_url" value={baseUrl} onChange={setBaseUrl} placeholder="wss://… /ws/gemini" />
+          {provider === "pipecat_v1" ? (
+            // The shared Base URL carries a WebSocket relay shape (…/ws/gemini) that
+            // HAL never uses for this provider; its chat endpoint is
+            // realtime.pipecat_v1.base_url in config.json (default: the Qwen relay).
+            <>
+              <div style={{ fontSize: 11, color: C.textDim, marginBottom: 12 }}>
+                Runs the voice pipeline on the robot (its own STT + a text LLM, spoken by the TTS voice above).
+                LLM endpoint: <code>realtime.pipecat_v1.base_url</code> in config.json — default is the low-latency Qwen relay.
+              </div>
+              {/* The relay LLM has no hosted search; this is the client-side
+                  web_search tool (HAL_PIPECAT_WEB_SEARCH). Off → public live
+                  facts (weather, news, scores) delegate to the main agent. */}
+              <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12.5, color: C.text, cursor: "pointer", marginBottom: 12 }}>
+                <input type="checkbox" checked={webSearch} onChange={(e) => setWebSearch(e.target.checked)} style={{ marginTop: 3 }} />
+                <span>
+                  Web search — answer public live facts (weather, news, scores, prices) in-session through the Google-Search relay.
+                  <span style={{ display: "block", fontSize: 11, color: C.textDim, marginTop: 3 }}>
+                    Off: those questions are delegated to the main agent instead. One relay call (~4 s) per lookup.
+                  </span>
+                </span>
+              </label>
+            </>
+          ) : (
+            <LockedField lockedInitially={llmLoaded.baseUrl} label="Base URL (optional — leave blank to derive from AI brain base URL)" id="realtime_base_url" value={baseUrl} onChange={setBaseUrl} placeholder="wss://… /ws/gemini" />
+          )}
         </>
       )}
     </SectionCard>

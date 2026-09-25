@@ -1,5 +1,7 @@
 # LED Control — Tài Liệu
 
+Trong lúc thu giọng Harness thủ công, khi recorder/STT sẵn sàng, LED chuyển sang preset listening hiện có (Lamp: xanh dương nhẹ `[0, 0, 3]`, tốc độ `0.3`), kể cả chưa có transcript đầu tiên. Kết thúc, hủy, timeout hoặc lỗi đều xóa trạng thái LED thu và khôi phục theo thứ tự ưu tiên bình thường; thinking/TTS sau đó giữ hành vi hiện có. Cue này chỉ đổi LED, không di chuyển servo hay đổi cài đặt đã lưu.
+
 ## Phần Cứng
 
 - **32 WS2812 RGB LEDs** — một vòng ring
@@ -43,7 +45,7 @@ lệnh LED đầu tiên, có thể vài phút sau khi boot.
 
 ### Xác nhận Harness voice
 
-Thao tác bật/tắt Harness trên phần cứng đọc `button_led.harness_on` / `button_led.harness_off` trong `robots/lamp/presets.json` qua bảng preset HAL tại lúc chạy. Lamp dùng RGB `[1, 1, 3]` khi bật và `[2, 2, 2]` khi tắt. Cả hai kế thừa pulse 600 ms; có thể override cả `effect` và `duration_ms` trong preset. Hiệu ứng vẫn là transient và hẹn khôi phục LED sau thời lượng cấu hình thêm 100 ms.
+Mode Harness đọc `button_led.harness_on` / `button_led.harness_off` trong `robots/lamp/presets.json` qua bảng preset HAL tại lúc chạy. Khi ON, Lamp duy trì đèn thở hổ phách ấm nhẹ `breathing_fine`, RGB `[3, 1, 0]`, speed `0.6` (khoảng năm giây mỗi nhịp). OFF nháy trắng nhẹ một lần, RGB `[2, 2, 2]`, speed `1.0`, duration `300` ms, rồi khôi phục trạng thái đèn người dùng. Watcher mode và luồng khôi phục LED dùng chung `hal/drivers/harness/led.py`; sleep, riêng tư mic, TTS, nhạc và thinking có ưu tiên cao hơn. Thở ambient lúc nghỉ không được thay đèn báo mode. Không ghi đè tùy chọn LED đã lưu; không có RGB service thì bỏ qua. Overlay OFF khôi phục sau thời lượng cấu hình thêm 100 ms.
 
 ## Solid Color
 
@@ -119,7 +121,7 @@ Khi kích hoạt scene, `POST /scene` thực hiện theo thứ tự:
 3. **Servo hold** — nếu `"servo": "hold"`, freeze servo **sau khi** aim xong (aim → hold trong cùng 1 thread). Tự release khi chuyển sang scene không có hold.
 4. **Camera** — tự động bật/tắt
 5. **Mic** — mute dừng voice pipeline (STT), unmute khởi động lại
-6. **Speaker** — mute dừng TTS + nhạc đang phát, unmute bật lại output
+6. **Speaker** — `off` dừng nhạc ngay và mute giọng nói theo **drain** (`_start_scene_speaker_drain`, xem `sensing-behavior_vi.md`): câu xác nhận của chính scene, do os-server gửi sau marker `/scene`, vẫn phát xong rồi loa mới đóng; `sleepy` ghép trong cùng reply sẽ tiếp quản drain để wake trả loa lại được. `on` bật lại output. Tắt scene khi privacy đang khoá sẽ đổi snapshot của khoá để lúc nhả loa/camera mở lại (xem `physical-controls_vi.md`).
 
 **Chỉ có kích hoạt scene mới aim.** Một lần restore LED — sau emotion, khi TTS kết thúc, khi nhạc
 dừng, khi bỏ mute mic, khi tắt cue lắng nghe — chỉ vẽ lại strip chứ không làm gì khác, và một
@@ -326,3 +328,16 @@ theo lượt, gồm hành vi LED, màn hình và thân hiện có. Không có l�
 cho LIVE. Emotion cần transcript có chữ và cùng điều kiện hướng tới device;
 tiếng ồn hay mở mic không tự bật emotion. Thinking cần bằng chứng kết thúc
 từ provider, không dùng ước lượng im lặng local. Xem [realtime voice](../../../../docs/vi/realtime-voice_vi.md#phản-hồi-hw-emotion-trong-chế-độ-live) để biết thời điểm gọi và dọn trạng thái.
+
+### Intent giảm sáng tương đối
+
+Action `dim` local/Jev đọc `/led/color`, chia đôi từng kênh RGB, ghi
+`/led/solid` rồi đọc lại kiểm chứng. Gọi tiếp giảm tiếp; đèn tắt giữ nguyên.
+Làm tròn xuống có thể đưa về tắt. Effect/scene chuyển thành màu tĩnh từ màu nền
+hoặc pixel sáng nhất được báo; không giữ pattern.
+
+Voice được local/Jev xử lý (`handledLocally=true`) giải phóng cue thinking
+realtime đang giữ mà không chờ TTS. Phản hồi mute hoặc không có lời nói không
+giữ cue vô hạn. Cleanup giữ emotion mới, khôi phục LED đã lưu (kể cả tắt/dim);
+TTS/nhạc đang phát giữ overlay tới teardown bình thường. Lượt do agent xử lý
+vẫn giữ cue thinking.

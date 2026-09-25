@@ -49,7 +49,23 @@ DEFAULT_CONFIDENCE_THRESHOLD: float = 0.5
 
 DEFAULT_FLUSH_S: float = 10.0
 DEFAULT_DEDUP_WINDOW_S: float = 300.0
-DEFAULT_QUEUE_MAXSIZE: int = 32
+
+# A deep queue serves no purpose here: output is capped at one event per user
+# per bucket per DEDUP_WINDOW_S, so a long backlog can only ever produce stale
+# readings. Kept small enough that the whole queue is worth less wall-clock
+# than one dedup window, and small enough to bound retained WAV memory.
+DEFAULT_QUEUE_MAXSIZE: int = 8
+# Audio older than this is no longer "how the user feels now" — recognizing it
+# would emit a stale mood and then let the dedup suppress the current one.
+DEFAULT_JOB_MAX_AGE_S: float = 30.0
+
+# --- Debug audio retention ------------------------------------------------
+# SPEECH_EMOTION_AUDIO_DIR defaults under /tmp, which is tmpfs (RAM) on the
+# target images, and only one clip per flush is ever referenced by the Flow
+# Monitor — the rest are orphaned the moment they are written. Cap the
+# directory so a talkative day cannot exhaust RAM and take every other tmpfs
+# writer down with it (including the dedup sidecar at /tmp/hal-ser-state.json).
+DEFAULT_AUDIO_MAX_FILES: int = 200  # 0 = unbounded
 
 # --- Polarity buckets -----------------------------------------------------
 # Matches face emotion processor's EMOTION_BUCKETS shape so (user, bucket)

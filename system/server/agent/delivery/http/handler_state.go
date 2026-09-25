@@ -3,6 +3,7 @@ package http
 import (
 	"log/slog"
 	"strings"
+	"time"
 )
 
 // accumulateAssistantDelta appends a delta to the buffer for the given runId.
@@ -18,7 +19,7 @@ func (h *AgentHandler) accumulateAssistantDelta(runID, delta string) {
 		h.assistantBuf[runID] = buf
 	}
 	buf.WriteString(delta)
-	slog.Info("assistant delta buffered (TTS waits for lifecycle:end)",
+	slog.Info("assistant delta buffered (first-sentence streaming checked separately; remainder at lifecycle:end)",
 		"component", "agent",
 		"run_id", runID,
 		"delta", delta,
@@ -298,6 +299,40 @@ func isAsciiDigit(b byte) bool {
 	return b >= '0' && b <= '9'
 }
 
+// demoteAssistantBufferToThinking drops the assistant text buffered so far for
+// runID and returns it, because a tool call is starting and text streamed BEFORE
+// a tool call is the model narrating its plan ("Leo's asking if I see him. Let
+// me take a look."), not the reply. Left in the buffer it is glued in front of
+// the real answer at lifecycle:end and reaches web chat / TTS (lamp-0c4e
+// 2026-09-16, Hermes + DeepSeek; Hermes' own run.completed final already
+// excludes it). Runtime-agnostic: codex/opencode demote the same thing in
+// their translators, claudecode sends only the final message, so for those
+// this is a no-op. Returns "" and keeps the buffer when:
+//   - the first sentence was already streamed to TTS (cannot be unspoken; the
+//     remainder must stay consistent with what played), or
+//   - the text carries a complete or partial [HW:...] marker (a real hardware
+//     action the end-flush must still fire).
+func (h *AgentHandler) demoteAssistantBufferToThinking(runID string) string {
+	h.assistantMu.Lock()
+	defer h.assistantMu.Unlock()
+	buf, ok := h.assistantBuf[runID]
+	if !ok || buf.Len() == 0 {
+		return ""
+	}
+	if _, streamed := h.streamedCleanLen[runID]; streamed {
+		return ""
+	}
+	raw := buf.String()
+	if hasPartialHWMarker(raw) || hasPartialHWLinkMarker(raw) {
+		return ""
+	}
+	if calls, _ := extractHWCalls(raw); len(calls) > 0 {
+		return ""
+	}
+	delete(h.assistantBuf, runID)
+	return strings.TrimSpace(raw)
+}
+
 // flushAssistantText returns the accumulated text for runId and clears the buffer.
 // HW markers are stripped here so they never appear in Telegram or other channel replies.
 // The caller is responsible for extracting and firing HW calls before flushing.
@@ -331,6 +366,9 @@ func (h *AgentHandler) recordAssistantDelta(runID, delta string) (isFirst bool) 
 		h.streamStats[runID] = s
 	}
 	isFirst = !s.assistantFirstSeen
+	if isFirst {
+		s.assistantFirstAt = time.Now()
+	}
 	s.assistantFirstSeen = true
 	s.assistantChunks++
 	s.assistantChars += len(delta)
@@ -415,4 +453,22 @@ func (h *AgentHandler) mapRunID(openclawID, deviceID string) {
 			break
 		}
 	}
+}
+
+// assistantFirstDeltaAt observes timing without consuming streaming state.
+func (h *AgentHandler) assistantFirstDeltaAt(runID string) time.Time {
+	h.streamStatsMu.Lock()
+	defer h.streamStatsMu.Unlock()
+	if s := h.streamStats[runID]; s != nil {
+		return s.assistantFirstAt
+	}
+	return time.Time{}
+}
+
+// assistantElapsedMs omits unknown timing rather than inventing a first token.
+func (s *runStreamStats) assistantElapsedMs(at time.Time) (int64, bool) {
+	if s == nil || s.assistantFirstAt.IsZero() || at.Before(s.assistantFirstAt) {
+		return 0, false
+	}
+	return at.Sub(s.assistantFirstAt).Milliseconds(), true
 }

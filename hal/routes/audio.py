@@ -12,6 +12,7 @@ from fastapi.responses import Response
 
 import hal.app_state as state
 from hal.config import AUDIO_OUTPUT_ALSA, VOLUME_STATE_PATH
+from hal.drivers.voice._internal import live_playback
 from hal.safety.policy import clamp_volume, max_volume_pct
 from hal.models import (
     AudioDevicesResponse,
@@ -76,9 +77,10 @@ def _detect_playback_controls() -> tuple[list[str], Optional[str]]:
         playback: list[str] = []
         current: Optional[str] = None
         for line in result.stdout.splitlines():
-            m = re.search(r"Simple mixer control '([^']+)'", line)
+            m = re.search(r"Simple mixer control '([^']+)',([0-9]+)", line)
             if m:
-                current = m.group(1)
+                # ALSA omits index 0 in shorthand; keep legacy labels for it.
+                current = m.group(1) if m.group(2) == "0" else f"{m.group(1)},{m.group(2)}"
                 continue
             if current and "Capabilities:" in line:
                 caps = line.split("Capabilities:", 1)[1].split()
@@ -187,17 +189,19 @@ def set_volume(req: VolumeRequest):
     cmd_prefix = ["amixer", "-D", dev] if dev else ["amixer"]
     dac_db = _pct_to_db(pct)
     for ctrl in controls:
-        value = f"{dac_db:.1f}dB" if ctrl.upper() in _DAC_CONTROLS else f"{pct}%"
+        value = f"{dac_db:.1f}dB" if ctrl.rsplit(",", 1)[0].upper() in _DAC_CONTROLS else f"{pct}%"
         try:
             # `--` so amixer doesn't parse a leading `-` in negative dB as a flag.
-            subprocess.run(
+            result = subprocess.run(
                 [*cmd_prefix, "sset", ctrl, "--", value],
+                check=True,
                 capture_output=True,
                 text=True,
                 timeout=5,
             )
-        except Exception:
-            pass
+            live_playback.observe_mixer(ctrl, result.stdout)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise HTTPException(503, f"Audio mixer write failed: {ctrl}") from exc
     _persist_volume(pct)
     return _vol_set_response(pct)
 
@@ -245,7 +249,7 @@ def get_volume():
     controls, dev = _detect_playback_controls()
     cmd_prefix = ["amixer", "-D", dev] if dev else ["amixer"]
     sorted_controls = sorted(
-        controls, key=lambda c: 0 if c.upper() in _DAC_CONTROLS else 1
+        controls, key=lambda c: 0 if c.rsplit(",", 1)[0].upper() in _DAC_CONTROLS else 1
     )
     for ctrl in sorted_controls:
         try:
@@ -257,7 +261,8 @@ def get_volume():
             )
             if result.returncode != 0:
                 continue
-            if ctrl.upper() in _DAC_CONTROLS:
+            live_playback.observe_mixer(ctrl, result.stdout)
+            if ctrl.rsplit(",", 1)[0].upper() in _DAC_CONTROLS:
                 db_match = re.search(r"\[(-?\d+(?:\.\d+)?)dB\]", result.stdout)
                 if db_match:
                     return _vol_response(ctrl, _db_to_pct(float(db_match.group(1))))

@@ -2,9 +2,17 @@
 
 > **Sản phẩm hợp nhất (tháng 9/2026):** Chạy lệnh build/ký số từ `integrations/companions/autonomous-buddy/`. `make build`, `app` và `install` đóng gói một app Electron chứa helper Swift, mặc định theo kiến trúc Node hiện tại; dùng `make build BUDDY_ARCH=x64` cho Intel. `make dmg`, `dmg-signed` và `notarize` mặc định dùng `BUDDY_ARCHS="arm64 x64"`, tạo hoặc xử lý tuần tự hai DMG riêng cho Apple Silicon và Intel. Đây không phải universal binary. App output: `desktop/artifacts/package/Autonomous Buddy-darwin-<arch>/Autonomous Buddy.app`; DMG: `dist/Autonomous-Buddy-<version>-<arch>.dmg`. Recipe release universal chỉ Swift cũ giữ dưới tiền tố `native-*` và vẫn dùng tên `AutonomousBuddy-<version>.dmg`. `make build`, `make install` và `make dmg` không gửi lên Apple; `make dmg` dùng đóng gói local, còn target upload mặc định dùng artifact release đã notarize. Cross-compile chưa chứng minh tương thích runtime Intel; vẫn cần kiểm tra mở app, terminal/helper native và quyền trên máy Mac đích.
 
+## Cua Driver đóng gói cùng Buddy
+
+App hợp nhất đóng gói Cua Driver chính thức **0.28.2** trong `Contents/Helpers/CuaDriver.app`, nên người dùng chỉ cài Buddy. Build tải release upstream cố định và kiểm tra checksum SHA-256 trước khi đưa vào staging; không commit binary driver. Giữ chữ ký nhà phát hành của app con thay vì ký lại bằng identity Buddy. Kiểm tra chữ ký và khả năng hỗ trợ kiến trúc đã chọn trước khi ký app Buddy ngoài cùng. ZIP updater chứa cùng driver với DMG. Các target `native-*` chỉ Swift cũ vẫn là luồng phát triển riêng.
+
+Khi chạy, Buddy chỉ khởi động driver nhúng lúc cần và quản lý vòng đời của nó; người dùng không chạy `cua-driver serve` hay cài app thứ hai. Chế độ nhúng dùng danh tính quyền macOS của Buddy. Kiểm tra Accessibility, Screen Recording, nút **Restart computer use** hiện có sau khi đổi quyền, Pause/hủy và việc dừng process con từ app đã đóng gói trên từng kiến trúc đích. Quyền cấp cho CuaDriver độc lập hoặc build local thành công không chứng minh Buddy đóng gói có quyền, đã notarize hay được Gatekeeper chấp nhận. Kiểm tra bản phân phối cuối cùng theo các bước bên dưới.
+
+Quyền Screen Recording của bản ad-hoc cũ có thể vẫn hiện bật nhưng macOS từ chối chữ ký hiện tại. Nếu TCC báo `Failed to match existing code requirement`, xóa mục Buddy cũ trong Screen & System Audio Recording, thêm lại `/Applications/Autonomous Buddy.app`, rồi khởi động lại Buddy. Installer không reset hoặc sửa quyền riêng tư macOS.
+
 ## Upload và metadata OTA theo kiến trúc
 
-Từ thư mục gốc repo, `make upload-autonomous-buddy` tăng patch version chung trong `VERSION_AUTONOMOUS_BUDDY` đúng một lần, build, ký số, notarize và staple cả hai DMG, kiểm tra ticket và Gatekeeper chấp nhận rồi upload từng file lên `${BUCKET_PREFIX}/ota/autonomous-buddy/<arch>/<version>.dmg` (thông thường là `os/ota/autonomous-buddy/...`). Mỗi mục metadata được chọn, `autonomous-buddy.arm64` hoặc `autonomous-buddy.x64`, có `version`, `url`, `sha256` và `updated_at` riêng. Release một kiến trúc giữ nguyên version của kiến trúc còn lại và mọi component khác. Khi chuyển metadata phẳng cũ, publisher giữ mục cũ dưới `arm64` nếu chưa có mục này, vì DMG đã phát hành trước đó chỉ dành cho Apple Silicon. Vì vậy release mới chỉ Intel vẫn giữ link tải Apple Silicon cũ, cùng checksum nếu trước đó có. Sau đó cập nhật các kiến trúc được chọn và xóa các trường version/URL Buddy cấp trên cũ vốn không phân biệt kiến trúc. Bên đọc link tải phải chọn kiến trúc tương ứng; Buddy hiện chưa có updater trong app, nên metadata này dùng để tìm bản tải xuống, chưa tự cài đặt.
+Từ thư mục gốc repo, `make upload-autonomous-buddy` tăng patch version chung trong `VERSION_AUTONOMOUS_BUDDY` đúng một lần, build, ký số, notarize và staple cả hai DMG, kiểm tra ticket và Gatekeeper chấp nhận rồi upload từng file lên `${BUCKET_PREFIX}/ota/autonomous-buddy/<arch>/<version>.dmg` (thông thường là `os/ota/autonomous-buddy/...`). Mỗi mục metadata được chọn, `autonomous-buddy.arm64` hoặc `autonomous-buddy.x64`, có `version`, `url`, `sha256` và `updated_at` riêng. Release một kiến trúc giữ nguyên version của kiến trúc còn lại và mọi component khác. Khi chuyển metadata phẳng cũ, publisher giữ mục cũ dưới `arm64` nếu chưa có mục này, vì DMG đã phát hành trước đó chỉ dành cho Apple Silicon. Vì vậy release mới chỉ Intel vẫn giữ link tải Apple Silicon cũ, cùng checksum nếu trước đó có. Sau đó cập nhật các kiến trúc được chọn và xóa các trường version/URL Buddy cấp trên cũ vốn không phân biệt kiến trúc. Bên tải thủ công chọn kiến trúc tương ứng. Release đã ký còn xuất bản ZIP và feed Squirrel cho [updater trong app](app-updates_vi.md); metadata chung vẫn là danh mục tải DMG.
 
 ```bash
 # Dùng profile notarytool có sẵn trong Keychain (xem setup bên dưới).
@@ -19,7 +27,25 @@ BUDDY_SKIP_BUILD=1 make upload-autonomous-buddy
 BUDDY_SKIP_BUILD=1 BUDDY_ARCHS=x64 make upload-autonomous-buddy
 ```
 
-Giữ nguyên các kiến trúc đã chọn và `BUDDY_DMG_TARGET` khi thử lại. Target upload mặc định dùng `BUDDY_DMG_TARGET=dmg-signed`. Trước khi tăng version hoặc build, script yêu cầu `NOTARY_PROFILE` và kiểm tra credential bằng `notarytool history`. `BUDDY_SKIP_BUILD=1` không cần profile nếu DMG đã notarize, nhưng vẫn chạy `stapler validate` và kiểm tra Gatekeeper trên từng DMG được chọn trước khi upload file đầu tiên. `BUDDY_DMG_TARGET=dmg` là override tường minh cho phân phối local/test không notarize; chỉ chấp nhận hai target này, không nhận artifact standalone `native-*`. Override `GCS_PATH` hoặc `BUDDY_URL` chỉ được dùng khi `BUDDY_ARCHS` có một giá trị, tránh hai DMG dùng cùng đích. Mọi DMG được yêu cầu phải tồn tại trước khi upload artifact đầu tiên. Nếu đọc metadata hiện tại lỗi, script dừng xuất bản metadata thay vì ghi đè feed chung; cập nhật feed đã ký cần `OTA_SIGNING_PRIVATE_KEY`, dù dùng payload ký lồng bên trong hay chữ ký trực tiếp. Artifact có thể đã upload xong khi bước xuất bản metadata thất bại.
+Giữ nguyên các kiến trúc đã chọn và `BUDDY_DMG_TARGET` khi thử lại. Mặc định `BUDDY_DMG_TARGET=dmg-signed` yêu cầu `NOTARY_PROFILE` và kiểm tra credential bằng `notarytool history` trước khi tăng version hoặc build. `BUDDY_SKIP_BUILD=1` dùng lại DMG đã notarize mà không tăng version, build lại, gửi notarize hay cần profile; bước staple app có thể lấy ticket đã có. Trước mọi upload, tất cả DMG được chọn phải tồn tại và đạt kiểm tra version, kiến trúc, chữ ký, ticket và Gatekeeper; ZIP updater cũng phải đạt kiểm tra.
+
+`BUDDY_DMG_TARGET=dmg` là override tường minh cho local/test: kiểm tra version, kiến trúc và chữ ký app, chỉ xuất bản metadata DMG thủ công, giữ nguyên feed updater. Chỉ chấp nhận hai target này; không nhận artifact standalone `native-*`. Override `GCS_PATH` hoặc `BUDDY_URL` chỉ dùng cho một kiến trúc và phải có đuôi `.dmg`; URL phải dùng HTTPS. ZIP và `latest.json` nằm cùng thư mục đích với DMG.
+
+Nếu đọc metadata hiện tại lỗi, script dừng xuất bản metadata thay vì thay feed chung. Cập nhật metadata chung đã ký cần `OTA_SIGNING_PRIVATE_KEY`. Artifact có thể đã upload khi bước xuất bản metadata thất bại.
+
+Trước khi ký, bước đóng gói thêm quyền ghi cho owner của file và thư mục trong bundle, giữ nguyên bit thực thi và không đi theo symlink. Squirrel cần quyền này để cài: privacy manifest của SwiftPM có thể giữ mode `0444`, khiến thay thế app thất bại. Kiểm tra ZIP release từ chối resource chỉ đọc, kể cả khi thử lại với `BUDDY_SKIP_BUILD=1`; cần build, ký và notarize lại app thay vì đổi quyền trong release đã ký.
+
+### ZIP và feed tự cập nhật
+
+Upload bản ký trích xuất đúng app trong từng DMG đã notarize, staple app, rồi kiểm tra chữ ký Developer ID, ticket và Gatekeeper. Cả hai version plist (`CFBundleShortVersionString`, `CFBundleVersion`) và `Contents/Resources/app/package.json` phải khớp `VERSION_AUTONOMOUS_BUDDY`; binary Electron, helper Swift và node-pty phải khớp kiến trúc đã chọn; CuaDriver nhúng phải hỗ trợ kiến trúc đó và giữ chữ ký nhà phát hành đã được kiểm tra. `ditto` tạo `dist/Autonomous-Buddy-<version>-<arch>.zip`, giữ tên app bundle; bản giải nén mới được kiểm tra lại. Để chỉ tạo ZIP này từ DMG đã notarize, chạy `make update-zip BUDDY_ARCH=arm64` trong thư mục Buddy. Không build lại app.
+
+Thứ tự upload là `<version>.dmg` rồi `<version>.zip` của từng kiến trúc, tiếp đến `metadata.json` chung, cuối cùng là `latest.json` của từng kiến trúc. Đường dẫn ZIP mặc định là `${BUCKET_PREFIX}/ota/autonomous-buddy/<arch>/<version>.zip`. Feed Squirrel tĩnh chứa:
+
+```json
+{"currentRelease":"<version>","releases":[{"version":"<version>","updateTo":{"version":"<version>","name":"<release name>","url":"<HTTPS ZIP URL>","pub_date":"<timestamp>","sha256":"<ZIP SHA256>","size":12345}}]}
+```
+
+Squirrel dùng feed ZIP; DMG tiếp tục dùng cho cài lần đầu và khôi phục thủ công. Buddy 0.0.21 trở xuống cần cài thủ công một lần để có updater. Thay đổi mã nguồn này không xuất bản release hay tăng version.
 
 Doc handover cho dev sẽ làm Apple Developer enrolment. Sau khi setup 1 lần xong, mỗi release chỉ cần:
 
@@ -38,7 +64,7 @@ Khi không có identity Developer ID dùng được, packaging giữ fallback ad
 
 Recipe Makefile `native-*` cũ giữ quy tắc dò identity và override hiện có. Với release có nhiều certificate, cần export tường minh identity mong muốn để mọi đường packaging/signing dùng cùng certificate.
 
-Thứ `make dmg-signed` thêm so với `make dmg` là notarize, staple và kiểm tra Gatekeeper, cần `NOTARY_PROFILE`. Apple hướng dẫn notarize container phân phối ngoài cùng: gửi từng DMG cuối cùng sẽ bao gồm app và binary bên trong, nên flow này không cần gửi riêng ZIP của app. Xem [Apple: Packaging Mac software for distribution](https://developer.apple.com/documentation/xcode/packaging-mac-software-for-distribution).
+Thứ `make dmg-signed` thêm so với `make dmg` là notarize, staple và kiểm tra Gatekeeper, cần `NOTARY_PROFILE`. Apple hướng dẫn notarize container phân phối ngoài cùng: gửi từng DMG cuối cùng bao gồm app và binary bên trong. ZIP updater được tạo từ đúng app đó sau khi staple và kiểm tra ở cấp app; không cần gửi ZIP riêng. Xem [Apple: Packaging Mac software for distribution](https://developer.apple.com/documentation/xcode/packaging-mac-software-for-distribution).
 
 ## Khác biệt vs build ad-hoc
 
@@ -129,8 +155,8 @@ Với từng kiến trúc được chọn, make target chạy theo thứ tự:
 
 1. Compile Electron main/renderer. Rebuild node-pty cho kiến trúc Electron được chọn trong bản sao dependency ở staging, giữ nguyên dependency dùng phát triển.
 2. Cross-compile helper Swift release cho kiến trúc được chọn (`x64` ánh xạ sang Swift `x86_64`; Apple Silicon dùng `arm64`).
-3. Đóng gói `desktop/artifacts/package/Autonomous Buddy-darwin-<arch>/Autonomous Buddy.app`, nhúng helper và resource SwiftPM trong `Contents/Resources/native/`.
-4. `codesign` app với Developer ID, hardened runtime, secure timestamp. Packaging kiểm tra chữ ký và dùng `lipo` kiểm tra kiến trúc đích của Electron, helper Swift, node-pty và spawn helper của nó.
+3. Đóng gói `desktop/artifacts/package/Autonomous Buddy-darwin-<arch>/Autonomous Buddy.app`, nhúng helper và resource SwiftPM trong `Contents/Resources/native/`, cùng app CuaDriver đã kiểm tra trong `Contents/Helpers/`.
+4. `codesign` app với Developer ID, hardened runtime, secure timestamp. Packaging kiểm tra chữ ký và dùng `lipo` kiểm tra kiến trúc đích của Electron, helper Swift, node-pty và spawn helper của nó, cùng khả năng hỗ trợ kiến trúc và chữ ký nhà phát hành của CuaDriver nhúng.
 5. `hdiutil create` DMG (layout drag-to-Applications).
 6. `codesign` DMG với Developer ID.
 7. `xcrun notarytool submit … --wait` — upload lên Apple, block 1-5 phút chờ verdict.
@@ -189,5 +215,5 @@ Staple offline-capable nên user cài lần đầu khi offline vẫn được tr
 ## Phần doc này CỐ Ý KHÔNG cover
 
 - **Phát hành qua Mac App Store.** Cert khác (`Apple Distribution`), App Sandbox bắt buộc, flow submission riêng qua App Store Connect. Out of scope.
-- **Sparkle / auto-update.** Buddy hiện chưa có updater trong app; metadata OTA theo kiến trúc cung cấp link DMG để cài thủ công. Add Sparkle sau nếu release cadence tăng.
+- **Cập nhật app.** App Electron hợp nhất dùng Squirrel.Mac với feed ZIP đã ký; xem [cập nhật app](app-updates_vi.md). App native-only cũ chưa có updater.
 - **CI signing.** Làm được (GitHub Actions với cert + notarytool keychain profile encrypt làm secrets), nhưng handoff hiện tại giả định 1 dev sign local. Setup CI khi build cadence justify.

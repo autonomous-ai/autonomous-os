@@ -1,6 +1,8 @@
 package http
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"os"
@@ -89,6 +91,9 @@ func (h *AgentHandler) runCreatedAtMs(runID string) int64 {
 	now := time.Now().UnixMilli()
 	h.runFirstSeenMu.Lock()
 	defer h.runFirstSeenMu.Unlock()
+	if h.runFirstSeenMs == nil {
+		h.runFirstSeenMs = make(map[string]int64)
+	}
 	if seen, ok := h.runFirstSeenMs[runID]; ok {
 		return seen
 	}
@@ -167,6 +172,7 @@ func (h *AgentHandler) CancelSpeech() {
 	// of every in-flight turn with it; the Opening filler of whatever the user
 	// says NEXT is armed after this and is unaffected.
 	cancelledFillers := sensinghttp.DefaultFillerManager.CancelAllActive()
+	hal.CancelVoiceFollowups(now)
 	slog.Info("speech cancelled -- in-flight turns muted",
 		"component", "agent", "watermark_ms", now, "fillers_cancelled", cancelledFillers)
 	// Monitor bus rather than flow.Log: the click belongs to no single run, and
@@ -225,6 +231,7 @@ func (h *AgentHandler) CancelSpeechForNewerTurn() bool {
 	now := time.Now().UnixMilli()
 	h.autoSpeechWatermarkMs.Store(now)
 	cancelledFillers := sensinghttp.DefaultFillerManager.CancelAllActive()
+	hal.CancelVoiceFollowups(now)
 	slog.Info("speech auto-cancelled -- realtime answered a newer turn",
 		"component", "agent", "watermark_ms", now, "fillers_cancelled", cancelledFillers)
 	if h.monitorBus != nil {
@@ -289,8 +296,18 @@ func (h *AgentHandler) deliverTTS(send func(string) error, text, flowRunID, errC
 		text = i18n.One(i18n.PhraseLLMLimit)
 		send = hal.SpeakCached
 	}
+	finishAdmission := hal.BeginVoiceFollowupSpeech(flowRunID)
+	dispatchAt := time.Now()
+	textKey := ttsTextKey(text)
 	go func() {
+		defer finishAdmission()
+		sendAt := time.Now()
+		slog.Info("[tts-timing] delivery_start", "run_id", flowRunID,
+			"text_key", textKey, "dispatch_to_send_ms", sendAt.Sub(dispatchAt).Milliseconds())
 		err := send(text)
+		slog.Info("[tts-timing] delivery_complete", "run_id", flowRunID,
+			"text_key", textKey, "send_ms", time.Since(sendAt).Milliseconds(),
+			"dispatch_to_complete_ms", time.Since(dispatchAt).Milliseconds(), "success", err == nil)
 		if err == nil {
 			return
 		}
@@ -315,4 +332,10 @@ func (h *AgentHandler) deliverTTSQueue(text, flowRunID, errCtx string) {
 		return
 	}
 	h.deliverTTS(h.agentGateway.SendToHALTTSQueue, text, flowRunID, errCtx)
+}
+
+// ttsTextKey correlates text at this boundary without logging its contents.
+func ttsTextKey(text string) string {
+	digest := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(digest[:6])
 }

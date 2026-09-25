@@ -175,7 +175,14 @@ func (s *HermesService) sendChat(message string, imagesBase64 []string, fixedReq
 
 	// Run the SSE stream in a background goroutine: Device callers (sensing
 	// handler, voice loop) shouldn't block for the full turn duration.
-	go s.runStream(idempotencyKey, body)
+	s.steeringMu.Lock()
+	native := s.SupportsNativeSteering()
+	s.steeringMu.Unlock()
+	if native {
+		s.enqueueManagedRun(idempotencyKey, body, sourceType)
+	} else {
+		go s.runStream(idempotencyKey, body)
+	}
 
 	return idempotencyKey, nil
 }
@@ -202,7 +209,7 @@ func (s *HermesService) runStream(runID string, body streamRequest) {
 		}
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(s.runContext())
 	defer cancel()
 
 	res, err := s.postStream(ctx, runID, body, dispatch)

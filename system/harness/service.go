@@ -21,7 +21,17 @@ import (
 )
 
 type Frame map[string]any
-type Callbacks struct{ OnEvent func(Frame) }
+type Callbacks struct {
+	OnEvent func(Frame)
+	// BeforeEvent persists correlated results before advancing the replay cursor.
+	BeforeEvent func(Frame, ResultContext) error
+	// BeforeRequest binds local intent to the exact authenticated connection.
+	BeforeRequest func(Frame, ResultContext) error
+	OnReceipt     func(Frame, ResultContext)
+	// OnRevoked runs after the paired computer revoked this device and the pin
+	// was removed (same cleanup as a local unpair, e.g. disable Harness voice).
+	OnRevoked func()
+}
 type Status struct {
 	Code             string   `json:"code,omitempty"`
 	ExpiresAt        int64    `json:"expires_at,omitempty"`
@@ -55,13 +65,47 @@ type response struct {
 	err   error
 }
 type connection struct {
-	channel      *DirectChannel
-	mu           sync.Mutex
-	capabilities map[string]bool
-	pending      map[string]chan response
+	channel       *DirectChannel
+	mu            sync.Mutex
+	capabilities  map[string]bool
+	pending       map[string]chan response
+	resultContext ResultContext
 }
 
-// DeliveryUnknownError means a mutation may have reached the computer. Never retry it automatically.
+// ResultContext is transport-owned; no event field can choose its owner.
+type ResultContext struct {
+	Owner            string
+	MachineID        string
+	ServerInstanceID string
+}
+
+func (s *Service) ResultContext() ResultContext {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.conn == nil {
+		return ResultContext{}
+	}
+	return s.conn.resultContext
+}
+
+// ResultOwner identifies the saved pair even while disconnected. Unpairing
+// removes access to that owner's locally retained results.
+func (s *Service) ResultOwner() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.disk.Peer == nil {
+		return ""
+	}
+	pub, err := decode(s.disk.Peer.PublicKey, 32)
+	if err != nil {
+		return ""
+	}
+	identity := sha256.Sum256(append(append([]byte{}, s.identity.Public().(ed25519.PublicKey)...), pub...))
+	return hex.EncodeToString(identity[:])
+}
+
+// DeliveryUnknownError means a task/focus mutation may have reached the computer.
+// Never retry it automatically; preparation has separate durable recovery semantics.
 type DeliveryUnknownError struct {
 	RequestID string
 	Cause     error
@@ -111,7 +155,7 @@ type Service struct {
 	statusChanges chan struct{}
 }
 
-var capabilities = []string{"focus.ensure", "focus.get", "agents.list", "turn.send", "turn.stop", "status", "recap", "question.answer", "receipt.get"}
+var capabilities = []string{"focus.ensure", "focus.get", "focus.step", "agents.list", "turn.send", "turn.stop", "status", "recap", "question.answer", "receipt.get", "store.list", "store.inspect", "agent.prepare", "operation.get"}
 
 func NewService(dataDir string, callbacks Callbacks) (*Service, error) {
 	s := &Service{path: filepath.Join(dataDir, "harness", "trust.json"), callbacks: callbacks, ctx: context.Background(), sockets: make(map[*DirectChannel]bool), events: make(chan Frame, 128), statusChanges: make(chan struct{}, 1), status: Status{State: "unpaired", Capabilities: []string{}}}
@@ -327,7 +371,7 @@ func (s *Service) CancelPair() error {
 }
 
 func mutation(kind string) bool {
-	return kind == "turn.send" || kind == "turn.stop" || kind == "question.answer"
+	return kind == "turn.send" || kind == "turn.stop" || kind == "question.answer" || kind == "focus.step" || kind == "agent.prepare"
 }
 
 // Request sends exactly once. The caller owns stable idempotency keys for mutations.
@@ -353,7 +397,16 @@ func (s *Service) Request(ctx context.Context, frame Frame) (Frame, error) {
 	for k, v := range frame {
 		f[k] = v
 	}
-	if kind != "focus.ensure" && kind != "focus.get" && kind != "agents.list" && kind != "receipt.get" {
+	if isStoreOperation(kind) {
+		for _, capability := range storeCapabilities {
+			if !c.capabilities[capability] {
+				return nil, errors.New("UNSUPPORTED_CAPABILITY: update Harness CLI for Store preparation")
+			}
+		}
+		if kind == "agent.prepare" && stringField(f, "machineId") != machine {
+			return nil, errors.New("MACHINE_MISMATCH")
+		}
+	} else if kind != "focus.ensure" && kind != "focus.get" && kind != "focus.step" && kind != "agents.list" && kind != "receipt.get" {
 		if stringField(f, "machineId") != machine {
 			return nil, errors.New("MACHINE_MISMATCH")
 		}
@@ -370,6 +423,14 @@ func (s *Service) Request(ctx context.Context, frame Frame) (Frame, error) {
 			return nil, errors.New("PAYLOAD_TOO_LARGE")
 		}
 	}
+	if isStoreOperation(kind) {
+		if value, exists := f["requestId"]; exists {
+			id, ok := value.(string)
+			if !ok || !storeUUID.MatchString(id) {
+				return nil, errors.New("INVALID_REQUEST: invalid Store requestId")
+			}
+		}
+	}
 	if stringField(f, "requestId") == "" {
 		raw, err := randomBytes(16)
 		if err != nil {
@@ -379,6 +440,11 @@ func (s *Service) Request(ctx context.Context, frame Frame) (Frame, error) {
 		raw[8] = (raw[8] & 63) | 128
 		h := hex.EncodeToString(raw)
 		f["requestId"] = h[:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:]
+	}
+	if isStoreOperation(kind) {
+		if err := validateStoreRequest(f); err != nil {
+			return nil, err
+		}
 	}
 	id := stringField(f, "requestId")
 	ch := make(chan response, 1)
@@ -395,10 +461,21 @@ func (s *Service) Request(ctx context.Context, frame Frame) (Frame, error) {
 	c.mu.Unlock()
 	defer func() { c.mu.Lock(); delete(c.pending, id); c.mu.Unlock() }()
 	unknown := func(err error) (Frame, error) {
+		if kind == "agent.prepare" {
+			return nil, &PreparationUnknownError{RequestID: id, Cause: err}
+		}
 		if mutation(kind) {
 			return nil, &DeliveryUnknownError{RequestID: id, Cause: err}
 		}
 		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s.callbacks.BeforeRequest != nil {
+		if err := s.callbacks.BeforeRequest(f, c.resultContext); err != nil {
+			return nil, err
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -416,6 +493,9 @@ func (s *Service) Request(ctx context.Context, frame Frame) (Frame, error) {
 	case r := <-ch:
 		if r.err != nil {
 			return unknown(r.err)
+		}
+		if s.callbacks.OnReceipt != nil {
+			s.callbacks.OnReceipt(r.frame, c.resultContext)
 		}
 		return r.frame, nil
 	}
@@ -462,6 +542,8 @@ func (s *Service) handshake(ctx context.Context, channel *DirectChannel, p peer)
 			return nil, nil, errors.New("invalid Harness capability response")
 		}
 		c := &connection{channel: channel, pending: make(map[string]chan response), capabilities: make(map[string]bool)}
+		identity := sha256.Sum256(append(append([]byte{}, s.identity.Public().(ed25519.PublicKey)...), pub...))
+		c.resultContext = ResultContext{Owner: hex.EncodeToString(identity[:]), MachineID: p.MachineID, ServerInstanceID: stringField(welcome, "serverInstanceId")}
 		if caps, ok := welcome["capabilities"].([]any); ok {
 			for _, v := range caps {
 				cap, _ := v.(string)
@@ -510,6 +592,10 @@ func (s *Service) readLoop(c *connection) error {
 			return err
 		}
 		kind := stringField(outer, "type")
+		// The CLI seals pair.revoke as an autonomous_device_event payload.
+		if kind == "pair.revoke" || stringField(payloadOf(outer), "type") == "pair.revoke" {
+			return ErrRevoked
+		}
 		if kind == "autonomous_device_result" {
 			frame := payloadOf(outer)
 			id := stringField(frame, "requestId")
@@ -526,6 +612,13 @@ func (s *Service) readLoop(c *connection) error {
 			continue
 		}
 		frame := payloadOf(outer)
+		if s.callbacks.BeforeEvent != nil {
+			if err := s.callbacks.BeforeEvent(frame, c.resultContext); err != nil {
+				return fmt.Errorf("persist Harness event before replay acknowledgement: %w", err)
+			}
+		}
+		// Never let wire data masquerade as local authenticated provenance.
+		frame["_osResultContext"] = c.resultContext
 		if !s.emit(frame) {
 			return errors.New("Harness event consumer is behind; reconnecting for replay")
 		}
@@ -797,6 +890,9 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	connection, welcome, err := s.handshake(lifetime, channel, pinned)
 	if err != nil {
+		if errors.Is(err, ErrRevoked) {
+			s.revokedByComputer(generation)
+		}
 		return
 	}
 	s.mu.Lock()
@@ -852,4 +948,25 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.statusChangedLocked()
 	}
 	s.mu.Unlock()
+	if errors.Is(err, ErrRevoked) {
+		s.revokedByComputer(generation)
+	}
+}
+
+// revokedByComputer removes the pin after the paired computer rejected or
+// revoked this device. generation guards against a local unpair/re-pair that
+// raced with the revoke; s.conn is already nil here so Unpair sends no echo.
+func (s *Service) revokedByComputer(generation uint64) {
+	s.mu.Lock()
+	stale := s.generation != generation || s.disk.Peer == nil
+	s.mu.Unlock()
+	if stale {
+		return
+	}
+	if err := s.Unpair(); err != nil {
+		return
+	}
+	if s.callbacks.OnRevoked != nil {
+		s.callbacks.OnRevoked()
+	}
 }

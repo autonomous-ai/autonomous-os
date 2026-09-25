@@ -1,5 +1,31 @@
 # Sensing Behavior
 
+## Spoken brevity by function
+
+Skill prompts keep native thinking separate from all ordinary assistant text,
+including text around tool calls and the final answer. They do not enforce a
+single word cap across every function:
+
+- Greetings, emotion checkins, and music suggestions use their existing short
+  response contracts; a music suggestion is one invitation, normally ≤20 words.
+- Wellbeing nudges retain the relevant observation and actionable next step;
+  phrasing can use a second short sentence when the function needs it.
+- Mood and habit helpers contribute required data/markers without adding a
+  second spoken explanation to the invoking skill's response.
+- Voice controls keep their outcome and essential next step (such as how to
+  unmute); enrollment keeps consent/name questions and result confirmation.
+  Guard warnings retain the hazard/action and useful return summaries.
+- Direct requests retain all requested actions, adequate answers, longer
+  requested explanations/readbacks, and necessary safety guidance.
+
+Required API calls, logging, routing and cooldowns remain intact. Reuse injected
+context and already-read references; avoid redundant lookups or repeated
+wordsmithing. Explicit early speech remains available for a useful cue during
+work, but never for internal planning or repeated confirmations. These are
+prompt changes only: no TTS parser, runtime streaming, or thinking configuration
+changes, and no measured latency or compliance guarantee.
+
+
 How Lamp reacts to the world — the philosophy and mechanics behind each sensing event type.
 
 Lamp is a living being. It doesn't "process sensor data" — it *experiences* things. This document describes how that experience is implemented.
@@ -28,6 +54,10 @@ All per-type gates above are independent — without a cross-type gate, a burst 
 - A floored event is dropped, not queued (`sensing_drop` with reason `ambient_floor` in the Flow Monitor). Every ambient emitter re-offers on its own heartbeat, so a drop only delays awareness — it never loses a user-facing interaction.
 
 ---
+
+## Spoken sensing replies
+
+For events handled by `skills/sensing/SKILL.md`, the prompt requires literal HW markers followed by one sentence of at most 20 words in `current_language`, or `NO_REPLY` for a silent row. It forbids event/matrix explanations, owner-context analysis, draft alternatives and afterwords in all assistant text, including intermediate messages. A standalone stranger arrival outside guard mode requires the fixed greeting (EN: “Hi, I don’t think we’ve met.”; VI: “Chào bạn, hình như mình chưa gặp nhau.”), with exact HW markers and no optional proactive care. The model must silently remove any preamble before sending; a leading `[user]` wrapper does not change the detector route. Guard events and explicit user requests retain their own routing. Without a separate reasoning channel, analysis must be omitted. This is a prompt instruction, not a backend length limit or a guarantee of model compliance; other skills keep their own output rules.
 
 ## Sound
 
@@ -89,15 +119,29 @@ Python pushes `sound_tracker` events directly to the monitor bus via `POST /api/
 
 Always triggers a full reaction — no exceptions. The agent **must** do all three:
 
-1. `/emotion greeting` (0.9) for friend — `/emotion curious` (0.8) for stranger
+1. `/emotion greeting` (0.9) for friend — `/emotion curious` (0.8) for stranger, or `curious` (0.6) when the stranger joins a friend the text lists as `already present:`
 2. For friend: `/servo/aim {"direction": "user"}` then `/servo/track {"target": ["person"]}` — aim orients the camera toward the user's region first (~2s), then the vision tracker locks onto the person and follows them around the room. Stranger: `/servo/play {"recording": "scanning"}` (no auto-follow — caution)
-3. Speak: warm greeting for friend (by the name in `[context: current_user=X]`), cautious acknowledgment for stranger
+3. Speak: warm greeting for friend (by the name in `[context: current_user=X]`), cautious acknowledgment for stranger — unless the text lists a friend as `already present:`, in which case the aside goes to that friend (see below)
 
 The system handles cooldowns on the HAL side. If the event reached the agent, enough time has passed — react fully.
 
+#### Event text: who is new, who was already there
+
+`presence.enter` means **newly** visible, not visible: a person is "new" only when their `last_seen` is `None` or older than the forget window (`FACE_OWNER_FORGET_S` 3600 s for friends, `FACE_STRANGER_FORGET_S` 1800 s for strangers). The text is built by `hal/drivers/sensing/perceptions/processors/faceid/enter_message.py` in three `; `-separated segments:
+
+```
+Person detected — new: stranger (stranger_2); already present: momo (friend); faces in frame: 2 (momo, stranger_2)
+```
+
+- `new:` — the arrivals, friend part first, ids sorted. The `friend (<name>)` / `stranger (<id>)` labels are a contract: the wake-focus gate opens on `friend (`, `sensing-track` greps them, `face-enroll` parses the hint appended after them.
+- `already present:` — friends boxed in the **same frame** who did not just arrive, written `<name> (friend)` so they never read as an arrival. This is the co-presence signal `sensing/SKILL.md` uses to address the user ("Hey Momo, looks like you've got company") instead of greeting the visitor. For a stranger-only enter it is only written once friend and non-friend boxes have coexisted for `FACE_COPRESENCE_MIN_TICKS` (2) consecutive sensing ticks (`unsure` boxes count — that is the tick the recognizer spends corroborating a new stranger before minting); a poster, a reflection or a one-tick glitch next to the user must not turn "hello" into "you've got company". A new friend joining a present friend is listed without that guard. It is never derived from `current_user()`, which is presence-window state and reads the same whether the user is sitting there or left two minutes ago.
+- `faces in frame:` — the number of boxes in the frame the **attached snapshot** shows and their labels in detection order (`unsure` for a box without an identity), the same labels drawn on it. Both this segment and `already present:` are captured on the tick a frame is seen and travel with it (`FrameFacts` in `enter_message.py`): a new friend sends the current frame immediately, so current facts are used; a stranger-only enter sends the buffered snapshots, and the newest buffered frame's facts are used — the flush can land up to `FACE_STRANGER_FLUSH_S` later, when the user may already have blurred out of the live frame (device-observed: two boxes in the picture, `1 (unsure)` in the text, before this rule). It is not the number of arrivals: flushed stranger ids may come from several buffered frames.
+
+Priority between arrivals is unchanged: both new in one frame → one event, friend first, sent immediately; stranger buffered first and friend later → the friend frame goes out immediately and the stranger follows as its own event after `FACE_STRANGER_FLUSH_S` (10 s), subject to `FACE_COOLDOWN_S` (10 s) and `FACE_STRANGER_ENTER_FLOOR_S` (300 s).
+
 #### Return after long absence (friend only)
 
-On every friend `presence.enter` event, the sensing handler injects a `[context: current_user=X]` tag (see [User attribution](#user-attribution--context-current_userx)) followed by a `[presence_context: {"last_leave_age_min": N, "current_hour": H}]` block before forwarding to the agent. The attribution tag is what the greeting is spoken from — the event text itself carries only a face *label* (`friend (long)`), which the agent reads as a detection tag rather than a name. `last_leave_age_min` is computed from the most recent `leave` row in the user's wellbeing log, scanning up to 3 days back (`wellbeing.LastActionTS`); `-1` means no leave was found in that window.
+On every `presence.enter` event the sensing handler injects a `[context: current_user=X]` tag (see [User attribution](#user-attribution--context-current_userx)); when the event's `new:` segment names a friend (`sensingmsg.EnterNamesNewFriend`, the Go mirror of HAL's `has_new_friend`) it also appends a `[presence_context: {"last_leave_age_min": N, "current_hour": H}]` block before forwarding to the agent. A stranger-only enter never gets the block even though `current_user` is still the friend inside her forget window: the numbers would describe *her* last leave, and the agent read exactly that as her returning (orange-lamp, 2026-09-16: "Long re-entering after ~28 min away" spoken at a visitor). When instead the text carries `already present:` and no new friend (`sensingmsg.EnterHasPresentFriend`), the handler appends a one-line pointer — `[A stranger joined <current_user>, who is in frame — speak to <current_user>, not to the stranger. See sensing/SKILL.md "Someone joins the user".]` — because Hermes only reads `sensing/SKILL.md` when the model calls `skill_view`, and on the turn it skipped that it answered the visitor's arrival with "Hey, welcome back" (orange-lamp, 2026-09-16). The attribution tag is what the greeting is spoken from — the event text itself carries only a face *label* (`friend (long)`), which the agent reads as a detection tag rather than a name. `last_leave_age_min` is computed from the most recent `leave` row in the user's wellbeing log, scanning up to 3 days back (`wellbeing.LastActionTS`); `-1` means no leave was found in that window.
 
 `sensing/SKILL.md` reads this block and swaps to a **return-after-long-absence** greeting when ALL three conditions hold:
 
@@ -113,15 +157,19 @@ Agent calls `/emotion idle` (0.4), fires `/servo/track/stop` to release any acti
 
 ### Away (`presence.away`)
 
-Sent automatically by HAL's `PresenceService` when **no motion is detected for 15 minutes** (after already dimming at 5 min). By this point the lights are already off — the agent's job is to **announce going to sleep** via TTS and Telegram.
+Sent automatically by HAL's `PresenceService` when **neither motion nor user activity is detected for 15 minutes** (after already dimming at 5 min). By this point the lights are already off — the agent's job is to **announce going to sleep** via TTS and Telegram.
 
-Agent calls `/emotion sleepy` (0.8), fires `/servo/track/stop` so any stale follow from earlier in the session is released. HAL immediately turns the LED black, mutes the mic and stops active music; after 1 second of continuous `sleepy`, it releases servo torque and locks motion commands. The **speaker** is muted on a delay instead — os-server fires the `sleepy` marker up to 100ms ahead of the reply text it was sent with (`fireHWCallsSync`), so muting inline raced the going-to-sleep line and usually won, and `/voice/speak-queue` answered `suppressed -- speaker muted`. `_start_sleepy_speaker_drain` in `hal/app_state.py` now waits `SLEEPY_SPEAKER_GRACE_S` (2s) for an announcement to start, lets it finish, and mutes at `SLEEPY_SPEAKER_DRAIN_MAX_S` (15s) at the latest; in-flight TTS is no longer cut off mid-word, except at that cap, where it is stopped outright — muting only gates playback that has not started, so without the stop the cap would bound nothing and a sleeping device would keep talking. A wake cancels the drain. Only `greeting` or `stretching` resumes servo motion (`_SLEEP_GATE_ALLOWED` in `hal/routes/emotion.py`) — expressive emotions such as `curious`/`happy` are dropped while asleep, so a background agent task cannot wake the device; a tap on the GPIO button can, and it restores only the mic/speaker states that sleepy auto-muted. os-server keeps a **second** gate that drops passive sensing while asleep (`SensingHandler`, all types except `presence.enter`, `fire_hazard.detected`, voice and typed chat). Its `IsSleeping()` asks HAL `/emotion/status`: a wake that does not go through the agent — the button tap, the web UI hardware page, a direct POST to HAL — never touches os-server's own `lastEmotion`, so inferring sleep from that alone left the gate shut on an awake device and dropped sensing until the next voice or chat turn. `lastEmotion` now only serves as the cheap awake-path filter and as the fallback when HAL is unreachable. Sleepy-owned audio mutes ride in sleep's own sidecar (`_persist_sleep_state`) and DO survive a HAL restart, so an OTA cannot bring a sleeping device back with the mic listening; they stay marked sleep-owned so waking hands the switches back to whatever the user had chosen. This is the last action before Lamp goes fully idle.
+Agent calls `/emotion sleepy` (0.8), fires `/servo/track/stop` so any stale follow from earlier in the session is released. HAL immediately turns the LED black, mutes the mic and stops active music; after 1 second of continuous `sleepy`, it releases servo torque and locks motion commands. The **speaker** is muted on a delay instead — os-server fires the `sleepy` marker up to 100ms ahead of the reply text it was sent with (`fireHWCallsSync`), so muting inline raced the going-to-sleep line and usually won, and `/voice/speak-queue` answered `suppressed -- speaker muted`. `_start_sleepy_speaker_drain` in `hal/app_state.py` now waits `SLEEPY_SPEAKER_GRACE_S` (2s) for an announcement to start, lets it finish, and mutes at `SLEEPY_SPEAKER_DRAIN_MAX_S` (15s) at the latest; in-flight TTS is no longer cut off mid-word, except at that cap, where it is stopped outright — muting only gates playback that has not started, so without the stop the cap would bound nothing and a sleeping device would keep talking. A wake cancels the drain. **Scenes whose preset says `speaker: off`** (reading, focus, movie, night) drain the same way (`_start_scene_speaker_drain`, same grace and cap): the `/scene` marker also lands before the reply text, so an inline mute swallowed the scene's confirmation line and — when the skill chains `[HW:/scene:night][HW:/emotion:sleepy]` for "goodnight" — the going-to-sleep line too, and left sleep without ownership of a mute it never set, so a wake could not hand the speaker back. The scene drain yields to sleep: `sleepy` arriving while it is pending cancels it and starts its own, so one owner commits the mute and wake restores it; a scene activated while asleep or during a sleepy drain starts none. The commit re-checks under `privacy.lock` that the scene is still active and the device is awake. Scene off, a replacing scene, a `speaker: on` scene, and an explicit `/speaker/unmute` cancel it. Music is still stopped at once — it is never the confirmation line. Only `greeting` or `stretching` resumes servo motion (`_SLEEP_GATE_ALLOWED` in `hal/routes/emotion.py`) — expressive emotions such as `curious`/`happy` are dropped while asleep, so a background agent task cannot wake the device; a tap on the GPIO button can, and it restores only the mic/speaker states that sleepy auto-muted. os-server keeps a **second** gate that drops passive sensing while asleep (`SensingHandler`, all types except `presence.enter`, `fire_hazard.detected`, voice and typed chat). Its `IsSleeping()` asks HAL `/emotion/status`: a wake that does not go through the agent — the button tap, the web UI hardware page, a direct POST to HAL — never touches os-server's own `lastEmotion`, so inferring sleep from that alone left the gate shut on an awake device and dropped sensing until the next voice or chat turn. `lastEmotion` now only serves as the cheap awake-path filter and as the fallback when HAL is unreachable. Sleepy-owned audio mutes ride in sleep's own sidecar (`_persist_sleep_state`) and DO survive a HAL restart, so an OTA cannot bring a sleeping device back with the mic listening; they stay marked sleep-owned so waking hands the switches back to whatever the user had chosen. This is the last action before Lamp goes fully idle.
 
 The full presence auto-control timeline:
-1. **5 min no motion** → light dims to 20% (automatic, no agent involvement)
-2. **15 min no motion** → light off + `presence.away` event sent → agent announces sleep
+1. **5 min without motion or activity** → light dims to 20% (automatic, no agent involvement)
+2. **15 min without motion or activity** → light off + `presence.away` event sent → agent announces sleep
 
 HAL manages the light control; the agent only handles the verbal announcement. If the user returns (motion detected), light restores automatically and a `presence.enter` event fires.
+
+The timer resets on two kinds of evidence, not only the camera. **Motion** is `on_motion()` from the people-perception processors (face / motion / emotion). **User activity** is `on_activity()`, reached through `app_state.note_user_activity()`: every voice turn HAL forwards to os-server (`voice`, `voice_command`, `voice_followup`, `voice_agent_handled`, after the echo filter, in `SensingSender.send`) and the touch gestures single click (GPIO button, touchpad, privacy-switch unmute), head pat and double tap (mic toggle). Without it, a user talking to the lamp with the camera off or sitting outside the frame timed out to AWAY and the lamp announced sleep mid-conversation. Activity during IDLE/AWAY returns to PRESENT and restores the light like motion does, except while the device is asleep: the light restore is then skipped (for motion too), and the wake emotion owns the strip. Typed chat (`web_chat` / `mqtt_chat`) does **not** count — it can come from a phone away from home, and must not keep an empty room lit. Hold gestures (sleep / shutdown / reset) and swipe (sleep) do not count either. Activity only refreshes a machine that is already enabled; it never enables it.
+
+**Sleep pauses the timer and waking restarts it.** While `_sleeping`, `tick()` returns early: no dim, no light off, no `presence.away`. Sleep already owns the strip, and the camera is off, so nothing could reset the clock anyway. Counting on used to dim a sleeping lamp back to 20% of the user's colour (`_dim_light` calls `rgb_service` directly, past the `/led` sleep lock) and left the machine AWAY for the wake to inherit. Every wake — button, web UI emotion pill, direct `POST /emotion`, an agent `greeting`/`stretching` (for example in reply to a chat) — converges on `express_emotion` in `hal/routes/emotion.py`, which calls `app_state.note_presence_wake()` → `PresenceService.on_wake()`: the clock restarts from now and the state returns to PRESENT without repainting the light (the wake emotion owns the strip). Before, only a face on camera reset it, so a wake nobody stood in front of either kept the pre-sleep timestamp and announced sleep again right after waking, or stayed AWAY and never timed out again.
 
 This auto-control state machine is gated on the `presence` capability: its only motion source is the people-perception loop (face/motion/emotion processors), which HAL runs only when the device declares `presence`. A device without `presence` starts the state machine disabled, so it never falsely times out to AWAY. Lamp declares `presence: required` so the timeline above always applies.
 
@@ -373,12 +421,14 @@ By the time the agent sees the event, HAL has already logged the activity rows f
 
    Three reset points: the actual activity (`drink` / `break`), a fresh arrival (`enter`), or the last nudge of that kind (`nudge_*`). The nudge reset is the key: after Lamp reminds, the delta drops back to 0 so the next reminder only fires after another full threshold window — no separate cooldown variable needed.
 3. **Decide path** (one response max per turn, reaction outranks nudge — the user just acted, nudging on top would feel tone-deaf):
-   - **Reaction** — labels list contains `drink` or `break` → speak a 1–3 sentence acknowledgment (surprised / playful, not advice). Uses `count_today` ("lần thứ N hôm nay"), `time_of_day`, and the gap delta to flavor the line. **No log entry** — the underlying `drink` / `break` row was already written by HAL upstream.
+   - **Reaction** — labels list contains `drink` or `break` → speak one short acknowledgment sentence (surprised / playful, not advice). Uses `count_today` ("lần thứ N hôm nay"), `time_of_day`, and the gap delta to flavor the line. **No log entry** — the underlying `drink` / `break` row was already written by HAL upstream.
    - **Hydration nudge** — else if hydration delta ≥ hydration threshold → hydration nudge.
    - **Break nudge** — else if break delta ≥ break threshold → break nudge.
    - Else (sedentary under threshold, or no reset today yet) → `NO_REPLY`.
 4. **After speaking a nudge** (not a reaction), log a `nudge_hydration` or `nudge_break` entry — this is what resets the delta for the next window (and makes the nudge visible on the user's timeline).
 5. **Never guess** time-since from memory — always compute from the log.
+
+For automatic `[activity]` turns, the wellbeing skill forbids routing/skill-selection narration in every assistant text message, including before tools. Raw eat reactions (`eating *`, `dining`, `tasting food`) are limited to one sentence of at most 20 words in `current_language`, with no tools, log marker, extra nudge or habit bootstrap even when timers are due or `bootstrap_needed=true`. The complete carrots example is “Enjoy your carrots!”. This is prompt guidance, not deterministic TTS filtering.
 
 The reaction path was added so positive actions don't fall into silence: drinking water that doesn't trigger a nudge used to produce `NO_REPLY`, which felt dead. The reaction is fed by two extra pre-computed fields in `[wellbeing_context: ...]` — `count_today` (tally of `drink` / `break` rows today) and `time_of_day` (`morning` / `noon` / `afternoon` / `evening` / `night`) — so phrasing has something specific to lean on without spawning extra tool calls. Visual captions (e.g. "blue water bottle") are intentionally NOT in scope yet — the vision pipeline returns class labels only.
 
@@ -655,7 +705,7 @@ Includes the `face_id` in parentheses so the agent knows which person the activi
 Lamp detects the **user's** emotional state via three channels:
 
 1. **Facial expression** (primary) — `emotion.detected` event from `hal/drivers/sensing/perceptions/processors/emotion.py`. Each detected face is cropped and POSTed to perception-service `/emotion-recognize` (HTTP, one call per face per sensing tick). Detects 7 emotions: Neutral, Happy, Sad, Surprise, Fear, Disgust, Anger. A reading passes three gates before it becomes an event:
-   1. **Per-label gate (service side)** — the argmax must clear its own bar in `label_gating.py` (`anger 0.8`, `happy 0.5`, `surprise 0.6`, `sad/disgust 0.7`, `fear 0.5`) or it is replaced by Neutral carrying Neutral's own probability. HAL's `EMOTION_CONFIDENCE_THRESHOLD` is then applied to whatever came back; below it the response is empty and HAL records no reading.
+   1. **Per-label gate (HAL side)** — HAL posts the crop with `raw: true` and gates the returned probabilities in `emotion_gating.py`: the argmax must clear its own bar (`anger 0.8`, `sad 0.8`, `happy 0.5`, `surprise 0.6`, `disgust 0.7`, `fear 0.5`; override per device with `HAL_EMOTION_LABEL_THRESHOLDS`, which replaces the whole map) or Neutral stands in carrying Neutral's own probability, and `EMOTION_CONFIDENCE_THRESHOLD` is applied to the result. A reading that fails is **no reading**, not Neutral. Against an older perception server that ignores `raw`, the server gates with its own `label_gating.py` map and HAL takes its label as-is. `result.json` records which side gated (`gate: hal|server`) and, for HAL, every class probability.
    2. **Occupancy (HAL side)** — on each `EMOTION_FLUSH_S` flush, `Happy` fires on a single frame, but every other label must hold a **strict majority of that person's recognition attempts in the trailing 10s**, counting attempts that returned nothing (an exact tie does not qualify), **and be at least 2 readings**. Attempts are counted per face detection, not per sensing tick, so without that floor a face seen once in the window makes a single reading a trivial 1-of-1 majority. A face turned toward a monitor reads as Anger, so a lone Anger frame among a dozen empty responses used to win the vote outright.
    3. **Bucket dedup** — `(user, positive|negative)` with a `EMOTION_DEDUP_WINDOW_S` TTL (300s), so each polarity reports at most once per 5 minutes.
 2. **Speech emotion** (secondary) — `speech_emotion.detected` event from `hal/drivers/voice/speech_emotion/`. Runs at the end of every speaker-identified STT session against the same WAV used for speaker recognition. Uses `emotion2vec_plus_large` on perception-service via HTTP. See [Speech Emotion Recognition](../../../docs/speech-emotion.md) for the full pipeline.
@@ -695,6 +745,8 @@ The `user-emotion-detection/SKILL.md` handles `emotion.detected` events:
    - **#3 anything else** → **checkin** — a short human reaction. See `user-emotion-detection/reference/checkin.md` for per-emotion examples (templates are keyed by raw FER label — Sad/Fear/Angry/Disgust/Happy/Surprise — with three style options: Ask, Comfort, Invite). Examples are inspiration only; agent improvises per turn.
 3. **Cooldown only gates music, never checkin.** When the 7-min cooldown is active, row #2 fails its third clause and the event falls through to checkin (row #3). The agent still asks "what's up?" — it just doesn't suggest music two times in a row. `NO_REPLY` only fires on row #1 (active audio playback).
 4. **Never greet on an emotion event.** `emotion.detected` is not a presence/arrival event — `sensing/SKILL.md` forbids openers like `hello`, `welcome back`, anything containing `again`. Greetings belong only to `presence.enter`.
+
+Emotion skill output forbids assistant-text preambles before or between tool/skill calls, then requires the mood signal and selected-route markers followed by one sentence of at most 20 words or the route’s `NO_REPLY`. After reading the selected reference, the model should finish without rereading for phrasing. Explicit weak camera/voice cues must not be spoken as established feelings or expressions: a weak Happy checkin uses a neutral invitation, not an assertion that the user is happy or smiling. Logging and routing remain unchanged. These are prompt instructions, not a guarantee that the model will comply. With provider thinking enabled, route/cooldown/style/logging analysis must stay in the native reasoning channel, without a summary in ordinary text before or after tools or in the final response. Textual `<think>` tags are not a substitute; without a native channel, omit analysis. The checkin reference includes a complete weak Sad / unknown-user / two-minute music-cooldown example with required markers and only “Anything on your mind?” spoken, without assuming distress.
 
 Both routes share one cooldown: music logs via `POST /api/music-suggestion/log` with `trigger:"<genre>:<mood>"` (mood bucket); checkin logs the same endpoint with `trigger:"checkin:<emotion>"` (raw FER label). `last_suggestion_age_min` reflects either channel, so a fresh music suggestion silences the music branch for 7 min but doesn't silence checkin. Checkin phrasing is keyed by raw emotion (not mood) so each FER label has its own ask/comfort/invite style options — see `reference/checkin.md`. Always prefix `[HW:/emotion:{"emotion":"caring","intensity":0.5}]` on checkin output.
 
@@ -800,7 +852,15 @@ The whole suite is opt-in per device: the routeless `lifelike` capability (decla
 |------|-----------|---------|--------------|
 | Breathing LED | `light` | continuous (2 s tick) | Starts HAL's built-in `/led/effect` `breathing` (speed 0.3) using the current LED color read from HAL; falls back to the resting look (`ambientRestingColor`, currently `(0, 0, 0)`) when the LED is black — a dark resting look means the tick is skipped and the strip stays unlit. See [led-control.md § The resting look](led-control.md#the-resting-look-default-off). Stops the effect while paused or LED-locked. |
 | Micro-movements | `motion` | random 45–120 s | Plays one safe servo recording from `idle`, `curious`, `nod`. Servo only — never touches the LED. |
-| Mumble (self-talk) | `audio` | random 5–15 min | Speaks one random phrase from the `PhraseMumble` pool (`system/lib/i18n/phrases.go`, EN/VI/zh-CN/zh-TW, audio tags like `[sigh]`/`[whisper]`/`[chuckle]`). Uses `hal.SpeakCached` — the first render of each phrase hits the TTS provider, replays come from HAL's WAV cache, so idle mumbling costs no API calls. |
+| Mumble (self-talk) | `audio` | random 5–15 min | Picks from six shared `PhraseMumble` entries per language (`system/lib/i18n/phrases.go`, EN/VI/zh-CN/zh-TW): short vocalizations mixed with playful self-talk, such as “No need to rush.” and “I like little moments like this.” One entry uses `[chuckle]`; none uses sigh or whisper tags. Uses `hal.SpeakCached` — the first render of each phrase hits the TTS provider, replays come from HAL's WAV cache, so idle mumbling costs no API calls. |
+
+The shared wording is independent of robot type or body. The idle pool has no
+sensor or conversation context, so it contains no claims about lighting,
+quietness, listening, forgotten thoughts or sleepiness. Such
+sentences require a separate context-aware behavior; this loop does not infer
+those conditions. Cadence, pause/wake rules and random selection are unchanged
+(consecutive repeats remain possible). Audition the actual cached device voice
+before judging naturalness; text and punctuation cannot guarantee its tone.
 
 ### LED lock
 

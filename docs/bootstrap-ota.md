@@ -12,6 +12,31 @@ The device runs **5 software components** on a supported board (Raspberry Pi 4, 
 | **OpenClaw** | Node.js package | `npm install -g` | `openclaw.service` | Global npm |
 | **HAL** | Python package | Download zip from OTA | `hal.service` | `/opt/hal/` |
 
+HAL supports CPython **3.12.x** (`requires-python = ">=3.12,<3.13"`).
+`uv sync --python 3.12` selects the interpreter but still resolves the project's
+entire supported Python range and optional extras. An unbounded `>=3.12` can
+therefore fail an ARM64 update while resolving Python 3.14 (the pinned LeRobot
+requires Torch <2.8, without compatible wheels for that split). Keep the Python
+range and `hal/uv.lock` aligned; a staging resolution failure restores the old HAL.
+
+HAL release packaging includes `uv.lock` and validates it with
+`uv lock --python 3.12 --check` before bumping the version or uploading. The
+updater uses `uv sync --locked` when the archive contains a lockfile; older
+archives without one retain their legacy resolution path. Excluding the lock
+forced device-side fresh resolution: on uv 0.12.15, HAL 0.1.169 failed on a
+Python >=3.13 ARM64/Reachy split despite a 3.12-only project range; the same
+archive with the validated lock passed a locked install dry-run on the device.
+
+Image builders for OrangePi, Pi 4, and Pi 5 also use `--locked` when the
+downloaded HAL archive contains `uv.lock`. They fetch HAL from the OTA metadata,
+not from the local checkout; rerun the build after publishing the fixed archive.
+
+Lamp setup and Pi/OrangePi images install HAL with `--extra hardware --extra aec
+--extra pipecat`. Non-Reachy OTA selects the same extras, so Smart Turn is
+installed automatically without a separate device command. Reachy retains
+`--extra hardware --extra reachy`: its ONNX runtime requirement conflicts with
+Pipecat. The `pipecat` extra remains optional for bare developer `uv sync`.
+
 ### Architecture Diagram
 
 ```
@@ -114,7 +139,9 @@ const (
     OTAKeyOpenClaw  = "openclaw"
     // Agent-runtime CLIs. Each value is also the runtime name in config.json
     // `agent_runtime` — that equality is how bootstrap updates only the CLI the
-    // device actually runs. Hermes is absent on purpose (cannot be pinned).
+    // device actually runs. Hermes rides along only when its entry is
+    // commit-pinned (OTAComponent.Commit) — see OTAKeyHermes.
+    OTAKeyHermes     = "hermes"
     OTAKeyCodex      = "codex"
     OTAKeyClaudeCode = "claudecode"
     OTAKeyOpenCode   = "opencode"
@@ -177,7 +204,7 @@ curl -fsSL https://cdn.autonomous.ai/os/install.sh | sudo bash
 | -1 | Locale fix | Ensure `C.UTF-8` encoding |
 | 0 | Prerequisites | System packages, Node.js 22 |
 | 0a | WiFi stability | Disable IPv6, WiFi power saving (RPi5) |
-| 0b | Enable SPI | For WS2812 LED driver |
+| 0b | Enable SPI + I2C | For WS2812 LED driver; I2C bus for peripherals |
 | 1 | Fetch OTA metadata | Download metadata.json, extract versions and URLs |
 | 1b | Install binaries | Download + install os-server, bootstrap-server, create systemd services |
 | 2 | Install OpenClaw | `npm install -g openclaw`, create config, create systemd service |
@@ -300,6 +327,14 @@ release is not reinstalled on the next poll. Publishing a different version
 automatically resumes OTA for that component. Rollback itself does not need the
 metadata URL or network access.
 
+Before `os-server`, `web`, or `device` updates, the updater ensures the nginx
+Harness WebSocket route exists. It searches both `/etc/nginx/conf.d/*.conf` and
+all `/etc/nginx/sites-enabled/*` entries, including Reachy's `reachy-spike`.
+The route reuses the existing `/api/` HTTP upstream (`backend` or
+`spike_backend`); unsupported proxy block shapes or URI rewriting are rejected.
+Symlinked sites are updated at their real target, preserving the enabled link.
+The updater validates with `nginx -t` and reloads nginx only after adding a route.
+
 Directory installs have the same recovery contract. Before a web update, the
 updater stops nginx, swaps the fully unpacked staged bundle into place, and
 retains the previous bundle at `/root/bootstrap/rollback/web.previous` together
@@ -314,11 +349,122 @@ For a device profile, the updater stages the ZIP, stops only the `os-server` and
 `/root/bootstrap/rollback/device.previous`. It also snapshots the exact files
 covered by the old or new `rootfs/` overlay in `device.previous.rootfs`; rollback
 therefore restores overwritten files and removes files introduced only by the
-rejected profile. Local `/opt/hal/.env` tuning remains preserved. The profile
+rejected profile. Successful OTA replaces the generated `/opt/hal/.env`. The profile
 must contain `ROBOT.md`; each service that was active must recover and answer
 its loopback health endpoint. A failed check restores the known-good profile and
 its prior service state automatically. Use `software-update rollback device` for
 an operator rollback; the rejected device-profile version is then blocked.
+
+### Optional hardware overrides
+
+The OS reads the single-line name in `/etc/autonomous/hardware-profile`.
+Missing, empty or `standard` selects the fresh base device package without
+an override: no new USB checks or changed legacy audio/Live defaults. Other names must match
+`[a-z][a-z0-9_-]{0,63}` and select `overrides/<name>/` inside that device's package.
+The identity file is machine-owned and must not be shipped in an overlay.
+
+`scripts/provision/apply-overrides.py` is included in every released device ZIP.
+It merges the selected `rootfs/opt/hal/.env` over the shared env, copies other
+selected `rootfs/` files into the staged rootfs, and applies the optional integer
+`startup_volume`/`max_volume` fields from `profile.json` to `ROBOT.md`/`SAFETY.md`.
+Its optional `capabilities` map accepts boolean values and activates or comments
+existing capability entries in `ROBOT.md` frontmatter; it cannot invent a
+capability declaration. Selected `device/*.json` files replace existing
+top-level device JSON files in full, without merging their contents. The
+renderer validates these inputs before writing changes and rejects invalid
+capabilities or replacement files. Product-specific values live only in the
+device package. For example:
+
+| Profile | Voice microphone | Sensing microphone | Speaker | Startup / maximum volume | SEN63C |
+|---|---|---|---|---|---|
+| `standard` | Jieli `device_micro2` | CMedia `device_cmedia` | Base speaker | Base defaults | Disabled |
+| `pro` | Jieli `device_micro2` | CMedia `device_cmedia` | Base speaker | Base defaults | Enabled on `orangepi_sun60`, bus `0` |
+| `pro-respeaker-lite` | ReSpeaker Lite processed left input | Onboard ES8389 (`sndi2s4`) | ReSpeaker Lite softvol `Speaker` | 35 / 35 | Enabled on `orangepi_sun60`, bus `0` |
+| `pro-xvf3800` | XVF3800 (`Array`) | Onboard ES8389 (`sndi2s4`) | XVF3800 | 77 / 77 | Enabled on `orangepi_sun60`, bus `0` |
+
+Each Pro directory contains `profile.json` with
+`capabilities: {"environment": true}`, plus `device/sen63c.json` enabling the
+OrangePi sensor. Only the Lite and XVF3800 variants override volume defaults. The base Standard package comments that capability and
+disables SEN63C, so it does not start acquisition, write the SEN63C bus clock,
+poll the environment UI or qualify for the environment skill. SEN55/SCD41
+and boards without matching entries remain disabled even on Pro.
+
+`pro-respeaker-lite` preserves the former `pro` overlay in full, including its
+ALSA, udev and softvol service files: HAL AEC enabled, Silero threshold `0.10`,
+Live off, and always-on uplink. `pro` is Standard audio plus SEN63C only:
+it has no `rootfs/`, `.env`, ALSA, udev, service or volume override. Its rendered
+ALSA configuration and safety bounds are byte-identical to Standard;
+microphones, speaker, processing and volume defaults all use the base package.
+The common renderer only adds the selected profile's saved-volume namespace
+(`HAL_VOLUME_STATE_PATH=/root/config/.volume-pro`) to the generated HAL environment. `pro-xvf3800` keeps XMOS AEC, software
+AEC off, Live on and always-on uplink.
+
+ReSpeaker Lite (XMOS XU316, USB `2886:0019`, ALSA card `Lite`) uses S16_LE
+2 ch 16 kHz audio. `pro-respeaker-lite` requires its speaker wired through Lite. This card has no ALSA mixer; a udev-triggered oneshot opens
+the PCM before `hal.service` to create the softvol control for boot volume
+restore. The 35% setting was tuned on the Lite assembly, not calibrated as an
+acoustic equivalence across devices. Standard retains its audio defaults and
+ceiling. The renderer does not detect, flash or retune attached hardware.
+
+Existing `pro` machines using the Lite microphone must explicitly select
+`pro-respeaker-lite` before installing the updated device package to preserve
+their full audio configuration. There is no automatic marker migration. Changing the
+marker alone does not replace installed files; reinstall the device package.
+
+Image builders/fresh setup apply a selected override before installing rootfs.
+OTA starts from the fresh base archive, not an already rendered Pro tree, so
+switching to Standard restores its disabled sensor and capability defaults.
+OTA renders before stopping services and taking the rootfs snapshot; missing
+helper/selected overlay or render failure leaves the installed package running. Copy
+or health failure rolls back the profile and live rootfs together. Rollback does
+not change the machine's hardware-profile selection.
+
+For new images, select the assembly at build time:
+
+```bash
+make -C scripts/imager build TARGET=opi DEVICE_TYPE=lamp VARIANT=pro OTA_METADATA_URL=...
+```
+
+`VARIANT` is the only build input for hardware selection. The overlay stage writes
+`/etc/autonomous/hardware-profile` before applying `overrides/pro`; OTA later reads
+that file. Empty or `VARIANT=standard` removes any stale selection from the image
+and uses the unchanged base package. The selection is not baked into the reusable
+base cache. Nonstandard variants add a suffix to the final image/release filename.
+Unknown variants or packages without the override helper fail the build.
+
+Machines without a hardware-profile marker remain Standard, including machines
+that previously received the global SEN63C default; no automatic Pro migration
+is performed. To retain SEN63C on Pro hardware, explicitly choose `pro`, `pro-respeaker-lite` or
+`pro-xvf3800` and reinstall the device package. Upgrades from older releases
+need both HAL (the I2C clock fix) and the device package (capability and sensor
+configuration). A HAL-only update does not install these profile defaults.
+
+Provision a selected assembly by writing its name before installation. For an
+existing machine, first install the new updater and HAL/os-server, then:
+
+```sh
+sudo mkdir -p /etc/autonomous
+printf 'pro\n' | sudo tee /etc/autonomous/hardware-profile
+sudo software-update device
+```
+
+Check the update succeeds before using the device. If conversion fails, restore
+the previous hardware-profile selection to match the restored package. To return
+to legacy hardware, remove the selection and install a fresh device package via
+OTA; simply deleting the file does not undo an already rendered overlay. An old
+updater cannot apply overrides: automatic bootstrap refreshes its updater first,
+but manual/failed-refresh deployments must update it before selecting a profile.
+
+Every selected profile saves volume separately as `config/.volume-<name>`
+(HAL and os-server agree), including the capability/device-JSON-only `pro`
+profile. The common renderer generates `HAL_VOLUME_STATE_PATH` accordingly;
+absent/Standard retains `config/.volume`. This prevents a
+legacy speaker's saved percentage from overriding the new assembly's startup
+level. HAL addresses both `PCM,0` and `PCM,1`, excluding capture controls; mixer
+write failure returns 503 rather than persisting a false success. UI, voice and
+startup volume remain subject to the selected ceiling. No Live UI or delegated
+TTS barge-in behavior is added; direct generated `.env` edits are overwritten
+by the next successful device OTA, as before.
 
 Devices without `signing_public_key` deliberately remain in legacy mode: they
 read the top-level entries and emit a warning rather than failing OTA. This is a
@@ -536,7 +682,9 @@ published but `min_version` was not promoted to it — the worker will refuse it
 which is why the web Versions card treats held components as "no update".
 The installed device profile is reported as `device`, resolved from nested
 `metadata.devices.<device_type>` rather than the flat component list.
-os-server proxies this as `GET /api/system/ota-versions`.
+os-server proxies this as `GET /api/system/ota-versions` and, for the cloud, as
+the MQTT `data` kind `system.ota_versions` (both via `system/ota`; the cloud's
+`system.software_update` is the MQTT twin of the Versions card's button).
 
 ### Version Detection Per Component
 
@@ -550,7 +698,7 @@ os-server proxies this as `GET /api/system/ota-versions`.
 | `hal` | Run `/opt/hal/venv/bin/python -m hal --version` OR read `/opt/hal/VERSION` file |
 | `codex` / `claudecode` / `opencode` | Run `<cli> --version`, extract semver from line one (`cliSemver`) |
 | `picoclaw` | Read `/usr/local/lib/os-runtimes/picoclaw/installed-version` — its `version` output carries no semver |
-| `hermes` | — not auto-updated (see below) |
+| `hermes` | Run `hermes --version` ("Hermes Agent v0.21.1 (2026.9.7)"), extract semver from line one (`cliSemver`) |
 
 ### Update Application Per Component
 
@@ -559,11 +707,11 @@ os-server proxies this as `GET /api/system/ota-versions`.
 | `os-server` | Run `software-update os-server` (blocks up to 10 min) |
 | `bootstrap` | Spawn detached `software-update bootstrap` (self-update, survives restart) |
 | `web` | Run `software-update web` |
-| `device` | Run `software-update device` for the resolved `devices.<device_type>` profile; its rootfs overlay is applied while preserving device-local HAL `.env` |
+| `device` | Run `software-update device` for `devices.<device_type>`; apply any explicitly selected hardware override, then install rootfs including generated HAL `.env` |
 | `openclaw` | ~~Run `npm install -g openclaw@{version}` → `systemctl restart openclaw`~~ (temporarily disabled) |
 | `hal` | Run `software-update hal` → `systemctl restart hal` |
 | `codex` / `claudecode` / `opencode` / `picoclaw` | Run `software-update <key>` — only on the device whose `agent_runtime` IS that runtime |
-| `hermes` | Not in the loop: `hermes update` cannot be pinned, so a `min_version` it never reaches would re-trigger every poll. SSH-only. |
+| `hermes` | Run `software-update hermes` — only when `agent_runtime` is hermes, the metadata entry carries `commit`, AND the on-device updater is the pinning one (`updaterSupportsHermesPin`: it reads `.hermes.commit`). An unpinned entry (no `commit`) is skipped by both the loop and `/versions`, so the web button never appears for it — `hermes update` would land on upstream HEAD and the floor could never be met. |
 
 Manual and force OpenClaw updates run `software-update openclaw`. Before
 installing the version selected by OTA metadata, the updater reads that npm
@@ -596,13 +744,33 @@ for repair. After restart, success requires an authenticated
 systemd considers the process active. Package/state changes are not
 automatically rolled back on migration or readiness failure.
 
-Manual `software-update hermes` checks Node before running `hermes update`.
-The supported build range follows the upstream Hermes installer: Node 22.22+
-within 22.x, 24.11+ within 24.x, or stable 26+. Incompatible Node is upgraded to
-system Node 24.x with the same helper used for OpenClaw, then rechecked.
-Compatibility-check or upgrade failures abort before `hermes update`.
-Hermes's update command resolves existing npm and refreshes dependencies;
-it does not run the installer's Node provisioning step.
+`software-update hermes` has two modes, chosen by the metadata entry:
+
+- **Pinned** (`hermes.commit` present — written by `scripts/release/upload-hermes.sh
+  <version> <upstream-tag|sha>`, which resolves the date tag upstream uses,
+  e.g. `v2026.9.7` → `2237be35…` = 0.21.1): fetch the upstream installer AT
+  that commit and drive its `repository`, `venv`, `python-deps`, `path` stages
+  with `--commit <sha> --force-commit` — the flags `scripts/imager/build-orangepi.sh`
+  bakes the image with. `--force-commit` also rolls BACK a checkout that an
+  unpinned `hermes update` had moved past the release. The landed `hermes
+  --version` must equal the published semver; a mismatch fails the update
+  (the metadata pair is wrong). This is the mode bootstrap auto-applies.
+- **Unpinned** (no `commit`, entries published before pinning existed): `hermes
+  update` to upstream HEAD; the published version is only expected, so a
+  mismatch warns. Manual SSH only — bootstrap never applies it.
+
+Both modes check Node first. The supported build range follows the upstream
+Hermes installer: Node 22.22+ within 22.x, 24.11+ within 24.x, or stable 26+.
+Incompatible Node is upgraded to system Node 24.x with the same helper used for
+OpenClaw, then rechecked; a failed check or upgrade aborts before any change.
+Both modes end by restarting `hermes-gateway` and then **os-server**: os-server
+patches two Hermes sources at `EnsureOnboarding` (`cache_usage.go` →
+`api_server.py`, `runs_patch.go` → `api_server_runs.py`) and a fresh checkout
+drops them — without the restart the next turns fall back to `/v1/responses`
+and the Flow Monitor shows no cache column.
+`runtimes/hermes/install.sh` (runtime switch) still installs upstream HEAD
+unpinned; the reconcile loop then brings the device onto the pinned commit on
+its next poll, exactly as it would for any other stale component.
 
 **Why the agent CLIs are gated on `agent_runtime`, not on the binary:**
 `scripts/imager/build-orangepi.sh` bakes every agent CLI onto every lamp /
@@ -671,6 +839,12 @@ aborts with an error if neither is set — no compiled-in URL.
 
 ### HAL Case
 
+The updater finds `uv` on `PATH`, then at `/root/.local/bin/uv`, then at
+`/home/pollen/.local/bin/uv` (Reachy's installer location). Before stopping HAL,
+it selects Python extras from `DEVICE_TYPE` in `/opt/hal/.env`, falling back to
+`device_type` in `/root/config/config.json`: `reachy-mini` uses `hardware + reachy`
+to retain the Pollen SDK; every other device uses `hardware + aec + pipecat`.
+
 > **The uv cache lives outside the runtime tree** (`/opt/.uv-cache-hal`, next to
 > `/opt/hal` so uv can hardlink into the new venv). It used to sit at
 > `/opt/hal/.uv-cache`, so every update copied it — measured at 2.5 GB, beside a
@@ -693,11 +867,15 @@ aborts with an error if neither is set — no compiled-in URL.
     systemctl stop hal
     mv /opt/hal /root/bootstrap/rollback/hal.previous
 
-    # Build the candidate in a sibling directory. .env, venv, and uv cache
-    # are copied from the retained runtime before uv sync.
+    # UV_BIN and HAL_EXTRA are resolved before stopping HAL.
+    # Build a fresh venv; preserve .env and use the external shared cache.
     unzip -q "$ZIP" -d /opt/.hal.new
-    cp -a /root/bootstrap/rollback/hal.previous/{.env,.venv,.uv-cache} /opt/.hal.new/
-    (cd /opt/.hal.new && uv sync --python 3.12 --extra hardware --extra aec)
+    cp -a /root/bootstrap/rollback/hal.previous/.env /opt/.hal.new/
+    HAL_EXTRA_ARGS=(--extra "$HAL_EXTRA")
+    if [ "$HAL_EXTRA" != "reachy" ]; then
+        HAL_EXTRA_ARGS+=(--extra pipecat)
+    fi
+    (cd /opt/.hal.new && UV_CACHE_DIR=/opt/.uv-cache-hal "$UV_BIN" sync --python 3.12 --extra hardware "${HAL_EXTRA_ARGS[@]}")
     mv /opt/.hal.new /opt/hal
 
     systemctl restart hal
@@ -1001,7 +1179,7 @@ echo "HAL $NEW_VERSION published."
 | `scripts/release/upload-claudecode.sh` | Claude Code CLI version | Metadata only (Anthropic installer on device) |
 | `scripts/release/upload-opencode.sh` | OpenCode CLI version | Metadata only (opencode.ai installer on device) |
 | `scripts/release/upload-picoclaw.sh` | PicoClaw release TAG | Metadata only (GitHub asset on device); verifies the tag exists |
-| `scripts/release/upload-hermes.sh` | Hermes version (SSH-only, unpinnable) | Metadata only (`hermes update` on device) |
+| `scripts/release/upload-hermes.sh` | Hermes version + upstream tag/commit | Metadata only: `hermes.version` + `hermes.commit` (device checks the commit out via the upstream installer) |
 | `scripts/provision/install.sh` | CDN install shortcut | `curl ... \| sudo bash` on Pi |
 | `scripts/release/tag-release.sh` | Git release tag with OTA metadata snapshot | Fetch metadata.json → annotated tag → `git push origin <tag>` |
 
@@ -1065,8 +1243,8 @@ HAL version is a plain text `VERSION` file in the package root. Read by bootstra
 - [x] **HAL source**: Mono-repo. Driver code copied from `humancomputerlab/lelamp_runtime` into `hal/`, with LiveKit/OpenAI removed and HTTP API + DisplayService added. Upstream tracked manually via `hal/UPSTREAM.md`.
 - [x] **HAL HTTP port**: `5001` (OS Server is `5000`).
 - [x] **Bridge protocol**: Simple HTTP proxy. HAL runs FastAPI on `127.0.0.1:5001`, OS Server proxies from port 5000.
-- [x] **Python version**: Pinned to Python 3.12+ (`pyproject.toml`, `.python-version`, `setup.sh` uses `uv sync --python 3.12`).
-- [x] **HAL packaging**: On-device venv via `uv sync --python 3.12 --extra hardware --extra aec` at `/opt/hal/.venv`. OTA preserves venv, reinstalls only on requirements change.
+- [x] **Python version**: Pinned to Python 3.12.x (`pyproject.toml`, `.python-version`, `setup.sh` uses `uv sync --python 3.12`).
+- [x] **HAL packaging**: On-device venv via `uv sync --python 3.12 --extra hardware` plus `--extra reachy` for Reachy Mini or `--extra aec --extra pipecat` for other devices. OTA builds a fresh venv using the shared cache, preserves `.env`, and retains the old runtime for rollback.
 - [x] **Display driver**: DisplayService (GC9A01) is part of HAL Python at `hal/service/display/display_service.py`.
 - [x] **HAL config**: Environment variable-based (`config.py` reads from env vars). `.env` file support via `python-dotenv`. No separate config file needed.
 

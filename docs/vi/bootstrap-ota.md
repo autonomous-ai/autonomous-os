@@ -12,6 +12,30 @@ Thiết bị chạy **5 thành phần phần mềm** trên board được hỗ t
 | **OpenClaw** | Node.js package | `npm install -g` | `openclaw.service` | Global npm |
 | **HAL** | Python package | Tải zip từ OTA | `hal.service` | `/opt/hal/` |
 
+HAL hỗ trợ CPython **3.12.x** (`requires-python = ">=3.12,<3.13"`).
+`uv sync --python 3.12` chọn interpreter nhưng vẫn resolve toàn bộ dải Python
+và optional extras mà project khai báo. Dải `>=3.12` không có cận trên có thể làm
+OTA ARM64 thất bại ở nhánh Python 3.14 (LeRobot đã pin cần Torch <2.8, không có
+wheel phù hợp cho nhánh đó). Giữ dải Python và `hal/uv.lock` đồng bộ; resolve lỗi
+ở staging sẽ khôi phục HAL cũ.
+
+Gói HAL mang theo `uv.lock`; script release chạy
+`uv lock --python 3.12 --check` trước khi tăng version hoặc upload. Updater dùng
+`uv sync --locked` khi archive có lockfile; archive cũ không có lock giữ đường
+resolve cũ. Loại lock khỏi ZIP buộc device resolve lại từ đầu: với uv 0.12.15,
+HAL 0.1.169 lỗi ở nhánh Python >=3.13 ARM64/Reachy dù project đã giới hạn 3.12;
+cùng archive thêm lock đã kiểm tra thì dry-run cài đặt locked trên device đạt.
+
+Các trình build image OrangePi, Pi 4 và Pi 5 cũng dùng `--locked` khi gói HAL
+tải về có `uv.lock`. HAL được lấy từ OTA metadata, không phải checkout local;
+chạy lại build sau khi phát hành gói đã sửa.
+
+Setup lamp và image Pi/OrangePi cài HAL với `--extra hardware --extra aec
+--extra pipecat`. OTA cho thiết bị không phải Reachy chọn cùng các extra này,
+nên Smart Turn được cài tự động, không cần lệnh riêng trên thiết bị. Reachy giữ
+`--extra hardware --extra reachy`: yêu cầu ONNX runtime của nó xung đột với
+Pipecat. Extra `pipecat` vẫn tùy chọn khi developer chạy riêng `uv sync`.
+
 ### Sơ đồ hệ thống
 
 ```
@@ -114,7 +138,9 @@ const (
     OTAKeyOpenClaw  = "openclaw"
     // Agent-runtime CLIs. Each value is also the runtime name in config.json
     // `agent_runtime` — that equality is how bootstrap updates only the CLI the
-    // device actually runs. Hermes is absent on purpose (cannot be pinned).
+    // device actually runs. Hermes rides along only when its entry is
+    // commit-pinned (OTAComponent.Commit) — see OTAKeyHermes.
+    OTAKeyHermes     = "hermes"
     OTAKeyCodex      = "codex"
     OTAKeyClaudeCode = "claudecode"
     OTAKeyOpenCode   = "opencode"
@@ -176,7 +202,7 @@ curl -fsSL https://cdn.autonomous.ai/os/install.sh | sudo bash
 | -1 | Locale fix | Đảm bảo encoding `C.UTF-8` |
 | 0 | Prerequisites | Packages hệ thống, Node.js 22 |
 | 0a | WiFi stability | Tắt IPv6, WiFi power saving (RPi5) |
-| 0b | Enable SPI | Cho WS2812 LED driver + GC9A01 display |
+| 0b | Bật SPI + I2C | Cho WS2812 LED driver + GC9A01 display; bus I2C cho ngoại vi |
 | 1 | Fetch OTA metadata | Tải metadata.json, trích xuất versions và URLs |
 | 1b | Install binaries | Tải + cài os-server, bootstrap-server, tạo systemd services |
 | 2 | Install OpenClaw | `npm install -g openclaw`, tạo config, systemd service |
@@ -297,6 +323,14 @@ bỏ qua đúng target đó nên release lỗi không bị cài lại ở lần 
 có version khác, OTA của component đó tự tiếp tục. Bản thân rollback không cần
 metadata URL hoặc mạng.
 
+Trước khi update `os-server`, `web` hoặc `device`, updater bảo đảm nginx có route
+WebSocket Harness. Nó tìm trong `/etc/nginx/conf.d/*.conf` và mọi entry của
+`/etc/nginx/sites-enabled/*`, gồm `reachy-spike` trên Reachy. Route dùng lại HTTP
+upstream hiện có của `/api/` (`backend` hoặc `spike_backend`); cấu trúc proxy
+không hỗ trợ hoặc có rewrite URI bị từ chối. Site dạng symlink được sửa tại
+file đích thực, giữ nguyên link enabled. Updater kiểm tra `nginx -t` và chỉ
+reload nginx sau khi thêm route.
+
 Các component cài theo thư mục cũng có cùng hợp đồng recovery. Trước khi update
 web, updater dừng nginx, swap bundle đã giải nén hoàn chỉnh từ thư mục staging,
 và giữ bundle trước đó tại `/root/bootstrap/rollback/web.previous` cùng trạng
@@ -310,11 +344,117 @@ Với device profile, updater stage ZIP, chỉ dừng `os-server` và `hal` vố
 active, rồi giữ profile cũ tại `/root/bootstrap/rollback/device.previous`. Nó
 cũng snapshot chính xác các file thuộc `rootfs/` của profile cũ hoặc mới trong
 `device.previous.rootfs`; rollback vì vậy khôi phục file bị ghi đè và xoá file
-chỉ được profile lỗi thêm vào. Tuning local trong `/opt/hal/.env` vẫn được giữ.
+chỉ được profile lỗi thêm vào. OTA thành công thay thế `.env` HAL được sinh.
 Profile bắt buộc có `ROBOT.md`; mỗi service vốn active phải khởi động lại và trả
 về health endpoint loopback. Check lỗi sẽ tự phục hồi profile known-good và trạng
 thái service cũ. Dùng `software-update rollback device` khi operator rollback;
 version profile bị loại sau đó sẽ bị chặn.
+
+### Override phần cứng tùy chọn
+
+OS đọc tên trên một dòng trong `/etc/autonomous/hardware-profile`. Thiếu file,
+rỗng hoặc `standard` chọn package device gốc mới giải nén, không áp override:
+không thêm kiểm tra USB, không đổi mặc định audio/Live của máy cũ. Tên khác phải khớp
+`[a-z][a-z0-9_-]{0,63}`, chọn `overrides/<tên>/` bên trong package của device đó.
+File định danh thuộc máy, không được đóng gói trong overlay.
+
+`scripts/provision/apply-overrides.py` được đưa vào mọi ZIP device khi release.
+Helper merge `rootfs/opt/hal/.env` của override lên env chung, copy các file
+`rootfs/` khác vào rootfs staging, rồi áp hai trường số nguyên tùy chọn
+`startup_volume`/`max_volume` từ `profile.json` vào `ROBOT.md`/`SAFETY.md`.
+Map `capabilities` tùy chọn nhận giá trị boolean, bật hoặc comment các entry
+capability sẵn có trong frontmatter `ROBOT.md`; không tự tạo khai báo mới.
+Các file `device/*.json` được chọn thay toàn bộ JSON device cấp cao nhất đã
+tồn tại, không merge nội dung. Renderer kiểm tra các input này trước khi ghi
+và từ chối capability hay file thay thế không hợp lệ. Giá trị riêng sản phẩm
+chỉ nằm trong package device. Ví dụ:
+
+| Profile | Mic hội thoại | Mic sensing | Loa | Âm lượng khởi động / tối đa | SEN63C |
+|---|---|---|---|---|---|
+| `standard` | Jieli `device_micro2` | CMedia `device_cmedia` | Loa gốc | Mặc định gốc | Tắt |
+| `pro` | Jieli `device_micro2` | CMedia `device_cmedia` | Loa gốc | Mặc định gốc | Bật trên `orangepi_sun60`, bus `0` |
+| `pro-respeaker-lite` | Kênh trái đã xử lý của ReSpeaker Lite | ES8389 trên board (`sndi2s4`) | ReSpeaker Lite softvol `Speaker` | 35 / 35 | Bật trên `orangepi_sun60`, bus `0` |
+| `pro-xvf3800` | XVF3800 (`Array`) | ES8389 trên board (`sndi2s4`) | XVF3800 | 77 / 77 | Bật trên `orangepi_sun60`, bus `0` |
+
+Mỗi thư mục Pro có `profile.json` chứa
+`capabilities: {"environment": true}`, cùng `device/sen63c.json` bật sensor
+OrangePi. Chỉ hai bản Lite và XVF3800 ghi đè mặc định âm lượng. Package Standard gốc comment capability này và tắt SEN63C, nên
+không thu nhận, ghi clock bus cho SEN63C, polling UI môi trường hay đủ điều
+kiện chọn skill environment. SEN55/SCD41 và board thiếu entry tương ứng vẫn
+tắt ngay cả trên Pro.
+
+`pro-respeaker-lite` giữ nguyên toàn bộ overlay `pro` trước đây, gồm file ALSA,
+udev và service softvol: bật AEC HAL, ngưỡng Silero `0.10`, tắt Live, uplink
+luôn mở. `pro` chỉ là audio Standard thêm SEN63C: không có override `rootfs/`,
+`.env`, ALSA, udev, service hay âm lượng. Cấu hình ALSA và giới hạn safety
+sau render giống Standard từng byte; mic, loa, xử lý và mặc định âm lượng
+đều dùng package gốc. Renderer chung chỉ thêm namespace lưu âm lượng của
+profile (`HAL_VOLUME_STATE_PATH=/root/config/.volume-pro`) vào môi trường HAL được sinh. `pro-xvf3800` giữ
+XMOS AEC, tắt AEC phần mềm, bật Live và uplink luôn mở.
+
+ReSpeaker Lite (XMOS XU316, USB `2886:0019`, card ALSA `Lite`) dùng audio
+S16_LE 2 kênh 16 kHz. `pro-respeaker-lite` cần nối loa qua Lite.
+Card không có mixer ALSA; oneshot do udev kích mở PCM trước `hal.service`
+để tạo control softvol cho bước khôi phục âm lượng lúc boot. Mức 35% được
+chỉnh trên bộ Lite, không phải mức âm lượng tương đương đã hiệu chuẩn giữa
+các thiết bị. Standard giữ mặc định audio và ceiling. Renderer không dò,
+flash hoặc tune phần cứng được gắn.
+
+Máy `pro` hiện có dùng mic Lite phải chọn rõ `pro-respeaker-lite` trước khi
+cài package device mới để giữ toàn bộ cấu hình audio. Không tự chuyển marker. Chỉ đổi
+marker không thay file đã cài; cần cài lại gói device.
+
+Image builder/cài mới áp override trước khi cài rootfs. OTA bắt đầu từ
+archive gốc mới giải nén, không từ cây Pro đã render, nên chuyển về Standard
+sẽ khôi phục mặc định tắt sensor và capability. OTA render trước khi
+dừng service và snapshot rootfs; thiếu helper/profile hoặc render lỗi không
+đụng package đang chạy. Lỗi copy hay health check rollback đồng bộ profile và
+rootfs thực tế. Rollback không đổi lựa chọn hardware-profile của máy.
+
+Với image mới, chọn phần cứng lúc build:
+
+```bash
+make -C scripts/imager build TARGET=opi DEVICE_TYPE=lamp VARIANT=pro OTA_METADATA_URL=...
+```
+
+`VARIANT` là input build duy nhất để chọn phần cứng. Bước overlay ghi
+`/etc/autonomous/hardware-profile` trước khi áp dụng `overrides/pro`; OTA đọc lại
+file này. Bỏ trống hoặc `VARIANT=standard` sẽ xóa lựa chọn cũ trong image và dùng
+nguyên package mặc định. Lựa chọn không nằm trong base cache dùng lại. Variant
+khác standard được thêm vào tên image/release cuối cùng. Variant không tồn tại
+hoặc package thiếu helper override sẽ làm build thất bại.
+
+Máy thiếu marker hardware-profile vẫn là Standard, kể cả máy từng nhận mặc
+định bật SEN63C chung; không tự chuyển sang Pro. Để giữ SEN63C trên phần cứng
+Pro, chọn rõ `pro`, `pro-respeaker-lite` hoặc `pro-xvf3800` rồi cài lại gói device. Nâng cấp từ bản
+cũ cần cả HAL (sửa clock I2C) lẫn gói device (capability và cấu hình sensor).
+Chỉ cập nhật HAL không cài các mặc định profile này.
+
+Khi sản xuất, ghi tên profile trước khi cài. Với máy đang chạy, cài updater và
+HAL/os-server mới trước, sau đó:
+
+```sh
+sudo mkdir -p /etc/autonomous
+printf 'pro\n' | sudo tee /etc/autonomous/hardware-profile
+sudo software-update device
+```
+
+Kiểm tra cập nhật thành công trước khi dùng. Nếu chuyển đổi lỗi, phục hồi lựa
+chọn hardware-profile cũ cho khớp package vừa rollback. Muốn về phần cứng cũ,
+xóa lựa chọn rồi OTA package mới; chỉ xóa file không hoàn tác overlay đã render.
+Updater cũ chưa biết áp override: bootstrap tự động refresh updater trước,
+nhưng cập nhật thủ công hoặc refresh thất bại phải cài updater mới trước khi
+chọn profile.
+
+Mọi profile được chọn lưu volume riêng trong `config/.volume-<tên>`
+(HAL và os-server thống nhất), kể cả `pro` chỉ override capability/JSON device.
+Renderer chung sinh `HAL_VOLUME_STATE_PATH` tương ứng; thiếu lựa chọn hoặc
+Standard giữ `config/.volume`. Nhờ vậy mức phần trăm của loa
+cũ không ghi đè volume khởi động của bộ mới. HAL chỉnh đúng cả `PCM,0` và
+`PCM,1`, không chỉnh control capture; ghi mixer lỗi trả 503 thay vì lưu thành
+công giả. UI, lệnh giọng nói và volume khởi động vẫn qua ceiling đã chọn.
+Không thêm UI Live hay thay đổi nói chen trong TTS delegate. Sửa trực tiếp `.env`
+được sinh vẫn bị device OTA thành công ghi đè như trước.
 
 Device không có `signing_public_key` chủ ý ở legacy mode: nó đọc component top
 level và chỉ log cảnh báo, không làm OTA lỗi. Đây là compatibility bridge, không
@@ -520,7 +660,9 @@ component thiết bị THỰC SỰ có (`componentInstalled`), nên mục CLI ch
 nó đang chạy, không có cái nào khác. `held_by_floor` nghĩa là đã publish bản mới
 nhưng `min_version` chưa được promote lên — worker sẽ từ chối, nên card Versions
 trên web coi component bị giữ là "không có update". os-server proxy thành
-`GET /api/system/ota-versions`. Device profile đang cài được báo thành `device`,
+`GET /api/system/ota-versions` và, cho cloud, thành MQTT `data` kind
+`system.ota_versions` (cả hai qua `system/ota`; `system.software_update` là bản
+MQTT của nút trên card Versions). Device profile đang cài được báo thành `device`,
 resolve từ `metadata.devices.<device_type>` lồng nhau thay vì danh sách component phẳng.
 
 ### Phát hiện version hiện tại
@@ -535,7 +677,7 @@ resolve từ `metadata.devices.<device_type>` lồng nhau thay vì danh sách co
 | `hal` | Chạy `/opt/hal/venv/bin/python -m hal --version` HOẶC đọc `/opt/hal/VERSION` |
 | `codex` / `claudecode` / `opencode` | Chạy `<cli> --version`, lấy semver ở dòng đầu (`cliSemver`) |
 | `picoclaw` | Đọc `/usr/local/lib/os-runtimes/picoclaw/installed-version` — output `version` của nó không có semver |
-| `hermes` | — không auto-update (xem bên dưới) |
+| `hermes` | Chạy `hermes --version` ("Hermes Agent v0.21.1 (2026.9.7)"), lấy semver ở dòng đầu (`cliSemver`) |
 
 ### Cách cập nhật từng thành phần
 
@@ -548,7 +690,7 @@ resolve từ `metadata.devices.<device_type>` lồng nhau thay vì danh sách co
 | `openclaw` | ~~Chạy `npm install -g openclaw@{version}` → `systemctl restart openclaw`~~ (tạm thời tắt) |
 | `hal` | Chạy `software-update hal` → `systemctl restart hal` |
 | `codex` / `claudecode` / `opencode` / `picoclaw` | Chạy `software-update <key>` — CHỈ trên thiết bị có `agent_runtime` đúng bằng runtime đó |
-| `hermes` | Không nằm trong loop: `hermes update` không pin được, nên một `min_version` nó không bao giờ đạt sẽ kích lại mỗi vòng poll. Chỉ chạy tay qua SSH. |
+| `hermes` | Chạy `software-update hermes` — chỉ khi `agent_runtime` là hermes, entry metadata có `commit`, VÀ updater trên máy là bản biết pin (`updaterSupportsHermesPin`: có đọc `.hermes.commit`). Entry chưa pin (không có `commit`) bị cả loop lẫn `/versions` bỏ qua, nên nút trên web không hiện — `hermes update` sẽ lên upstream HEAD và không bao giờ đạt sàn. |
 
 Cập nhật OpenClaw thủ công và force update chạy `software-update openclaw`.
 Trước khi cài phiên bản trong OTA metadata, updater đọc `engines.node` của
@@ -580,13 +722,33 @@ cách nhau 5 giây). Hết lượt probe sẽ báo cập nhật thất bại dù
 process còn active. Package/state không tự rollback khi migration hoặc
 kiểm tra readiness thất bại.
 
-`software-update hermes` thủ công kiểm tra Node trước khi chạy `hermes update`.
-Dải phiên bản dùng để build theo installer upstream Hermes: Node 22.22+ trong
-nhánh 22.x, 24.11+ trong nhánh 24.x, hoặc bản stable 26+. Nếu chưa tương thích,
-updater dùng chung helper với OpenClaw để nâng Node hệ thống lên nhánh 24.x,
-rồi kiểm tra lại. Lỗi kiểm tra hoặc nâng Node sẽ dừng trước `hermes update`.
-Lệnh update của Hermes chọn npm sẵn có và cập nhật dependencies; nó không
-chạy bước cài Node của installer.
+`software-update hermes` có hai chế độ, chọn theo entry metadata:
+
+- **Pinned** (có `hermes.commit` — do `scripts/release/upload-hermes.sh <version>
+  <tag|sha>` ghi; script tự resolve tag theo ngày của upstream, ví dụ `v2026.9.7`
+  → `2237be35…` = 0.21.1): tải installer upstream ĐÚNG commit đó và chạy các
+  stage `repository`, `venv`, `python-deps`, `path` với `--commit <sha>
+  --force-commit` — đúng cờ mà `scripts/imager/build-orangepi.sh` dùng khi bake
+  image. `--force-commit` còn cho phép LÙI một checkout đã bị `hermes update`
+  chưa pin kéo qua bản phát hành. `hermes --version` sau đó phải bằng semver đã
+  publish; lệch là fail (cặp version/commit trong metadata sai). Đây là chế độ
+  bootstrap tự apply.
+- **Unpinned** (không có `commit`, entry publish trước khi có pin): `hermes
+  update` lên upstream HEAD; version publish chỉ là "mong đợi", lệch thì cảnh
+  báo. Chỉ chạy tay qua SSH — bootstrap không bao giờ apply.
+
+Cả hai chế độ kiểm tra Node trước. Dải phiên bản theo installer upstream Hermes:
+Node 22.22+ trong nhánh 22.x, 24.11+ trong nhánh 24.x, hoặc stable 26+. Chưa
+tương thích thì nâng Node hệ thống lên 24.x bằng helper dùng chung với OpenClaw
+rồi kiểm lại; lỗi kiểm tra hoặc nâng Node dừng trước khi đổi gì.
+Cả hai chế độ kết thúc bằng restart `hermes-gateway` rồi **os-server**: os-server
+vá hai file của Hermes lúc `EnsureOnboarding` (`cache_usage.go` →
+`api_server.py`, `runs_patch.go` → `api_server_runs.py`), checkout mới làm mất
+vá — không restart thì các lượt sau rơi về `/v1/responses` và Flow Monitor
+không có cột cache.
+`runtimes/hermes/install.sh` (lúc switch runtime) vẫn cài upstream HEAD chưa
+pin; vòng reconcile sẽ đưa máy về commit đã pin ở lần poll kế, y như mọi
+component lệch version khác.
 
 **Vì sao CLI của agent gate theo `agent_runtime` chứ không theo binary:**
 `scripts/imager/build-orangepi.sh` bake CLI của MỌI agent lên mọi image lamp /
@@ -651,6 +813,12 @@ và exit lỗi nếu cả hai đều rỗng — không có URL hardcode.
 
 ### Xử lý HAL
 
+Updater tìm `uv` trong `PATH`, rồi `/root/.local/bin/uv`, rồi
+`/home/pollen/.local/bin/uv` (vị trí bộ cài Reachy sử dụng). Trước khi dừng HAL,
+script chọn Python extras theo `DEVICE_TYPE` trong `/opt/hal/.env`, fallback sang
+`device_type` trong `/root/config/config.json`: `reachy-mini` dùng `hardware + reachy`
+để giữ Pollen SDK; các thiết bị khác dùng `hardware + aec + pipecat`.
+
 > **Cache uv nằm NGOÀI cây runtime** (`/opt/.uv-cache-hal`, cạnh `/opt/hal` để uv
 > hardlink vào venv mới). Trước đây nó ở `/opt/hal/.uv-cache` nên mỗi lần update
 > đều copy nó — đo được 2.5 GB, cạnh `.venv` 2.3 GB — sang staging trước khi sync:
@@ -672,11 +840,15 @@ và exit lỗi nếu cả hai đều rỗng — không có URL hardcode.
     systemctl stop hal
     mv /opt/hal /root/bootstrap/rollback/hal.previous
 
-    # Build candidate ở thư mục kề. .env, venv và uv cache được copy từ
-    # runtime đã giữ trước khi chạy uv sync.
+    # UV_BIN and HAL_EXTRA are resolved before stopping HAL.
+    # Build a fresh venv; preserve .env and use the external shared cache.
     unzip -q "$ZIP" -d /opt/.hal.new
-    cp -a /root/bootstrap/rollback/hal.previous/{.env,.venv,.uv-cache} /opt/.hal.new/
-    (cd /opt/.hal.new && uv sync --python 3.12 --extra hardware --extra aec)
+    cp -a /root/bootstrap/rollback/hal.previous/.env /opt/.hal.new/
+    HAL_EXTRA_ARGS=(--extra "$HAL_EXTRA")
+    if [ "$HAL_EXTRA" != "reachy" ]; then
+        HAL_EXTRA_ARGS+=(--extra pipecat)
+    fi
+    (cd /opt/.hal.new && UV_CACHE_DIR=/opt/.uv-cache-hal "$UV_BIN" sync --python 3.12 --extra hardware "${HAL_EXTRA_ARGS[@]}")
     mv /opt/.hal.new /opt/hal
 
     systemctl restart hal
@@ -978,7 +1150,7 @@ echo "HAL $NEW_VERSION published."
 | `scripts/release/upload-claudecode.sh` | Version Claude Code CLI | Chỉ metadata (device chạy installer Anthropic) |
 | `scripts/release/upload-opencode.sh` | Version OpenCode CLI | Chỉ metadata (device chạy installer opencode.ai) |
 | `scripts/release/upload-picoclaw.sh` | TAG release PicoClaw | Chỉ metadata (device tải asset GitHub); kiểm tra tag có thật |
-| `scripts/release/upload-hermes.sh` | Version Hermes (chỉ SSH, không pin được) | Chỉ metadata (device chạy `hermes update`) |
+| `scripts/release/upload-hermes.sh` | Version Hermes + tag/commit upstream | Chỉ metadata: `hermes.version` + `hermes.commit` (device checkout commit qua installer upstream) |
 | `scripts/provision/install.sh` | CDN install shortcut | `curl ... \| sudo bash` trên Pi |
 | `scripts/release/tag-release.sh` | Git release tag kèm OTA metadata snapshot | Fetch metadata.json → annotated tag → `git push origin <tag>` |
 
@@ -1043,7 +1215,7 @@ Version của HAL là file text `VERSION` trong thư mục gốc package. Bootst
 - [x] **HAL HTTP port**: `5001` (OS Server là `5000`).
 - [x] **Bridge protocol**: HTTP proxy đơn giản. HAL chạy FastAPI trên `127.0.0.1:5001`, OS Server proxy từ port 5000.
 - [ ] **Python version**: Pin Python 3.11+? Yêu cầu Python hiện tại của HAL?
-- [ ] **Đóng gói HAL**: Include venv sẵn? Hay cài deps trên thiết bị? (Pi resources hạn chế cho `pip install`)
+- [x] **Đóng gói HAL**: Tạo venv trên thiết bị qua `uv sync --python 3.12 --extra hardware`, thêm `--extra reachy` cho Reachy Mini hoặc `--extra aec --extra pipecat` cho thiết bị khác. OTA tạo venv mới bằng cache dùng chung, giữ `.env` và runtime cũ để rollback.
 - [ ] **Display driver**: DisplayService (GC9A01) — nằm trong HAL Python? Hay module mới?
 - [ ] **HAL config**: HAL cần config file riêng? Hay cấu hình qua OS Server?
 

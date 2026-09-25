@@ -1,9 +1,7 @@
 package hermes
 
 import (
-	"io"
 	"log"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -195,41 +193,20 @@ func wipeHermesState(cfg *config.Config) {
 // resolveSoulContent returns the SOUL.md bytes to seed after a factory reset:
 //   - device declares soul_ref → content of robots/<type>/<ref> (or URL)
 //   - no soul_ref              → hermesSoulFallback stub
+//
+// A declared-but-unresolvable soul_ref falls back rather than failing the reset:
+// a device mid-wipe must come back up with a parseable soul either way, and
+// onboarding re-injects the real one on the next boot.
 func resolveSoulContent(cfg *config.Config) []byte {
 	devType := cfg.DeviceTypeOrDefault()
-	ref := device.SoulRef(devType)
-	if ref == "" {
-		return []byte(hermesSoulFallback)
-	}
-	if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
-		client := &http.Client{Timeout: 15 * time.Second}
-		resp, err := client.Get(ref)
-		if err != nil {
-			log.Printf("[factory-reset/hermes] WARN soul_ref %q download failed: %v — using fallback", ref, err)
-			return []byte(hermesSoulFallback)
-		}
-		defer resp.Body.Close()
-		b, err := io.ReadAll(resp.Body)
-		if err != nil || resp.StatusCode != http.StatusOK {
-			log.Printf("[factory-reset/hermes] WARN soul_ref %q download failed: status=%d err=%v — using fallback", ref, resp.StatusCode, err)
-			return []byte(hermesSoulFallback)
-		}
-		log.Printf("[factory-reset/hermes] soul_ref seeded from URL %q (%d bytes)", ref, len(b))
-		return b
-	}
-	// Reject unsupported schemes (e.g. ftp://, s3://) — mirrors openclaw's
-	// "unsupported soul_ref scheme" error so a mis-configured ROBOT.md is
-	// visible in logs rather than silently treated as a local path.
-	if strings.Contains(ref, "://") {
-		log.Printf("[factory-reset/hermes] WARN soul_ref %q has unsupported scheme — using fallback", ref)
-		return []byte(hermesSoulFallback)
-	}
-	path := filepath.Join(device.DevicesDir(), devType, ref)
-	b, err := os.ReadFile(path)
+	content, hasSoul, err := device.ResolveSoul(devType)
 	if err != nil {
-		log.Printf("[factory-reset/hermes] WARN soul_ref %q read failed: %v — using fallback", path, err)
+		log.Printf("[factory-reset/hermes] WARN soul_ref for %q unresolved: %v — using fallback", devType, err)
 		return []byte(hermesSoulFallback)
 	}
-	log.Printf("[factory-reset/hermes] soul_ref seeded from %q (%d bytes)", path, len(b))
-	return b
+	if !hasSoul {
+		return []byte(hermesSoulFallback)
+	}
+	log.Printf("[factory-reset/hermes] soul_ref seeded for %q (%d bytes)", devType, len(content))
+	return content
 }

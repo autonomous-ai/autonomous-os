@@ -13,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var auditLog: AuditLog?
     private var pairingWindow: PairingWindowController?
     private var activityWindow: ActivityWindowController?
+    private var terminationRequested = false
+    private var terminationReady = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let store = PairingStore()
@@ -49,6 +51,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 },
                 onOpenManager: embedded ? { [weak self] in
                     self?.helperBridge?.publishMenuAction("open-manager")
+                } : nil,
+                onCheckForUpdates: embedded ? { [weak self] in
+                    self?.helperBridge?.publishMenuAction("check-updates")
                 } : nil
             )
 
@@ -89,6 +94,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if terminationReady { return .terminateNow }
+        if !terminationRequested {
+            terminationRequested = true
+            // terminateLater runs a nested AppKit loop which can starve MainActor
+            // tasks when termination originates from the bridge's EOF callback.
+            Task { @MainActor in
+                await dispatcher?.cancelActive()
+                await CuaClient.shared.close()
+                terminationReady = true
+                sender.terminate(nil)
+            }
+        }
+        return .terminateCancel
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -165,6 +186,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch method {
         case "status", "ping":
             bridge.respond(id: id, result: EmbeddedHelperBridge.snapshot())
+        case "update_status":
+            guard let label = params["label"] as? String, !label.isEmpty, label.count <= 120,
+                  let enabled = params["enabled"] as? Bool else {
+                bridge.fail(id: id, error: "Update status requires a label and enabled boolean")
+                return
+            }
+            // Safe in test mode: no menu or windows are created by this method.
+            menuBarController?.setUpdateStatus(label: label, enabled: enabled)
+            bridge.respond(id: id, result: ["ok": true])
         case "pair":
             showPairing(host: params["host"] as? String)
             bridge.respond(id: id, result: EmbeddedHelperBridge.snapshot())
@@ -182,6 +212,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if paused { await dispatcher?.cancelActive() }
             bridge.respond(id: id, result: EmbeddedHelperBridge.snapshot())
         case "permissions":
+            // Do not retain a driver's cached TCC answers across a permissions visit.
+            await dispatcher?.cancelActive()
+            await CuaClient.shared.close()
             AccessibilityCheck.requestPrompt()
             ScreenRecordingCheck.requestPrompt()
             bridge.publishState()

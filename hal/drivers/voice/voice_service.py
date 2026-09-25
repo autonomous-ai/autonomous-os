@@ -4,7 +4,7 @@ Voice Service — local VAD + pluggable STT for autonomous sensing.
 Pipeline:
   1. Mic always on, local RMS energy check (free, zero cost)
   2. Speech detected → create STT session, stream audio
-  3. Silence for SILENCE_TIMEOUT → close session (stop billing)
+  3. Silence candidate → provisional turn detection → close session
   4. Transcripts → POST to OS server /api/sensing/event
   5. OS server → local intent match or OpenClaw → AI responds → POST /voice/speak
 
@@ -34,26 +34,37 @@ from hal.realtime.models import InterruptedOutput as RTInterruptedOutput
 from hal.realtime.models.signal import DelegateSignal, EndCallSignal, RejectSignal
 from hal.realtime.models.output import ExecutionOutput, UserSpeechOutput
 from hal.realtime.models import TextOutput as RTTextOutput
-from hal.realtime.orchestrator import RealtimeOrchestrator
-from hal.realtime.utils import pcm16_bytes_to_float32, resample_float32
+from hal.realtime.orchestrator import (
+    RealtimeOrchestrator, AudioTurnSessionChanged, PREWARM_JOIN_TIMEOUT_S,
+)
+from hal.realtime.utils import StreamingResampler, pcm16_bytes_to_float32, resample_float32
 from hal.drivers.voice._internal import config as voice_cfg
+from hal.drivers.voice._internal import live_playback
+from hal.drivers.voice._internal.live_gate import AdaptiveLiveGate
+from hal.drivers.voice._internal.live_reply import LiveReplyGuard
 from hal.drivers.voice._internal.audio_dsp import resample_to_stt, rms
 from hal.drivers.voice._internal.audio_recorder import ArecordStream
 from hal.drivers.voice._internal.realtime_turn import (
+    _WaitFiller,
     ROUTE_DELEGATED,
     ROUTE_NOISE_DROPPED,
     split_first_chunk,
+    split_completed_prefix,
+    SENTENCE_ENDS,
     ROUTE_NOT_STARTED,
     RealtimeTurnResult,
     build_speaker_correction,
     build_turn_context,
     is_noise_turn,
+    harness_followup_active,
     needs_noise_guard,
     run_realtime_turn,
     should_drop_downstream_turn,
+    should_arm_realtime_wait_filler,
     should_defer_speaker_id_prepass,
     should_dispatch_to_main,
 )
+from hal.drivers.voice._internal.harness_capture import HarnessCapture, same_target
 from hal.drivers.voice._internal.harness_voice import bypass_realtime, read_voice_mode
 from hal.drivers.voice._internal.sensing_sender import SensingSender
 from hal.drivers.voice._internal.session_finalize import finalize_session
@@ -63,6 +74,8 @@ from hal.drivers.voice._internal.speaker_decorate import (
     merge_wake_words,
 )
 from hal.drivers.voice._internal.turn_dispatch import dispatch_turn
+from hal.drivers.voice._internal.turn_endpoint import TurnEndpoint
+from hal.drivers.voice._internal.smart_turn import SmartTurnDetector
 from hal.telemetry import voice_metrics
 from hal.telemetry.live_voice import LiveVoiceMetrics
 from hal.drivers.voice._internal.live_history import LiveHistory
@@ -139,7 +152,21 @@ class VoiceService:
         )
         cleaned: str = VoiceService.RT_MARKER_RE.sub("", text)
         cleaned = re.sub(r"  +", " ", cleaned).strip()
+        # A provider silence marker can precede real text or an error, and
+        # can arrive split across events. Keep quoted/embedded mentions intact.
+        cleaned = re.sub(r"^(?:(?:<\s*no\s+speech\s*>|\{\s*pause\s*\})\s*)+",
+                         "", cleaned, flags=re.IGNORECASE)
+        if VoiceService._pending_rt_silence_marker(cleaned):
+            return ""
         return cleaned
+
+    @staticmethod
+    def _pending_rt_silence_marker(text: str) -> bool:
+        partial = " ".join(text.lower().split())
+        partial = re.sub(r"^\{\s*", "{", partial)
+        return bool(partial) and any(
+            marker.startswith(partial) for marker in ("<no speech>", "{pause}")
+        )
 
     def __init__(
         self,
@@ -152,11 +179,16 @@ class VoiceService:
         enable_people_perception: bool = True,
         enable_expression: bool = False,
     ):
+        self._harness_capture = HarnessCapture()
         self._stt = stt_provider
         self._input_device = input_device
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._listening = False
+        self._live_gate = AdaptiveLiveGate() if live_playback.ENABLED else None
+        self._aec_live_replies = LiveReplyGuard() if getattr(self, "_live_gate", None) is not None else None
+        self._aec_live_diag_next = 0.0
+        self._aec_live_last_upload_ms = 0.0
         # Live (full-duplex) session state — see _live_session. The generation
         # counter exists because the output pump can still be blocked inside
         # receive() when its session ends and join() gives up before that: it
@@ -167,9 +199,14 @@ class VoiceService:
         self._live_frames = 0
         self._live_frames_during_playback = 0
         self._live_frames_substituted = 0
+        self._live_playback_was_speaking = False
+        self._live_playback_tail_until = 0.0
         # Completed model replies with no confirmed user speech since. Bumped
         # by the output pump, cleared by the mic loop, which owns user speech.
         self._live_unprompted_replies = 0
+        # time.time() of the last provider-transcribed user words this session;
+        # the idle-hangup clock reads it (LIVE_IDLE_REQUIRES_TRANSCRIPT).
+        self._live_last_transcript_at = 0.0
         # Deadline armed when the model calls end_conversation; the session
         # keeps running until then so the farewell is actually heard.
         # 0.0 = no hangup requested.
@@ -235,6 +272,7 @@ class VoiceService:
         # noise or speech" mid-capture cannot disturb the entry gate's state,
         # and it works whether or not the entry gate is enabled.
         self._silence_vad: SileroVADFilter | None = None
+        self._turn_detector = None
 
         # Speaker decoration (wake-word + speaker recognizer + SER). Speaker-ID and
         # SER (speech emotion) are voice people-perception — gated on the `audio`
@@ -252,7 +290,10 @@ class VoiceService:
         # Unlike per-session wake_word_confirmed, this small focus window is
         # shared across mic sessions so a user can naturally continue a
         # wake-word conversation without reopening the gate on every sentence.
-        self._wakeword_focus = WakeWordFocus(hal_config.WAKEWORD_FOLLOWUP_TIMEOUT_S)
+        self._wakeword_focus = WakeWordFocus(
+            hal_config.WAKEWORD_FOLLOWUP_TIMEOUT_S,
+            pending_speech=getattr(tts_service, "has_followup_speech", None),
+        )
 
         # OS server event sender (with echo similarity filter)
         self._sensing_sender = SensingSender(tts_service=tts_service)
@@ -261,6 +302,8 @@ class VoiceService:
         self._realtime = RealtimeOrchestrator(
             gateway=AgentGateway(hal_config.AGENT_GATEWAY),
             enable_expression=enable_expression,
+            # pipecat_v1 runs STT inside its pipeline on this same provider.
+            stt_provider=stt_provider,
         )
 
         # Hook into TTS on_speak_end to feed spoken text back to the realtime agent.
@@ -269,15 +312,14 @@ class VoiceService:
             original_on_speak_end = tts_service._on_speak_end
 
             def _tts_speak_end_with_realtime_feedback() -> None:
+                # Snapshot before callbacks can change the playback owner/text.
+                completion = tts_service.history_completion()
+                self._wakeword_focus.playback_finished()
                 if original_on_speak_end:
                     original_on_speak_end()
-                if (
-                    hal_config.REALTIME_ENABLED
-                    and tts_service.last_spoken_text
-                    and not tts_service.native_mode
-                    and tts_service.realtime_feedback
-                ):
-                    self.feed_realtime_history(tts_service.last_spoken_text)
+                if hal_config.REALTIME_ENABLED and completion is not None:
+                    text, spoken, interrupted = completion
+                    self.feed_realtime_history(text, spoken=spoken, interrupted=interrupted)
 
             tts_service._on_speak_end = _tts_speak_end_with_realtime_feedback
 
@@ -291,7 +333,8 @@ class VoiceService:
 
             tts_service._on_unspoken_reply = _unspoken_reply_to_realtime
 
-    def feed_realtime_history(self, text: str, spoken: bool = True) -> bool:
+    def feed_realtime_history(self, text: str, spoken: bool = True,
+                              interrupted: bool = False) -> bool:
         """Give the realtime agent a main-agent reply it must stay aware of.
 
         Two callers, one rule: the on_speak_end hook (the reply was played on
@@ -302,7 +345,9 @@ class VoiceService:
         "its spoken reply follows" placeholder and no reply, so the next turn
         reasons from a question it believes went unanswered.
 
-        `spoken` is False for that second caller. The persisted fragment is the
+        `spoken` is also False when HAL completes without writing speech.
+        `interrupted` distinguishes a cancelled partial playback from silence.
+        The persisted fragment is the
         full text either way — it is the processed result, and memory wants all
         of it — but the in-session line is labelled, because [TTS HISTORY]
         exists to stop the model repeating what the USER ALREADY HEARD, and on
@@ -324,9 +369,12 @@ class VoiceService:
         if len(text) > max_hist:
             text = text[:max_hist] + "…"
         marker = "TTS HISTORY" if spoken else "TTS HISTORY, not spoken"
+        if interrupted:
+            marker = "TTS HISTORY, interrupted; only part may have been heard"
         logger.info(
-            "[realtime<-tts] Notifying realtime agent (spoken=%s): %r",
+            "[realtime<-tts] Notifying realtime agent (spoken=%s, interrupted=%s): %r",
             spoken,
+            interrupted,
             text[:100],
         )
         self._realtime.send_text(f"[{marker}] {text}")
@@ -371,6 +419,12 @@ class VoiceService:
             return True
         return False
 
+    def followup_activity(self, interaction_id: str, run_id: str, phase: str) -> bool:
+        """Track only main runs bound to a locally authorized wake turn."""
+        if not hal_config.WAKEWORD_ENABLED:
+            return False
+        return self._wakeword_focus.activity(interaction_id, run_id, phase)
+
     def set_wake_words(self, words: list) -> None:
         """Update wake word list at runtime (called when agent is renamed)."""
         self._decorator.set_wake_words(
@@ -400,16 +454,14 @@ class VoiceService:
 
     @property
     def live_active(self) -> bool:
-        """Whether a live (full-duplex) session currently owns the conversation.
-
-        Read by /voice/speak-queue: while this is True the live session IS the
-        conversation, and an agent reply pushed in from os-server would be a
-        SECOND agent talking over it — device-observed 2026-09-08 on lamp-ee17,
-        Gemini (Puck) and the main agent (ElevenLabs) held separate overlapping
-        conversations through the same speaker for 484s, each feeding the other
-        through the mic.
-        """
+        """Whether the full-duplex microphone session is open."""
         return self._live_running
+
+    @property
+    def live_speaker_busy(self) -> bool:
+        """LIVE is actually playing a reply, not merely keeping the mic open."""
+        return bool(self.live_active and self._tts is not None
+                    and self._tts.realtime_speaking)
 
     @property
     def listening(self) -> bool:
@@ -420,6 +472,12 @@ class VoiceService:
         """Unix ts of the last non-empty STT transcript (partial or final).
         0.0 until someone has spoken. See _last_transcript_ts above."""
         return self._last_transcript_ts
+
+    @property
+    def vad_threshold(self) -> float:
+        if getattr(self, "_live_gate", None) is not None:
+            return self._live_gate.threshold * 32768.0
+        return voice_cfg.RMS_THRESHOLD
 
     @property
     def mic_level(self) -> float:
@@ -445,12 +503,38 @@ class VoiceService:
             )
             return
         self._running = True
+        if voice_cfg.TURN_END_ENABLED and not voice_cfg.LIVE_MODE:
+            self._turn_detector = SmartTurnDetector()
         self._thread = threading.Thread(target=self._loop, daemon=True, name="voice")
         self._thread.start()
         logger.info("VoiceService started (local VAD + %s)", self._stt.name)
 
+    @property
+    def harness_capture_active(self) -> bool:
+        return self._harness_capture.active
+
+    def start_harness_capture(self, snapshot: dict) -> bool:
+        from hal import app_state
+
+        if app_state._hw_mic_switch_muted is True or app_state._mic_muted or app_state._sleeping:
+            return False
+        if not self._running or self._tts_is_speaking() or self._music_is_playing():
+            return False
+        return self._harness_capture.start(snapshot)
+
+    def finish_harness_capture(self) -> bool:
+        return self._harness_capture.finish()
+
+    def cancel_harness_capture(self) -> None:
+        self._harness_capture.cancel()
+
     def stop(self):
+        self._wakeword_focus.clear()
+        self.cancel_harness_capture()
         self._running = False
+        if self._turn_detector is not None:
+            self._turn_detector.close()
+            self._turn_detector = None
         if hal_config.REALTIME_ENABLED:
             # realtime.stop() calls _context.summarize_device_memory() +
             # summarize_realtime_memory() which fire LLM requests — an
@@ -759,6 +843,12 @@ class VoiceService:
         self._device_rate = device_rate  # store for _wait_for_tts
 
         while self._running:
+            mode = read_voice_mode()
+            manual_capture = self._harness_capture.claim(mode)
+            if bypass_realtime(mode) and manual_capture is None:
+                # Harness owns input: no ambient VAD or recorder while idle.
+                time.sleep(0.1)
+                continue
             # Wait for TTS or music to finish before opening mic
             self._wait_for_tts()
             if self._music_is_playing():
@@ -782,6 +872,12 @@ class VoiceService:
                 if self._running:
                     logger.info("Live session ended — resuming turn-based mic loop")
 
+            if manual_capture is not None and (
+                not self._running or manual_capture.cancelled.is_set()
+                or not same_target(manual_capture.snapshot, read_voice_mode())
+            ):
+                self._harness_capture.release(manual_capture)
+                continue
             try:
                 if self._alsa_device is not None:
                     mic_ctx = ArecordStream(
@@ -801,6 +897,11 @@ class VoiceService:
                     )
                 mic_ctx = aec.wrap_mic(mic_ctx, device_rate, self._np)
                 with mic_ctx as mic:
+                    if getattr(self, "_live_gate", None) is not None:
+                        # Hardware AEC convergence belongs to the open device,
+                        # not each logical provider listening window.
+                        self._live_gate.reset()
+                        self._aec_live_played_start = live_playback.played_seconds()
                     logger.info(
                         "Listening for speech (RMS=%d, rate=%dHz, backend=%s)...",
                         voice_cfg.RMS_THRESHOLD,
@@ -809,8 +910,20 @@ class VoiceService:
                         if self._alsa_device
                         else f"sd({self._input_device})",
                     )
-                    self._vad_loop(mic, frame_size, device_rate)
+                    if manual_capture is not None:
+                        try:
+                            self._stream_session(
+                                mic, frame_size, device_rate,
+                                harness_voice=manual_capture.snapshot,
+                                manual_capture=manual_capture,
+                            )
+                        finally:
+                            self._harness_capture.release(manual_capture)
+                    else:
+                        self._vad_loop(mic, frame_size, device_rate)
             except Exception as e:
+                if manual_capture is not None:
+                    self._harness_capture.release(manual_capture)
                 logger.warning("Voice loop error: %s", e)
                 if self._running:
                     time.sleep(3)
@@ -844,7 +957,14 @@ class VoiceService:
             else:
                 logger.info("STT keepalive: pre-connected, waiting for speech...")
 
+        mode_checked_at = 0.0
         while self._running:
+            if time.monotonic() - mode_checked_at >= 0.25:
+                mode_checked_at = time.monotonic()
+                if bypass_realtime(read_voice_mode()):
+                    if keepalive_session:
+                        keepalive_session.close()
+                    return
             tts_or_music = self._tts_is_speaking() or self._music_is_playing()
 
             # --- TTS/music active ---
@@ -963,20 +1083,20 @@ class VoiceService:
             self._mic_level = energy
             self._mic_level_ts = time.time()
 
-            if (
-                energy >= voice_cfg.RMS_THRESHOLD
-                and self._webrtcvad_is_speech(data, device_rate)
-            ):
+            aec_live_entry = self._hardware_aec_live_entry()
+            if self._vad_entry_is_speech(data, device_rate, energy):
                 if speech_start is None:
                     speech_start = time.time()
                     speech_pre_buffer = [data]
                 else:
                     speech_pre_buffer.append(data)
                 # Wait for holdoff before connecting STT (avoid short noises).
-                if (time.time() - speech_start) >= voice_cfg.SPEECH_HOLDOFF_S:
+                held_s = (sum(len(frame) for frame in speech_pre_buffer) / device_rate
+                          if aec_live_entry else time.time() - speech_start)
+                if held_s >= (0.16 if aec_live_entry else voice_cfg.SPEECH_HOLDOFF_S):
                     # Run Silero on the accumulated buffer (needs multiple
                     # chunks for its LSTM).
-                    if self._silero_vad is not None:
+                    if not aec_live_entry and self._silero_vad is not None:
                         combined = self._np.concatenate(speech_pre_buffer)
                         if not self._silero_is_speech(combined, device_rate):
                             speech_start = None
@@ -1051,7 +1171,7 @@ class VoiceService:
                             )
                             return
                     elif decision == "turn":
-                        self._stream_session(
+                        if self._stream_session(
                             mic,
                             frame_size,
                             device_rate,
@@ -1059,12 +1179,21 @@ class VoiceService:
                             speech_pre_buffer=speech_pre_buffer,
                             pending_listening_cue_id=pending_listening_cue_id,
                             harness_voice=harness_voice,
-                        )
+                        ):
+                            return
                     keepalive_session = None
                     speech_start = None
                     speech_pre_buffer = []
-                    # Clear lookback so the next session doesn't replay tail
-                    lookback.clear()
+                    # Clear lookback so the next session doesn't replay tail —
+                    # but NOT after a "skip": the noise guard rejects short
+                    # plosive words on their own ("Play" — span 0.32s, voiced
+                    # 0.21 on lamp-0c4e 2026-09-21), and the rest of the
+                    # sentence re-triggers ~100ms later. Clearing here left that
+                    # trigger with pre-roll=0, so Gemini heard "song for me
+                    # again." The lookback is a bounded deque, so keeping it
+                    # costs nothing and the next trigger carries the word.
+                    if decision != "skip":
+                        lookback.clear()
                     self._silero_reset_state()
                     logger.info("VAD resumed — mic active, waiting for next speech")
                     # Cooldown after session to let resources clean up
@@ -1090,6 +1219,19 @@ class VoiceService:
     # ------------------------------------------------------------------
     # Live (full-duplex) session — the VAD is a doorbell, the model endpoints
     # ------------------------------------------------------------------
+    def _hardware_aec_live_entry(self) -> bool:
+        # Preserve STT wake-word validation when focus has not been granted.
+        return (isinstance(getattr(self, "_live_gate", None), AdaptiveLiveGate)
+                and hal_config.REALTIME_ENABLED
+                and (not hal_config.WAKEWORD_ENABLED or self._wakeword_focus.is_active()))
+
+    def _vad_entry_is_speech(self, data, rate, energy):
+        if self._hardware_aec_live_entry():
+            threshold = self._live_gate.idle_threshold(energy / 32768.0, len(data) / rate)
+            return energy >= threshold * 32768.0
+        return (energy >= voice_cfg.RMS_THRESHOLD
+                and self._webrtcvad_is_speech(data, rate))
+
     def _live_decision(self, pre_roll: list) -> str:
         """What this VAD trigger should become: "live", "turn" or "skip".
 
@@ -1108,7 +1250,7 @@ class VoiceService:
             logger.info("[live] music playing — not opening a live session")
             return "skip"
 
-        if pre_roll:
+        if pre_roll and not VoiceService._hardware_aec_live_entry(self):
             try:
                 pcm = self._np.frombuffer(b"".join(pre_roll), dtype=self._np.int16)
                 if not self._rt_noise_is_speech(pcm):
@@ -1156,10 +1298,16 @@ class VoiceService:
         # is enough. The TTS flag is authoritative and works with NO canceller
         # at all (HAL_AEC_ENABLED defaults to false, and reference_idle_for()
         # then returns inf — every frame would read as a quiet room and this
-        # gate would never fire). The reference tail adds the acoustic decay
-        # AFTER the flag drops, which the flag itself cannot express.
+        # gate would never fire). Hold a local tail from the observed falling
+        # edge as well: without AEC there is no reference to track room decay.
+        now = time.monotonic()
+        speaking = self._tts_is_speaking()
+        if self._live_playback_was_speaking and not speaking:
+            self._live_playback_tail_until = now + voice_cfg.LIVE_PLAYBACK_TAIL_S
+        self._live_playback_was_speaking = speaking
         if (
-            not self._tts_is_speaking()
+            not speaking
+            and now >= self._live_playback_tail_until
             and aec.reference_idle_for() > voice_cfg.LIVE_PLAYBACK_TAIL_S
         ):
             return data  # nothing has reached the speaker recently
@@ -1181,7 +1329,7 @@ class VoiceService:
         return self._np.zeros_like(data)
 
     def _live_emotion_addressed(self, text: str, harness_voice=None) -> bool:
-        """Mirror the regular turn's addressing gate for emotion only."""
+        """Mirror the regular turn's addressing gate for LIVE reactions."""
         harness_listening = bool(
             harness_voice and harness_voice.get("enabled")
             and not harness_voice.get("unavailable", False)
@@ -1193,7 +1341,60 @@ class VoiceService:
             self._wakeword_focus.is_active(),
         )
 
-    def _live_out_pump(self, generation: int, harness_voice=None, cues=None) -> None:
+    def _live_stop_output(self) -> None:
+        """A LIVE output reset/session exit must not stop a main-agent reply."""
+        if self._tts is None:
+            return
+        if self._tts.realtime_speaking:
+            self._tts.stop(preserve_main_queue=True)
+
+    def _live_quiet_for(self, now, user_spoke_at, last_reply_end):
+        # Text/audio arriving from the provider is reply progress even before
+        # ElevenLabs has its first sentence or first playable audio chunk.
+        return now - max(user_spoke_at, last_reply_end,
+                         self._live_last_model_output)
+
+    def _live_idle_pending_speech(self, now, quiet_for, last_user_speech):
+        """Give a pending hardware-AEC utterance one bounded transcript window."""
+        timeout = voice_cfg.LIVE_IDLE_HANGUP_S
+        if quiet_for <= timeout:
+            self._live_idle_speech_deadline = 0.0
+            return False
+        if not voice_cfg.LIVE_IDLE_REQUIRES_TRANSCRIPT or getattr(self, "_live_gate", None) is None:
+            return False
+        deadline = self._live_idle_speech_deadline
+        if not deadline:
+            # Allow server endpointing plus delivery time after local speech.
+            recent_s = max(1.0, hal_config.LIVE_VAD_SILENCE_MS / 1000) + 1.0
+            if now - last_user_speech > recent_s:
+                return False
+            # Local noise may look like speech; it cannot renew this deadline.
+            self._live_idle_speech_deadline = deadline = now + timeout
+            logger.info("[live] idle hangup deferred for pending speech (max %.1fs)", timeout)
+        return now < deadline
+
+    def _aec_live_interrupt_reply(self, reason, key=None):
+        if reason == "local_speech":
+            # Energy can be residual speaker echo. Match the demo's duck mode:
+            # reduce volume reversibly, but only the provider may cancel a reply.
+            live_playback.duck(True)
+            logger.info("[live-aec] local speech candidate: duck only; awaiting provider interrupt")
+            return False
+        guard = getattr(self, "_aec_live_replies", None)
+        if guard is None:
+            return
+        before = self._tts_is_speaking()
+        affected = guard.cancel(self._tts.stop_realtime_reply, key=key)
+        if affected:
+            gate = getattr(self, "_live_gate", None)
+            if gate is not None:
+                gate.clear_duck()
+            live_playback.duck(False)
+        logger.info("[live-aec] interrupt requested reason=%s reply=%s affected=%s speaking_before=%s",
+                    reason, key, affected, before)
+        return affected
+
+    def _live_out_pump(self, generation: int, harness_voice=None, cues=None, opener=None, stop_event=None) -> None:
         """Play what the model says, for as long as the session lasts.
 
         Deliberately loops orchestrator.stream_output() rather than reading the
@@ -1207,23 +1408,167 @@ class VoiceService:
         on a quiet stretch, when receive() times out having yielded nothing.
         Both simply mean "go round again and wait for the user".
         """
+        input_text = {}
+        input_focus = {}
+        addressed_inputs = set()
+        response_inputs = set()
+        focus_refreshed = set()
+        focus_held = set()
+        focus_finished = set()
+        rejected_inputs = set()
+        harness_listening = bool(
+            harness_voice and harness_voice.get("enabled")
+            and not harness_voice.get("unavailable", False)
+        )
+        focus = getattr(self, "_wakeword_focus", None)
+        focus_at_start = bool(focus and focus.is_active())
+
+        def classify_input(key, text):
+            if not text.strip():
+                return ""
+            if key not in input_focus:
+                input_focus[key] = bool(focus_at_start or (focus and focus.is_active()))
+            # Same leading-wake-phrase classifier as the regular turn path.
+            try:
+                _, kind = self._decorator.classify_wake_word(text)
+            except Exception:
+                logger.debug("[live] wake classification unavailable", exc_info=True)
+                return ""  # Diagnostics must never block speech or delegation.
+            if (kind == "voice" and hal_config.WAKEWORD_ENABLED
+                    and input_focus[key] and not harness_listening):
+                kind = "voice_followup"
+            return kind
+
+        def hold_live_focus(key, text=""):
+            # Mirror regular turns: only accepted, addressed user speech
+            # extends follow-up focus. Provider output alone is not a wake.
+            text = text or input_text.get(key, "")
+            if (not key or key in focus_held or key in rejected_inputs
+                    or not text.strip() or focus is None
+                    or not hal_config.WAKEWORD_ENABLED or harness_listening):
+                return
+            if not (focus_at_start or key in addressed_inputs
+                    or self._live_emotion_addressed(text, harness_voice)):
+                return
+            iid = metrics.interaction(key)
+            if iid and focus.begin(iid):
+                focus_held.add(key)
+
+        def refresh_focus(key, text=""):
+            hold_live_focus(key, text)
+            if key in focus_held:
+                # Finish only after the final buffered sentence is admitted.
+                focus_refreshed.add(key)
+
+        live_replies = getattr(self, "_aec_live_replies", None)
+
+        def speak_live(text, iid, key, first=False):
+            def enqueue():
+                if not first or not self._tts.speak(text, turn_id=iid, realtime_reply=True):
+                    self._tts.speak_queue(text, turn_id=iid, realtime_reply=True)
+            if live_replies is None:
+                enqueue()
+                return True
+            return live_replies.play(key, enqueue)
         metrics = LiveVoiceMetrics()
-        history = LiveHistory(self._sensing_sender, harness_voice, self.strip_rt_markers)
+        # Apply the same suppression before OS/Main history sync as before TTS.
+        # Clean assembled markers; rejected turns are discarded by identity.
+        history = LiveHistory(
+            self._sensing_sender, harness_voice,
+            self.strip_rt_markers,
+        )
+
+        def bind_opener(key):
+            # The confirmed capture is the first input sent after the live
+            # session's queue flush. A provider may identify it on output
+            # before emitting input transcription. Unkeyed output stays unknown.
+            if opener is None or not key or opener["key"]:
+                return
+            opener["key"] = key
+            metrics.seed(key, opener["interaction_id"])
+            input_text[key] = opener["transcript"]
+            addressed_inputs.add(key)
+            history.input(key, opener["transcript"], opener["interaction_id"],
+                          opener["voice_turn_type"])
+            hold_live_focus(key)
+
+        def complete_metrics(key, completed):
+            if key in rejected_inputs:
+                return
+            # A silent opener is forwarded to main, which owns its execution
+            # result. Hold its terminal until its own reply has reached TTS.
+            if opener is not None and key and key == opener["key"]:
+                if completed:
+                    opener["execution_completed"] = True
+                if not opener.get("replied", False):
+                    return
+            metrics.complete(key, completed)
+
+        deferred_marker_tail = None
+        fallback_sequence = 0
         while self._live_running and generation == self._live_generation:
+            fallback_sequence += 1
+            fallback_key = ("unkeyed", generation, fallback_sequence)
             native_started = False
             transcript = ""
             # False => Gemini was opened TEXT-only and OUR TTS speaks the reply.
             native = hal_config.REALTIME_NATIVE_AUDIO
             sentence_buf = ""
+            buffer_reply_key = ""
             first_sent = False
             speech_iid = ""
             buffer_mixed = False
             native_owner = ""
             try:
-                for out in self._realtime.stream_output():
+                output_options = {"stop_event": stop_event} if stop_event is not None else {}
+                for out in self._realtime.stream_output(**output_options):
                     if not (self._live_running and generation == self._live_generation):
                         break
+                    if (isinstance(out, (RTAudioOutput, RTTextOutput, ExecutionOutput))
+                            and out.user_turn_id and out.user_turn_id in rejected_inputs):
+                        continue
+                    if (deferred_marker_tail is not None
+                            and isinstance(out, (RejectSignal, DelegateSignal, RTInterruptedOutput))
+                            and (not out.user_turn_id or out.user_turn_id == deferred_marker_tail[0])):
+                        deferred_marker_tail = None
+                    if live_replies is not None:
+                        if sentence_buf and not live_replies.allowed(buffer_reply_key):
+                            sentence_buf = ""
+                            first_sent = False
+                        if isinstance(out, (RTAudioOutput, RTTextOutput)):
+                            key = getattr(out, "user_turn_id", "") or fallback_key
+                            if not live_replies.observe(key):
+                                continue
+                    if isinstance(out, (UserSpeechOutput, RTAudioOutput, RTTextOutput, DelegateSignal, RejectSignal)):
+                        bind_opener(getattr(out, "user_turn_id", "") or getattr(out, "turn_id", ""))
                     if isinstance(out, UserSpeechOutput):
+                        if opener is not None and out.turn_id and out.turn_id != opener["key"]:
+                            # Never replay an older request into main after
+                            # the user has moved on to another live input.
+                            opener["consumed"] = True
+                        # A real new addressed utterance can interrupt main TTS;
+                        # opening the mic or resetting model output cannot.
+                        if out.turn_id and out.transcript.strip():
+                            # Provider-confirmed user words: the evidence the
+                            # idle-hangup clock trusts (LIVE_IDLE_REQUIRES_TRANSCRIPT).
+                            self._live_last_transcript_at = time.time()
+                            text = merge_stt_hypothesis(
+                                input_text.get(out.turn_id, ""), out.transcript,
+                            )
+                            input_text[out.turn_id] = text
+                            if (out.turn_id not in addressed_inputs
+                                    and self._live_emotion_addressed(text, harness_voice)):
+                                addressed_inputs.add(out.turn_id)
+                                # Input transcription can arrive after the reply
+                                # has started. That is metadata for this turn,
+                                # not a new request to cancel its queued TTS.
+                                same_reply = (
+                                    out.turn_id in response_inputs
+                                    and self._tts is not None
+                                    and self._tts.realtime_speaking
+                                )
+                                if self._tts is not None and self._tts.speaking and not same_reply:
+                                    self._tts.stop()
                         if cues is not None:
                             cues.input(
                                 out.turn_id, out.endpoint_at, transcript=out.transcript,
@@ -1234,23 +1579,50 @@ class VoiceService:
                             # not another speech observation for metrics/history.
                             continue
                         iid = metrics.speech(out.turn_id, out.endpoint_at, out.method)
-                        history.input(out.turn_id, out.transcript, iid)
-                        continue
-                    if isinstance(out, ExecutionOutput):
-                        if cues is not None:
-                            cues.finish(out.user_turn_id)
-                        history.complete(out.user_turn_id, out.execution_completed)
-                        metrics.complete(
-                            out.user_turn_id, out.execution_completed,
+                        hold_live_focus(out.turn_id)
+                        history.input(
+                            out.turn_id,
+                            "" if opener is not None and out.turn_id == opener["key"] else out.transcript,
+                            iid,
+                            classify_input(out.turn_id, input_text.get(out.turn_id, out.transcript)),
                         )
                         continue
+                    if isinstance(out, ExecutionOutput):
+                        if out.execution_completed:
+                            refresh_focus(out.user_turn_id)
+                        elif focus is not None:
+                            focus.finish(metrics.interaction(out.user_turn_id), cancelled=True)
+                        if cues is not None:
+                            cues.finish(out.user_turn_id)
+                        if opener is None or opener["consumed"] or out.user_turn_id != opener["key"]:
+                            history.complete(out.user_turn_id, out.execution_completed)
+                        complete_metrics(out.user_turn_id, out.execution_completed)
+                        continue
                     if isinstance(out, RejectSignal):
+                        if opener is not None:
+                            opener["consumed"] = True
+                        rejected_inputs.add(out.user_turn_id)
+                        iid = metrics.interaction(out.user_turn_id)
+                        if iid and self._tts is not None:
+                            self._tts.stop_realtime_reply(turn_id=iid)
+                        if out.user_turn_id and buffer_reply_key == out.user_turn_id:
+                            sentence_buf = ""
+                            first_sent = False
+                        if iid and native_started and native_owner == "interaction:" + iid:
+                            self._tts.native_play_end("")
+                            native_started = False
+                        logger.info("[live] rejected output cancelled turn=%s interaction=%s",
+                                    out.user_turn_id, iid)
+                        if focus is not None:
+                            focus.finish(metrics.interaction(out.user_turn_id), cancelled=True)
                         if cues is not None:
                             cues.finish(out.user_turn_id)
                         history.discard(out.user_turn_id)
                         metrics.reject(out.user_turn_id)
                         continue
                     if isinstance(out, DelegateSignal):
+                        if opener is not None:
+                            opener["consumed"] = True
                         if cues is not None:
                             cues.close()
                         history.discard(out.user_turn_id)
@@ -1263,25 +1635,34 @@ class VoiceService:
                         # A valid delegate tool is explicit task evidence even
                         # if the provider has not sent its input transcript yet.
                         key = out.user_turn_id or "delegate"
+                        if opener is not None and (not opener["key"] or key == opener["key"]):
+                            opener["key"] = key
+                            metrics.seed(key, opener["interaction_id"])
                         iid = metrics.interaction(key) or metrics.speech(
                             key, None, "provider_delegate",
                         )
+                        refresh_focus(key, out.transcript)
                         dispatch_turn(
                             self._decorator,
                             self._sensing_sender,
-                            out.transcript,
+                            out.transcript or (opener["transcript"] if opener is not None and key == opener["key"] else ""),
                             [],
                             [],
                             RealtimeTurnResult(
                                 delegated=True,
                                 delegate_msg=out.message,
+                                handoff_context=out.handoff_context,
                                 route=ROUTE_DELEGATED,
                             ),
                             harness_voice=harness_voice,
                             interaction_id=iid,
+                            voice_turn_type=classify_input(key, out.transcript or input_text.get(key, "")),
                         )
+                        refresh_focus(key, out.transcript)
                         break
                     if isinstance(out, EndCallSignal):
+                        if opener is not None:
+                            opener["consumed"] = True
                         # Do NOT tear down here. The farewell is normally
                         # spoken in the SAME turn as the tool call, so ending
                         # now would cut it off mid-word — the one thing a
@@ -1299,10 +1680,29 @@ class VoiceService:
                         # The first output transcript also sends an audio reset;
                         # that is not evidence of a user asking us to stop.
                         if out.reason == "server_interrupt":
+                            if getattr(self, "_live_gate", None) is not None:
+                                logger.info(
+                                    "[live-aec] interrupt received: tts_speaking=%s realtime=%s native=%s buffered_chars=%d",
+                                    self._tts_is_speaking(), bool(self._tts and self._tts.realtime_speaking),
+                                    native_started, len(sentence_buf),
+                                )
+                                if self._aec_live_interrupt_reply("provider", out.user_turn_id or None):
+                                    sentence_buf = ""
+                                    first_sent = False
+                                    if native_started:
+                                        self._tts.native_play_end(transcript)
+                                        native_started = False
+                                    transcript = ""
+                                    logger.info("[live-aec] provider interrupt: stop requested; confirm playback state in live-aec")
+                            if opener is not None:
+                                opener["consumed"] = True
+                            rejected_inputs.add(out.user_turn_id)
                             if cues is not None:
                                 cues.finish(out.user_turn_id)
                             history.discard(out.user_turn_id)
                             iid = metrics.interaction(out.user_turn_id)
+                            if focus is not None:
+                                focus.finish(iid, cancelled=True)
                             has_pending = getattr(self._tts, "has_pending_speech", lambda owner: False)
                             pending_audio = bool(iid) and (
                                 has_pending("run:" + iid) or has_pending("interaction:" + iid)
@@ -1312,8 +1712,7 @@ class VoiceService:
                             # behavior; instrumentation must not add a new stop.
                             continue
                         history.reset_output(out.user_turn_id)
-                        if self._tts is not None:
-                            self._tts.stop()
+                        self._live_stop_output()
                         if native_started:
                             self._tts.native_play_end(transcript)
                             native_started = False
@@ -1323,26 +1722,52 @@ class VoiceService:
                         self._live_last_model_output = time.time()
                         if not native:
                             continue
+                        if out.user_turn_id:
+                            response_inputs.add(out.user_turn_id)
                         if cues is not None:
                             cues.finish(out.user_turn_id)
-                        owner = metrics.owner(out.user_turn_id)
-                        if native_started and owner != native_owner:
-                            self._tts.set_native_playback_owner(owner)
-                            native_owner = owner
-                        if not native_started:
-                            native_started = self._tts is not None and (
-                                self._tts.native_play_begin(
-                                    self._realtime.output_sample_rate, owner=owner,
+                        def write_native():
+                            nonlocal native_started, native_owner
+                            owner = metrics.owner(out.user_turn_id)
+                            if native_started and owner != native_owner:
+                                self._tts.set_native_playback_owner(owner)
+                                native_owner = owner
+                            if not native_started:
+                                native_started = self._tts is not None and (
+                                    self._tts.native_play_begin(
+                                        self._realtime.output_sample_rate, owner=owner,
+                                    )
                                 )
-                            )
-                            native_owner = owner
-                        if native_started:
-                            self._tts.native_play_frame(out.audio)
+                                native_owner = owner
+                            if native_started:
+                                if opener is not None:
+                                    opener["consumed"] = True
+                                self._tts.native_play_frame(out.audio)
+                                if opener is not None:
+                                    if out.user_turn_id and out.user_turn_id == opener["key"]:
+                                        opener["replied"] = True
+                        if live_replies is None:
+                            write_native()
+                        else:
+                            live_replies.play(out.user_turn_id or fallback_key, write_native)
                         if out.transcript:
                             history.output(out.user_turn_id, out.transcript)
                             transcript += out.transcript
                         continue
                     if isinstance(out, RTTextOutput):
+                        if deferred_marker_tail is not None:
+                            owner, prefix = deferred_marker_tail
+                            if out.user_turn_id == owner:
+                                sentence_buf = prefix + sentence_buf
+                                buffer_reply_key = owner
+                                speech_iid = metrics.interaction(owner)
+                            # Never attach a held fragment to a different turn.
+                            deferred_marker_tail = None
+                        if out.user_turn_id:
+                            response_inputs.add(out.user_turn_id)
+                        if not transcript and out.text:
+                            logger.info("[tts-timing] stage=realtime_first_text mode=live owner=%s reply=%s",
+                                        metrics.interaction(out.user_turn_id), out.user_turn_id)
                         history.output(out.user_turn_id, out.text)
                         self._live_last_model_output = time.time()
                         transcript += out.text
@@ -1352,6 +1777,7 @@ class VoiceService:
                         if not iid:
                             metrics.owner(out.user_turn_id)  # coverage only
                         if not sentence_buf:
+                            buffer_reply_key = out.user_turn_id or fallback_key
                             speech_iid = iid
                             buffer_mixed = False
                         elif iid != speech_iid:
@@ -1362,31 +1788,54 @@ class VoiceService:
                             speech_iid = ""
                         iid = speech_iid
                         sentence_buf += out.text
+                        visible = self.strip_rt_markers(sentence_buf)
+                        if not visible:
+                            continue
                         if not first_sent:
                             head, rest = split_first_chunk(sentence_buf)
                             head = self.strip_rt_markers(head) if head else ""
                             if head:
                                 if cues is not None:
                                     cues.finish(out.user_turn_id)
-                                if not self._tts.speak(head, turn_id=iid, realtime_reply=True):
-                                    self._tts.speak_queue(head, turn_id=iid, realtime_reply=True)
+                                if opener is not None:
+                                    opener["consumed"] = True
+                                speak_live(head, iid, buffer_reply_key, first=True)
+                                if opener is not None:
+                                    opener["consumed"] = True
+                                    if iid == opener["interaction_id"]:
+                                        opener["replied"] = True
                                 first_sent = True
                                 sentence_buf = rest
-                        if sentence_buf.rstrip().endswith((".", "!", "?", "…")):
-                            sentence = self.strip_rt_markers(sentence_buf)
+                        # Check the spoken text; a trailing tag must not hold a
+                        # complete sentence until the provider's routing grace ends.
+                        sentence = self.strip_rt_markers(sentence_buf)
+                        complete = sentence.rstrip().endswith(SENTENCE_ENDS + ("…",))
+                        ready, tail = ("", "") if complete else split_completed_prefix(sentence_buf)
+                        if ready:
+                            sentence = self.strip_rt_markers(ready)
+                        if sentence.rstrip().endswith(SENTENCE_ENDS + ("…",)):
                             if sentence:
                                 if cues is not None:
                                     cues.finish(out.user_turn_id)
-                                self._tts.speak_queue(sentence, turn_id=iid, realtime_reply=True)
-                            sentence_buf = ""
+                                if opener is not None:
+                                    opener["consumed"] = True
+                                speak_live(sentence, iid, buffer_reply_key)
+                                if opener is not None:
+                                    if iid == opener["interaction_id"]:
+                                        opener["replied"] = True
+                            sentence_buf = tail if ready else ""
                         continue
+                if stop_event is not None and stop_event.is_set():
+                    break
+                if getattr(self._realtime, "execution_completed", False) is True:
+                    refresh_focus(getattr(self._realtime, "execution_turn_id", ""))
                 if cues is not None:
                     terminal_key = getattr(self._realtime, "execution_turn_id", "")
                     if terminal_key:
                         cues.finish(terminal_key)
                 # receive() timeout and a synthetic unblock are not successful
                 # execution. Only the provider's terminal owns this evidence.
-                metrics.complete(
+                complete_metrics(
                     getattr(self._realtime, "execution_turn_id", ""),
                     getattr(self._realtime, "execution_completed", False) is True,
                 )
@@ -1397,26 +1846,59 @@ class VoiceService:
                 if native_started:
                     self._tts.native_play_end(transcript)
 
-                if not native and sentence_buf.strip():
-                    tail = self.strip_rt_markers(sentence_buf)
+                # A stopped promoted session has handed its unanswered opener
+                # back to main. A late receive exit must not enqueue its old tail.
+                if (not native and sentence_buf.strip()
+                        and self._live_running and generation == self._live_generation
+                        and not (stop_event is not None and stop_event.is_set())):
+                    visible_tail = self.strip_rt_markers(sentence_buf)
+                    if (self._pending_rt_silence_marker(sentence_buf)
+                            and not getattr(self._realtime, "execution_completed", False)):
+                        # Receive timeout is not a provider terminal. Preserve
+                        # only attributed candidates until the next fragment.
+                        if isinstance(buffer_reply_key, str) and buffer_reply_key:
+                            deferred_marker_tail = (buffer_reply_key, sentence_buf)
+                        tail = ""
+                    else:
+                        tail = visible_tail
                     if tail:
                         if cues is not None:
                             cues.finish(getattr(self._realtime, "execution_turn_id", ""))
-                        self._tts.speak_queue(tail, turn_id=speech_iid, realtime_reply=True)
-            if self._live_running and generation == self._live_generation:
+                        if opener is not None:
+                            opener["consumed"] = True
+                        speak_live(tail, speech_iid, buffer_reply_key)
+                        if opener is not None:
+                            if speech_iid == opener["interaction_id"]:
+                                opener["replied"] = True
+            if opener is not None and opener.get("replied", False):
+                complete_metrics(opener["key"], opener.get("execution_completed", False))
+            for key in focus_refreshed - focus_finished:
+                if opener is not None and key == opener["key"] and not opener["consumed"]:
+                    continue  # The capture owner will hand this silent opener to main.
+                focus.finish(metrics.interaction(key))
+                focus_finished.add(key)
+            if (self._live_running and generation == self._live_generation
+                    and (opener is None or opener["consumed"])):
                 history.complete(
                     getattr(self._realtime, "execution_turn_id", ""),
                     getattr(self._realtime, "execution_completed", False) is True,
                 )
+            if opener is not None and not opener["consumed"]:
+                # No answer before receive timeout/error: retain STT fallback.
+                self._live_running = False
             if transcript:
                 self._live_unprompted_replies += 1
                 logger.info("[live] model said: %r", transcript[:120])
+        for key in focus_held - focus_finished:
+            if opener is not None and key == opener["key"] and not opener["consumed"]:
+                continue
+            focus.finish(metrics.interaction(key), cancelled=True)
         history.close()
         metrics.close()
 
     def _live_session(
         self, mic, frame_size: int, device_rate: int, pre_roll: list,
-        harness_voice=None,
+        harness_voice=None, opener=None,
     ) -> bool:
         """Stream the mic continuously until the model or the clock ends it.
 
@@ -1436,6 +1918,13 @@ class VoiceService:
         harness_voice = read_voice_mode() if harness_voice is None else harness_voice
         if bypass_realtime(harness_voice):
             return False
+        if getattr(self, "_live_gate", None) is not None:
+            self._live_gate.reset()
+            if not hasattr(self, "_aec_live_played_start"):
+                self._aec_live_played_start = live_playback.played_seconds()
+            self._aec_live_replies = LiveReplyGuard()
+            live_playback.duck(False)
+            logger.info("[live-aec] adaptive echo gate active; local duck enabled")
         next_mode_check = time.monotonic() + 0.5
         self._live_generation += 1
         generation = self._live_generation
@@ -1445,6 +1934,7 @@ class VoiceService:
         self._live_frames_during_playback = 0
         self._live_frames_substituted = 0
         self._live_unprompted_replies = 0
+        self._live_last_transcript_at = 0.0
         self._live_hangup_at = 0.0
         started = time.time()
         # Exactly what the provider receives — see LIVE_UPLINK_DUMP_DIR.
@@ -1467,6 +1957,7 @@ class VoiceService:
                 logger.warning("[live] uplink dump could not be opened: %s", e)
                 uplink_dump = None
         last_user_speech = started
+        self._live_idle_speech_deadline = 0.0
         # When the device last had the floor. The model talking is NOT action
         # from the user, but hanging up mid-reply would be wrong, so the K
         # window runs from whichever came later: the user's last words, or the
@@ -1503,9 +1994,10 @@ class VoiceService:
         cues = LiveVoiceCues(
             addressed=lambda text: self._live_emotion_addressed(text, harness_voice),
         )
+        pump_stop = threading.Event()
         pump = threading.Thread(
             target=self._live_out_pump,
-            args=(generation, harness_voice, cues),
+            args=(generation, harness_voice, cues, opener, pump_stop),
             daemon=True,
             name="live-out",
         )
@@ -1543,8 +2035,16 @@ class VoiceService:
                     break
                 if self._tts_is_speaking():
                     last_reply_end = now
-                quiet_for = now - max(last_user_speech, last_reply_end)
-                if quiet_for > voice_cfg.LIVE_IDLE_HANGUP_S:
+                # "The user said something" = words the provider transcribed,
+                # not merely a voice near the mic (which can be anyone's).
+                user_spoke_at = (
+                    max(self._live_last_transcript_at, started)
+                    if voice_cfg.LIVE_IDLE_REQUIRES_TRANSCRIPT
+                    else last_user_speech
+                )
+                quiet_for = self._live_quiet_for(now, user_spoke_at, last_reply_end)
+                pending_speech = self._live_idle_pending_speech(now, quiet_for, last_user_speech)
+                if quiet_for > voice_cfg.LIVE_IDLE_HANGUP_S and not pending_speech:
                     logger.info(
                         "[live] no user action for %.0fs — hanging up, VAD resumes",
                         quiet_for,
@@ -1563,17 +2063,60 @@ class VoiceService:
                 if overflowed:
                     # The frame is already lost. Substitute rather than splice.
                     data = self._np.zeros_like(data)
+                # Track playback edges even when capture overflowed.
+                if getattr(self, "_live_gate", None) is not None:
+                    raw_rms = rms(data, self._np)
+                    input_samples = len(data)
+                    # Pending synthesis is not audible playback. In particular,
+                    # a TTS error/retry must never mute the user's microphone.
+                    playback = self._tts_is_speaking() and live_playback.is_playing()
+                    output_level = live_playback.level()
+                    was_speaking = self._live_gate.speaking
+                    was_ducked = self._live_gate.duck
+                    played_seconds = max(0.0, live_playback.played_seconds() - self._aec_live_played_start)
+                    data = self._live_gate.process(
+                        data.reshape(-1), device_rate, playback, output_level,
+                        playback_seconds=played_seconds,
+                    )
+                    gated = self._live_gate.risk and not self._live_gate.speaking
+                    replay_ms = max(0, len(data) - input_samples) * 1000 / device_rate
+                    self._live_frames_during_playback += int(playback)
+                    self._live_frames_substituted += int(gated)
+                    tick = time.monotonic()
+                    if (tick >= self._aec_live_diag_next or replay_ms
+                            or was_ducked != self._live_gate.duck):
+                        self._aec_live_diag_next = tick + 1.0
+                        logger.info(
+                            "[live-aec] mic=%.0f out=%.0f threshold=%.0f noise=%.0f "
+                            "echo_db=%.1f playback=%s realtime=%s speech=%s gate=%s "
+                            "candidate=%s duck=%s prefix_ms=%.0f last_upload_ms=%.1f played_s=%.2f aec_ready=%s",
+                            raw_rms, output_level * 32768, self._live_gate.threshold * 32768,
+                            self._live_gate.noise * 32768, self._live_gate.coupling_db,
+                            playback, bool(self._tts and self._tts.realtime_speaking),
+                            self._live_gate.speaking, gated, self._live_gate.duck,
+                            live_playback.snapshot()['duck'], replay_ms, self._aec_live_last_upload_ms,
+                            played_seconds, played_seconds >= self._live_gate.AEC_WARMUP_S,
+                        )
+                    data = data.reshape(-1, 1)
+                    live_playback.duck(self._live_gate.duck)
+                    if self._live_gate.barge_in:
+                        # Local energy is a candidate, not a cancellation verdict.
+                        self._aec_live_interrupt_reply("local_speech")
+                    if self._live_gate.speaking and not was_speaking:
+                        logger.info("[live-aec] speech confirmed threshold=%.0f duck=%s",
+                                    self._live_gate.threshold * 32768, self._live_gate.duck)
                 else:
                     data = self._live_uplink_frame(data)
                 self._live_frames += 1
 
                 energy = rms(data, self._np)
-                self._mic_level = energy
+                self._mic_level = raw_rms if getattr(self, "_live_gate", None) is not None else energy
                 self._mic_level_ts = now
                 # Feeds ONLY the idle-hangup clock. Not an endpointer and not a
                 # gate — every frame goes up either way.
                 #
-                # RMS alone cannot carry this. In a noisy room the floor sits
+                # Hardware AEC uses its adaptive speech state directly. For other
+                # profiles, RMS alone cannot carry this. In a noisy room the floor sits
                 # above the threshold, so every frame reads as "the user is
                 # talking" and the session never hangs up — device-observed
                 # 2026-09-07 on intern-v2-6286, a ~10500 floor against a
@@ -1582,7 +2125,11 @@ class VoiceService:
                 # Silero confirms before the clock is actually refreshed,
                 # batched over a window rather than run per frame. Identical
                 # treatment to the turn path's silence clock.
-                if energy >= voice_cfg.RMS_THRESHOLD:
+                if getattr(self, "_live_gate", None) is not None:
+                    if self._live_gate.speaking:
+                        last_user_speech = now
+                        self._live_unprompted_replies = 0
+                elif energy >= voice_cfg.RMS_THRESHOLD:
                     silence_probe.append(data)
                     if len(silence_probe) >= max(
                         1, voice_cfg.SILENCE_VAD_WINDOW_FRAMES
@@ -1600,7 +2147,10 @@ class VoiceService:
                 )
                 if uplink_dump is not None:
                     uplink_dump.writeframes(uplink_frame)
+                upload_started = time.monotonic()
                 self._realtime.append_audio(self._to_realtime(uplink_frame))
+                if getattr(self, "_live_gate", None) is not None:
+                    self._aec_live_last_upload_ms = (time.monotonic() - upload_started) * 1000
         except Exception as e:
             logger.warning("[live] session error: %s", e)
         finally:
@@ -1610,12 +2160,19 @@ class VoiceService:
                     uplink_dump.close()
                 except Exception:
                     pass
+            if getattr(self, "_live_gate", None) is not None:
+                live_playback.duck(False)
+                self._live_gate.reset()
             self._live_running = False
             self._listening = False
+            # Release the queue reader before a following session can reuse it.
+            # A timed join alone left the old reader blocked for up to 8 seconds,
+            # allowing it to steal and discard the next session's first output.
+            pump_stop.set()
+            pump.join()
+            self._realtime.end_live_audio()
             self._realtime.set_live_active(False)
-            pump.join(timeout=2.0)
-            if self._tts is not None:
-                self._tts.stop()
+            self._live_stop_output()
             logger.info(
                 "[live] session END after %.0fs — %d frames, %d during playback, "
                 "%d substituted",
@@ -1647,17 +2204,80 @@ class VoiceService:
         # session that spoke, and nothing at all for one that stayed silent.
         return self._live_frames_during_playback > 0
 
+    def _try_live_opener(self, mic, frame_size, device_rate, audio_buffer, *,
+                         transcript, interaction_id, harness_voice,
+                         voice_turn_type="voice", speaker_display=None):
+        """Promote a confirmed STT capture; return (consumed, reopen_mic)."""
+        if (not voice_cfg.LIVE_MODE or not hal_config.REALTIME_ENABLED
+                or bypass_realtime(harness_voice) or not audio_buffer):
+            return False, False
+        opener = {"key": "", "consumed": False, "transcript": transcript,
+                  "interaction_id": interaction_id, "voice_turn_type": voice_turn_type}
+        try:
+            self._realtime.prepare_turn()
+            if not self._realtime.wait_until_available(5.0):
+                return False, False
+            self._realtime.send_text(build_turn_context(speaker_display))
+            reopen = self._live_session(
+                mic, frame_size, device_rate, audio_buffer,
+                harness_voice=harness_voice, opener=opener,
+            )
+            return opener["consumed"], reopen
+        except Exception:
+            logger.exception("[live] confirmed opener failed; preserving STT fallback")
+            self._live_running = False
+            self._realtime.set_live_active(False)
+            self._live_stop_output()
+            return opener["consumed"], True
+
     def _to_realtime(self, pcm16_bytes: bytes):
-        """16 kHz PCM16 bytes → float32 at the provider's input rate."""
+        """16 kHz PCM16 bytes → float32 at the provider's input rate.
+
+        Stateful across frames: resampling each 20 ms frame on its own rings at
+        every frame edge (a click train that made GPT-Live at 24 kHz transcribe
+        nothing at all, 2026-09-17), so a StreamingResampler carries the tail
+        of the previous frame as filter history. Rebuilt whenever the provider
+        rate changes (a rebuild can swap the provider).
+        """
         audio_f32 = pcm16_bytes_to_float32(pcm16_bytes)
-        return resample_float32(
-            audio_f32, voice_cfg.STT_RATE, self._realtime.sample_rate
-        )
+        dst = self._realtime.sample_rate
+        rs = getattr(self, "_uplink_resampler", None)
+        if rs is None or rs.src_rate != voice_cfg.STT_RATE or rs.dst_rate != dst:
+            rs = StreamingResampler(voice_cfg.STT_RATE, dst)
+            self._uplink_resampler = rs
+        return rs.process(audio_f32)
 
     # ------------------------------------------------------------------
     # STT streaming session — fires while user is speaking
     # ------------------------------------------------------------------
     def _stream_session(
+        self, mic, frame_size: int, device_rate: int,
+        preconnected_session=None, speech_pre_buffer=None,
+        pending_listening_cue_id=None, harness_voice=None, manual_capture=None,
+    ):
+        # Reserve before connecting STT, not just while _listening is True:
+        # a delayed cue/filler can otherwise cut off the buffered opening words.
+        tts = self._tts
+        reserve = getattr(tts, "begin_input_capture", None)
+        token = reserve() if reserve and not voice_cfg.LIVE_MODE and manual_capture is None else None
+
+        def release_input():
+            if token is not None:
+                tts.end_input_capture(token)
+
+        followup_ids = set()
+        try:
+            return VoiceService._stream_session_impl(
+                self, mic, frame_size, device_rate, preconnected_session,
+                speech_pre_buffer, pending_listening_cue_id, harness_voice,
+                manual_capture, release_input, followup_ids,
+            )
+        finally:
+            release_input()
+            for iid in followup_ids:
+                self._wakeword_focus.finish(iid)
+
+    def _stream_session_impl(
         self,
         mic,
         frame_size: int,
@@ -1666,6 +2286,9 @@ class VoiceService:
         speech_pre_buffer=None,
         pending_listening_cue_id=None,
         harness_voice=None,
+        manual_capture=None,
+        release_input=lambda: None,
+        followup_ids=None,
     ):
         """Stream audio to STT provider until silence or TTS interrupts.
 
@@ -1680,11 +2303,17 @@ class VoiceService:
         # Snapshot before any realtime I/O; a toggle cannot move this capture
         # between agents. OS validates the same generation on the final POST.
         harness_voice = read_voice_mode() if harness_voice is None else harness_voice
+        if bypass_realtime(harness_voice) and manual_capture is None:
+            # A mode toggle can race the last normal VAD frame. Harness input
+            # must always have an explicit tap-owned capture.
+            if preconnected_session is not None:
+                preconnected_session.close()
+            return
         # Live providers use automatic endpointing for the whole process.
         # A gated opener/fallback must not flush a buffered utterance through
         # the manual commit path (which can double-commit with server VAD).
-        # STT still confirms the wake phrase and dispatches to the main agent;
-        # its focus window allows the next capture to enter full-duplex live.
+        # STT confirms a gated opener before handing its buffer to the live
+        # session. An unavailable live session retains the main-agent fallback.
         realtime_allowed = not voice_cfg.LIVE_MODE and not bypass_realtime(harness_voice)
         # Harness explicitly owns voice input for this capture. Do not extend
         # the normal wake window; disabling the mode restores its usual gate.
@@ -1717,9 +2346,17 @@ class VoiceService:
 
         last_partial = [""]
         final_segments = []
+        stt_final_changed = threading.Event()
         final_sent = [False]
         # time.time() of the most recent STT final segment, 0 = none yet.
         final_ts = [0.0]
+        turn_endpoint = None
+        if voice_cfg.TURN_END_ENABLED and not voice_cfg.LIVE_MODE and manual_capture is None:
+            turn_endpoint = TurnEndpoint(
+                self._turn_detector,
+                fallback_s=voice_cfg.TURN_END_FALLBACK_S,
+                max_pause_s=voice_cfg.TURN_END_MAX_PAUSE_S,
+            )
         # The listening cue fires on the FIRST STT PARTIAL — never at session
         # open. A partial is proof a human said words; the entry VAD is not.
         # That VAD is tuned wide open on purpose so quiet speech is never
@@ -1750,12 +2387,28 @@ class VoiceService:
         # trailing-silence trim and speaker-ID all run between the two and
         # would otherwise be charged to the device's response time.
         endpoint_ts = 0.0
+        early_realtime_result = None
+        interaction_id = None
+        followup_ids = set() if followup_ids is None else followup_ids
+
+        def hold_followup():
+            if (hal_config.WAKEWORD_ENABLED and not harness_listening
+                    and (wake_word_confirmed.is_set() or wakeword_followup_active
+                         or self._wakeword_focus.is_active())
+                    and self._wakeword_focus.begin(interaction_id)):
+                followup_ids.add(interaction_id)
+        gaze_endpoint_checked = False
         pre_frames_from_vad = len(speech_pre_buffer or [])
         logger.info(
             "Session START — pre_from_vad=%d frames, device_rate=%dHz",
             pre_frames_from_vad,
             device_rate,
         )
+        # Overlap a parked-session resume with the sentence being spoken
+        # (see RealtimeOrchestrator.prewarm). Wake-word mode only: the
+        # always-listening path calls prepare_turn() at session open itself.
+        if realtime_allowed and hal_config.REALTIME_ENABLED and hal_config.WAKEWORD_ENABLED:
+            self._realtime.prewarm()
         # A partial match is provisional: STT can correct a name in its final
         # result ("Moon" → "Mom"). It improves observability while the user is
         # speaking, but a turn is not dispatched or committed to realtime until
@@ -1831,6 +2484,10 @@ class VoiceService:
             word configured every utterance IS addressed to the device, so the
             cue fires on the first partial as before.
             """
+            if capture_complete.is_set():
+                return
+            if manual_capture is not None:
+                return  # Manual capture owns its LED from recorder readiness to close.
             if listening_emotion_sent[0]:
                 return
             if not addressed_to_us():
@@ -1883,11 +2540,12 @@ class VoiceService:
                 # "Right" at conversations between two other people, and made
                 # testing the openers actively misleading: the cue sounds like
                 # acknowledgement while the turn is dropped unheard.
-                if addressed_to_us():
+                if not capture_complete.is_set() and addressed_to_us():
                     self._backchannel.on_partial(text)
                 fire_listening_cue()
                 return
-            # Accumulate final segments — don't send yet, wait for session close.
+            # Accumulate final segments; only the capture owner may commit
+            # after endpoint detection, or dispatch after STT has fully drained.
             # Flux model fires multiple EndOfTurn events for natural pauses within
             # one utterance, so sending immediately would split a single sentence.
             logger.info("STT final segment: '%s'", text)
@@ -1919,6 +2577,7 @@ class VoiceService:
             # Arrival time, not just the fact of it: the short end-of-turn clock
             # runs from HERE (see turn_should_close).
             final_ts[0] = time.time()
+            stt_final_changed.set()
 
         rt_audio_buffer: list = []
         # A noise-drop can be rebuilding a clean Gemini session in the
@@ -1927,6 +2586,14 @@ class VoiceService:
         realtime_deferred = False
         realtime_turn_started = False
         realtime_start_failed = False
+        audio_turn = None
+        prepare_started = False
+        prepare_endpoint_waited = False
+        prepare_done = threading.Event()
+        prepare_error = []
+        # Dead-air filler armed before the post-capture session handshake, so
+        # the acknowledgement clock does not wait on the Gemini reconnect.
+        post_capture_wait_filler = None
         # Voice speaker-ID for THIS turn — resolved once after capture (below) and
         # passed into build_turn_context() so the realtime reply names the actual
         # speaker. None until resolved / on unknown → face fallback.
@@ -1945,6 +2612,26 @@ class VoiceService:
         # capture and play into the next mic session.
         self._backchannel.begin_session()
 
+        def prepare_capture_session() -> bool:
+            """Connect off the mic thread; retain audio until binding is ready."""
+            nonlocal prepare_started, prepare_endpoint_waited
+            if not prepare_started:
+                prepare_started = True
+
+                def prepare():
+                    try:
+                        self._realtime.prepare_turn()
+                    except Exception as error:
+                        prepare_error.append(error)
+                    finally:
+                        prepare_done.set()
+
+                threading.Thread(target=prepare, daemon=True, name="rt-capture-prepare").start()
+            if capture_complete.is_set() and not prepare_endpoint_waited:
+                prepare_endpoint_waited = True
+                prepare_done.wait(timeout=PREWARM_JOIN_TIMEOUT_S)
+            return prepare_done.is_set() and not prepare_error
+
         def start_realtime_turn() -> bool:
             """Open realtime as soon as the wake-word partial is available.
 
@@ -1955,43 +2642,52 @@ class VoiceService:
             """
             nonlocal realtime_deferred, realtime_turn_started, realtime_start_failed
             nonlocal sent_turn_speaker, turn_context_sent
+            nonlocal wakeword_followup_active
+            nonlocal audio_turn
             if not realtime_allowed or realtime_turn_started or realtime_start_failed:
                 return False
 
             if hal_config.WAKEWORD_ENABLED:
-                # Preserve the always-listening path below exactly. Wake-word
-                # turns defer all realtime I/O until capture is complete and a
-                # FINAL STT result confirms the phrase, so a rebuild cannot split
-                # one utterance across old/new sessions.
+                # A gaze/button grant during this capture authorizes this same
+                # utterance; latch it even if the window expires before endpoint.
+                wakeword_followup_active = (
+                    wakeword_followup_active or self._wakeword_focus.is_active()
+                )
+                # Closed-window wake phrases still require final confirmation.
+                # Authorized follow-ups may stream before STT drains.
                 if (
-                    not capture_complete.is_set()
+                    (not capture_complete.is_set() and not wakeword_followup_active)
                     or not (wake_word_confirmed.is_set() or wakeword_followup_active)
                     or not hal_config.REALTIME_ENABLED
                 ):
                     return False
-                # Same pre-turn hygiene as the always-listening path below: the
-                # tool-call quarantine lives in prepare_turn(), so skipping it
-                # here let an `express_emotion` turn silence the next one. Safe
-                # after the capture_complete guard — the utterance is fully
-                # buffered, so a rebuild cannot split it.
-                self._realtime.prepare_turn()
+                # Prepare before uploading this turn, including tool-call
+                # quarantine left by the previous response.
+                if not prepare_capture_session():
+                    return False
                 if self._realtime.rebuilding or not self._realtime.available:
                     logger.info(
                         "[realtime] Wake-word turn falls back — session unavailable after final confirmation"
                     )
                     return False
                 try:
+                    audio_turn = self._realtime.bind_audio_turn()
                     self._realtime.send_text(build_turn_context(turn_speaker_display))
                     sent_turn_speaker = turn_speaker_display
                     turn_context_sent = True
                     for audio_f32 in rt_audio_buffer:
-                        self._realtime.append_audio(audio_f32)
+                        self._realtime.append_audio(audio_f32, turn=audio_turn)
                     realtime_turn_started = True
                     logger.info(
                         "[realtime] Wake-word/follow-up authorized; flushed %d buffered frame(s)",
                         len(rt_audio_buffer),
                     )
                     return True
+                except AudioTurnSessionChanged:
+                    realtime_turn_started = True
+                    realtime_deferred = True
+                    logger.info("[realtime] Upload session changed; retaining full turn for replay")
+                    return False
                 except Exception as e:
                     realtime_start_failed = True
                     logger.warning(
@@ -2000,14 +2696,17 @@ class VoiceService:
                     )
                     return False
 
-            realtime_turn_started = True
             if not hal_config.REALTIME_ENABLED:
+                realtime_turn_started = True
                 return True
 
-            self._realtime.prepare_turn()
+            if not prepare_capture_session():
+                return False
+            realtime_turn_started = True
             realtime_deferred = self._realtime.rebuilding
             if not realtime_deferred and self._realtime.available:
                 try:
+                    audio_turn = self._realtime.bind_audio_turn()
                     # ALWAYS-LISTENING PATH. This fires at session open, so
                     # turn_speaker_display is still None here by construction —
                     # the voiceprint needs the completed capture. The speaker-ID
@@ -2016,15 +2715,19 @@ class VoiceService:
                     sent_turn_speaker = turn_speaker_display
                     turn_context_sent = True
                     for audio_f32 in rt_audio_buffer:
-                        self._realtime.append_audio(audio_f32)
+                        self._realtime.append_audio(audio_f32, turn=audio_turn)
                     if hal_config.WAKEWORD_ENABLED:
                         logger.info(
                             "[realtime] Wake-word gate opened; flushed %d buffered frame(s)",
                             len(rt_audio_buffer),
                         )
+                except AudioTurnSessionChanged:
+                    realtime_deferred = True
+                    logger.info("[realtime] Upload session changed; retaining full turn for replay")
                 except Exception as e:
                     logger.warning("[realtime] start turn failed: %s", e)
-                    rt_audio_buffer.clear()
+                    realtime_start_failed = True
+                    realtime_turn_started = False
             return True
         try:
             if preconnected_session:
@@ -2036,8 +2739,17 @@ class VoiceService:
             connect_done = threading.Event()
 
             def _do_connect():
-                connect_ok[0] = stt_session.start(on_transcript)
-                connect_done.set()
+                try:
+                    connect_ok[0] = stt_session.start(on_transcript)
+                finally:
+                    if manual_capture is not None and (
+                        manual_capture.cancelled.is_set() or not self._running
+                    ):
+                        # A slow connect may complete after capture cleanup.
+                        # Close that late socket instead of orphaning it.
+                        stt_session.close()
+                        connect_ok[0] = False
+                    connect_done.set()
 
             if preconnected_session:
                 connect_ok[0] = True
@@ -2048,7 +2760,15 @@ class VoiceService:
                 ).start()
 
             pre_buffer = []
+            connect_started = time.monotonic()
             while not connect_done.wait(timeout=0.005):
+                if manual_capture is not None and (
+                    not self._running or manual_capture.cancelled.is_set()
+                    or manual_capture.finished.is_set()
+                    or time.monotonic() - connect_started > 10
+                ):
+                    manual_capture.cancelled.set()
+                    break
                 if self._tts_is_speaking():
                     connect_done.wait(timeout=2)
                     break
@@ -2060,6 +2780,23 @@ class VoiceService:
 
             if not connect_ok[0]:
                 return
+            if manual_capture is not None:
+                if manual_capture.cancelled.is_set() or manual_capture.finished.is_set():
+                    return
+                from hal.drivers.harness.led import set_capturing
+
+                set_capturing(True)
+                # Signal readiness only after both the recorder and STT opened.
+                if self._tts:
+                    cue_start = time.monotonic()
+                    self._tts.play_harness_capture_chime()
+                    # The recorder kept running during the cue. Drain its
+                    # buffered frames so the beep is not transcribed.
+                    cue_frames = int((time.monotonic() - cue_start) * device_rate / frame_size) + 1
+                    for _ in range(cue_frames):
+                        mic.read(frame_size)
+                pre_buffer.clear()
+
 
             # Always-listening mode starts now. In wake-word mode this returns
             # immediately until an STT partial callback sets the Event.
@@ -2126,7 +2863,11 @@ class VoiceService:
                             and not realtime_deferred
                             and self._realtime.available
                         ):
-                            self._realtime.append_audio(audio_f32)
+                            try:
+                                self._realtime.append_audio(audio_f32, turn=audio_turn)
+                            except AudioTurnSessionChanged:
+                                realtime_deferred = True
+                                logger.info("[realtime] Pre-roll session changed; retaining full turn for replay")
 
                 # A partial can arrive while the STT pre-roll is sent. Open the
                 # gate now and flush that complete pre-roll exactly once.
@@ -2169,7 +2910,19 @@ class VoiceService:
             except Exception:
                 pass
 
+            mode_checked_at = 0.0
             while self._running and not stt_session.is_closed():
+                if manual_capture is not None:
+                    if time.monotonic() - mode_checked_at >= 0.25:
+                        mode_checked_at = time.monotonic()
+                        if not same_target(harness_voice, read_voice_mode()):
+                            manual_capture.cancelled.set()
+                    if manual_capture.cancelled.is_set():
+                        break
+                    if manual_capture.finished.is_set():
+                        endpoint_method = "manual_tap"
+                        endpoint_ts = time.monotonic()
+                        break
                 # Only the capture thread opens and flushes the realtime activity;
                 # The STT callback merely latches wake_word_detected.
                 start_realtime_turn()
@@ -2185,11 +2938,20 @@ class VoiceService:
                     endpoint_ts = time.monotonic()
                     break
 
-                # Guard against zombie sessions
-                if (time.time() - session_start) > voice_cfg.MAX_SESSION_DURATION_S:
+                # Recognized hands-free speech may last minutes. Keep the
+                # short ceiling for empty/noisy and manual captures.
+                has_words = any(c.isalnum() for c in last_partial[0]) or any(
+                    any(c.isalnum() for c in segment) for segment in final_segments
+                )
+                duration_limit = (
+                    voice_cfg.TURN_END_MAX_DURATION_S
+                    if turn_endpoint is not None and has_words
+                    else voice_cfg.MAX_SESSION_DURATION_S
+                )
+                if (time.time() - session_start) > duration_limit:
                     logger.warning(
                         "STT session exceeded %ds, force-closing",
-                        voice_cfg.MAX_SESSION_DURATION_S,
+                        duration_limit,
                     )
                     endpoint_method = "max_duration"
                     endpoint_ts = time.monotonic()
@@ -2225,7 +2987,12 @@ class VoiceService:
                         and not realtime_deferred
                         and self._realtime.available
                     ):
-                        self._realtime.append_audio(audio_f32)
+                        try:
+                            self._realtime.append_audio(audio_f32, turn=audio_turn)
+                        except AudioTurnSessionChanged:
+                            # Keep recording the complete utterance locally. The
+                            # commit boundary will rebuild and replay it as one.
+                            realtime_deferred = True
 
                 energy = rms(data, self._np)
                 self._mic_level = energy
@@ -2257,7 +3024,22 @@ class VoiceService:
                                         "non-speech (%d frames each)",
                                         noise_windows, probe_frames,
                                     )
-                elif turn_should_close(time.time(), last_speech_time, final_ts[0]):
+                elif manual_capture is None and turn_should_close(time.time(), last_speech_time, final_ts[0]):
+                    if turn_endpoint is not None:
+                        # Include the recorded quiet tail: a late final can
+                        # follow speech below the RMS threshold. Clipping at
+                        # last_speech_idx + 4 froze that evidence out of retries.
+                        # Only a new speech/text/final token submits another
+                        # bounded snapshot; silence alone does not rerun ONNX.
+                        end = len(audio_buffer)
+                        start = max(0, end - 125)  # 8 seconds at 64 ms/frame.
+                        if not turn_endpoint.should_close(
+                            now=time.time(), last_speech=last_speech_time,
+                            final_at=final_ts[0],
+                            text=" ".join([*final_segments, last_partial[0]]).strip(),
+                            pcm=b"".join(audio_buffer[start:end]),
+                        ):
+                            continue
                     if noise_windows:
                         logger.info(
                             "Silence detected, disconnecting STT "
@@ -2265,7 +3047,7 @@ class VoiceService:
                         )
                     else:
                         logger.info("Silence detected, disconnecting STT")
-                    endpoint_method = "silence_clock"
+                    endpoint_method = turn_endpoint.reason if turn_endpoint else "silence_clock"
                     endpoint_ts = time.monotonic()
                     break
         except Exception as e:
@@ -2279,7 +3061,120 @@ class VoiceService:
         finally:
             self._backchannel.reset()
             self._listening = False
-            stt_session.close()
+            # No more microphone frames will be captured. Processing feedback
+            # may now speak while the STT provider drains its final transcript.
+            release_input()
+            if manual_capture is not None:
+                from hal.drivers.harness.led import set_capturing
+
+                set_capturing(False)
+            # A confirmed transcript can arrive before CloseStream drains. For
+            # already-authorized input, overlap that drain with the model reply.
+            # Do not use a provisional partial to bypass the existing noise gate.
+            capture_spoken_text = getattr(self._tts, "last_spoken_text", "") if self._tts else ""
+            early_words, early_duration = "", 0.0
+            if realtime_allowed and hal_config.REALTIME_ENABLED and manual_capture is None:
+                early_words, _, early_duration = finalize_session(
+                    list(audio_buffer), [""], list(final_segments), last_speech_idx,
+                    capture_spoken_text,
+                )
+            if early_words and hal_config.WAKEWORD_ENABLED:
+                try:
+                    from hal.drivers.tracking import gaze
+
+                    gaze.on_speech_end()
+                    gaze_endpoint_checked = True
+                except Exception as e:
+                    logger.debug("early gaze speech-end check skipped: %s", e)
+                wakeword_followup_active = (
+                    wakeword_followup_active or self._wakeword_focus.is_active()
+                )
+            early_authorized = not hal_config.WAKEWORD_ENABLED or wakeword_followup_active
+            overlap_drain = (
+                realtime_allowed and hal_config.REALTIME_ENABLED and self._running
+                and manual_capture is None and early_authorized
+                and not harness_followup_active()
+                and endpoint_method in {"smart_turn", "turn_fallback", "turn_pause_limit", "silence_clock"}
+            )
+            if overlap_drain:
+                from concurrent.futures import ThreadPoolExecutor
+
+                capture_complete.set()
+                drain_finished = threading.Event()
+
+                def close_stt():
+                    try:
+                        stt_session.close()
+                    finally:
+                        drain_finished.set()
+                        stt_final_changed.set()
+
+                with ThreadPoolExecutor(max_workers=1, thread_name_prefix="stt-final-drain") as worker:
+                    final_drain = worker.submit(close_stt)
+                    try:
+                        last_final_snapshot = None
+                        while self._running:
+                            # Clear before snapshotting so a concurrent final
+                            # cannot be lost between the read and the wait.
+                            stt_final_changed.clear()
+                            final_snapshot = tuple(final_segments)
+                            if final_snapshot == last_final_snapshot:
+                                if drain_finished.is_set():
+                                    break
+                                stt_final_changed.wait(timeout=0.1)
+                                continue
+                            last_final_snapshot = final_snapshot
+                            early_words, _, early_duration = finalize_session(
+                                list(audio_buffer), [""], list(final_snapshot), last_speech_idx,
+                                capture_spoken_text,
+                            )
+                            early_speech = True
+                            if (early_words and needs_noise_guard(early_words)
+                                    and hal_config.REALTIME_REQUIRE_SPEECH_ON_EMPTY_STT and audio_buffer):
+                                try:
+                                    early_speech = self._rt_noise_is_speech(
+                                        self._np.frombuffer(b"".join(audio_buffer), dtype=self._np.int16)
+                                    )
+                                except Exception as e:
+                                    logger.warning("Early realtime speech check failed: %s", e)
+                            if early_words and not is_noise_turn(early_words, early_duration, early_speech):
+                                interaction_id = voice_metrics.speech_end(endpoint_method, at=endpoint_ts)
+                                hold_followup()
+                                post_capture_wait_filler = _WaitFiller(owner=interaction_id)
+                                if should_arm_realtime_wait_filler(early_words):
+                                    post_capture_wait_filler.arm()
+                                start_realtime_turn()
+                                if realtime_turn_started and not realtime_deferred and self._running:
+                                    logger.info("[realtime] Processing confirmed speech while STT final drain runs")
+                                    early_realtime_result = run_realtime_turn(
+                                        self._realtime, self._tts, self.strip_rt_markers,
+                                        early_words, rt_audio_buffer, early_duration, early_speech,
+                                        interaction_id=interaction_id, save_history=False, audio_turn=audio_turn,
+                                        harness_followup=False, wait_filler=post_capture_wait_filler,
+                                    )
+                                break
+                            if drain_finished.is_set():
+                                break
+                            # Final callbacks wake this immediately. The timeout
+                            # only observes service cancellation, not speech end.
+                            stt_final_changed.wait(timeout=0.1)
+                    finally:
+                        try:
+                            final_drain.result()
+                        except Exception:
+                            if post_capture_wait_filler is not None:
+                                post_capture_wait_filler.cancel()
+                            raise
+                if not self._running:
+                    if post_capture_wait_filler is not None:
+                        post_capture_wait_filler.cancel()
+                    if pending_listening_cue_id is not None:
+                        from hal import app_state
+
+                        app_state.clear_listening_pending_cue(pending_listening_cue_id)
+                    return
+            else:
+                stt_session.close()
             if pending_listening_cue_id is not None:
                 # If STT produced a partial, its real listening emotion already
                 # consumed this cue. Otherwise restore the prior LED promptly
@@ -2294,13 +3189,31 @@ class VoiceService:
                 last_speech_idx,
                 # What the device last said, so a turn captured right after a
                 # reply does not open with the tail of that reply.
-                getattr(self._tts, "last_spoken_text", "") if self._tts else "",
+                capture_spoken_text,
             )
             capture_complete.set()
+            if turn_endpoint is not None and endpoint_method == "max_duration":
+                logger.warning("Hands-free capture limit reached; unfinished request discarded")
+                if realtime_turn_started and hal_config.REALTIME_ENABLED:
+                    self._realtime.discard_open_activity()
+                return
+            if manual_capture is not None and (
+                not self._running
+                or endpoint_method != "manual_tap"
+                or manual_capture.cancelled.is_set()
+                or not same_target(harness_voice, read_voice_mode())
+            ):
+                logger.info("Harness manual capture discarded without a valid finish tap")
+                combined = ""
+                harness_listening = False
+            elif manual_capture is not None and self._tts:
+                # Capture is closed; this cue is not a remote delivery receipt.
+                self._tts.play_harness_capture_chime(finished=True)
             # Voice metrics clock starts here: the endpoint has been detected and
             # the transcript is assembled. Everything downstream carries this
             # id (see hal/telemetry/voice_metrics.py).
-            interaction_id = voice_metrics.speech_end(endpoint_method, at=endpoint_ts)
+            if interaction_id is None:
+                interaction_id = voice_metrics.speech_end(endpoint_method, at=endpoint_ts)
             logger.info(
                 "Session END — buffer frames=%d bytes=%d duration=%.2fs "
                 "transcript=%r interaction_id=%s",
@@ -2360,7 +3273,8 @@ class VoiceService:
                 try:
                     from hal.drivers.tracking import gaze
 
-                    gaze.on_speech_end()
+                    if not gaze_endpoint_checked:
+                        gaze.on_speech_end()
                 except Exception as e:
                     logger.debug("gaze speech-end check skipped: %s", e)
             else:
@@ -2375,10 +3289,13 @@ class VoiceService:
                     gaze.release_reacquire_hold_if_pending()
                 except Exception as e:
                     logger.debug("gaze reacquire release skipped: %s", e)
-                wakeword_followup_active = (
-                    wakeword_followup_active
-                    or (hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active())
-                )
+            # Gaze can grant focus at speech end for this very utterance. Refresh
+            # before opening realtime even when STT produced words; otherwise
+            # only downstream dispatch sees the grant and bypasses realtime.
+            wakeword_followup_active = (
+                wakeword_followup_active
+                or (hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active())
+            )
 
             # Noise guard: a session can open on a noise blip that fools the entry
             # VAD, and STT then either finds no words or invents a short filler for
@@ -2484,19 +3401,16 @@ class VoiceService:
                 )
                 speaker_prepass_thread.start()
 
-            def join_speaker_prepass() -> None:
-                """Wait for the backgrounded prepass, bounded.
+            def join_speaker_prepass(wait_s: float = voice_cfg.SPEAKER_PREPASS_JOIN_S) -> None:
+                """Wait within the commit or downstream identity budget.
 
-                Called once the realtime turn is open, which is the first point
-                the speaker's name is needed. A prepass that finished during the
-                connect costs nothing here. Hitting the ceiling only means this
-                turn's context goes out with the speaker unresolved, which the
-                late-correction path below already handles.
+                A completed prepass costs nothing. Results ready before commit
+                correct realtime context; later results decorate main dispatch.
                 """
                 if speaker_prepass_thread is None or not speaker_prepass_thread.is_alive():
                     return
                 waited_from = time.time()
-                speaker_prepass_thread.join(voice_cfg.SPEAKER_PREPASS_JOIN_S)
+                speaker_prepass_thread.join(max(0.0, wait_s))
                 logger.info(
                     "[realtime] waited %.2fs for speaker-ID prepass (resolved=%s)",
                     time.time() - waited_from,
@@ -2524,11 +3438,26 @@ class VoiceService:
                         buf_duration,
                     )
             else:
+                if not voice_cfg.LIVE_MODE:
+                    hold_followup()
+                if (realtime_allowed and not voice_cfg.LIVE_MODE
+                        and early_realtime_result is None and post_capture_wait_filler is None):
+                    post_capture_wait_filler = _WaitFiller(owner=interaction_id)
+                    if should_arm_realtime_wait_filler(combined):
+                        post_capture_wait_filler.arm()
                 start_realtime_turn()
+                if not realtime_turn_started and post_capture_wait_filler is not None:
+                    post_capture_wait_filler.cancel()
+                    post_capture_wait_filler = None
 
-            # Everything below reads the resolved speaker, so the parallel
-            # window ends here.
-            join_speaker_prepass()
+            # Acknowledge promptly and let slow speaker recognition overlap the
+            # model reply. Only identities ready now enter pre-commit context;
+            # main-agent dispatch below still waits for the identity result.
+            join_speaker_prepass(
+                voice_cfg.SPEAKER_PREPASS_COMMIT_JOIN_S
+                if realtime_turn_started and not voice_cfg.LIVE_MODE
+                else voice_cfg.SPEAKER_PREPASS_JOIN_S
+            )
 
             # `discard_open_activity()` starts its replacement session in the
             # background. A user can begin the next utterance before that
@@ -2540,20 +3469,25 @@ class VoiceService:
             if (
                 realtime_turn_started
                 and realtime_deferred
+                and audio_turn is None
                 and rt_audio_buffer
                 and not is_noise_turn(combined, buf_duration, rt_audio_is_speech)
+                and early_realtime_result is None
             ):
                 if self._realtime.wait_until_available():
                     try:
+                        audio_turn = self._realtime.bind_audio_turn()
                         self._realtime.send_text(build_turn_context(turn_speaker_display))
                         sent_turn_speaker = turn_speaker_display
                         turn_context_sent = True
                         for audio_f32 in rt_audio_buffer:
-                            self._realtime.append_audio(audio_f32)
+                            self._realtime.append_audio(audio_f32, turn=audio_turn)
                         logger.info(
                             "[realtime] Flushed %d buffered frame(s) after noise-drop rebuild",
                             len(rt_audio_buffer),
                         )
+                    except AudioTurnSessionChanged:
+                        logger.info("[realtime] Deferred upload session changed; retaining full turn for replay")
                     except Exception as e:
                         # Do not commit a partial deferred turn. No audio was
                         # intended for the old activity; falling back preserves
@@ -2567,6 +3501,32 @@ class VoiceService:
                         "[realtime] noise-drop rebuild not ready after capture; "
                         "falling back to main agent"
                     )
+
+            live_opener_consumed = False
+            reopen_mic = False
+            opener_authorized = harness_listening or should_dispatch_to_main(
+                hal_config.WAKEWORD_ENABLED,
+                wake_word_confirmed.is_set() or wakeword_followup_active
+                or (hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active()),
+            )
+            if (voice_cfg.LIVE_MODE and opener_authorized and combined
+                    and not is_noise_turn(combined, buf_duration, rt_audio_is_speech)):
+                try:
+                    _, opener_type = self._decorator.classify_wake_word(combined)
+                except Exception:
+                    logger.debug("[live] opener classification unavailable", exc_info=True)
+                    opener_type = "voice"
+                if (opener_type == "voice" and hal_config.WAKEWORD_ENABLED
+                        and not wake_word_confirmed.is_set()):
+                    opener_type = "voice_followup"
+                # finalize_session trims audio_buffer for speaker identity;
+                # SER's snapshot retains the real trailing silence for server VAD.
+                live_opener_consumed, reopen_mic = self._try_live_opener(
+                    mic, frame_size, device_rate, ser_audio_buffer,
+                    transcript=combined, interaction_id=interaction_id,
+                    harness_voice=harness_voice, voice_turn_type=opener_type,
+                    speaker_display=turn_speaker_display,
+                )
 
             # --- Realtime voice agent (speaks the reply for this turn) ---------
             # Wake-word mode only commits a turn authorized by a final wake
@@ -2584,6 +3544,7 @@ class VoiceService:
                 and turn_context_sent
                 and turn_speaker_display
                 and turn_speaker_display != sent_turn_speaker
+                and early_realtime_result is None
                 and hal_config.REALTIME_ENABLED
                 and self._realtime.available
                 and not is_noise_turn(combined, buf_duration, rt_audio_is_speech)
@@ -2601,7 +3562,13 @@ class VoiceService:
                 except Exception as e:
                     logger.warning("[realtime] speaker correction send failed: %s", e)
 
-            if realtime_turn_started:
+            if early_realtime_result is not None:
+                rt = early_realtime_result
+                if rt.handled and (combined or rt.transcript):
+                    self._realtime.save_turn(
+                        user_text=combined or "(audio only)", agent_text=rt.transcript or "(audio only)",
+                    )
+            elif realtime_turn_started:
                 rt = run_realtime_turn(
                     self._realtime,
                     self._tts,
@@ -2611,6 +3578,8 @@ class VoiceService:
                     buf_duration,
                     rt_audio_is_speech,
                     interaction_id=interaction_id,
+                    wait_filler=post_capture_wait_filler,
+                    audio_turn=audio_turn,
                 )
             else:
                 # No realtime turn was opened this capture. Distinguish the two
@@ -2637,19 +3606,34 @@ class VoiceService:
                 or (hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active())
             )
             wakeword_authorized = wake_word_confirmed.is_set() or wakeword_followup_active
-            dispatch_to_main = harness_listening or should_dispatch_to_main(
+            dispatch_to_main = (voice_cfg.LIVE_MODE and opener_authorized) or harness_listening or should_dispatch_to_main(
                 hal_config.WAKEWORD_ENABLED,
                 wakeword_authorized,
             )
             downstream_dropped = should_drop_downstream_turn(rt)
+            if downstream_dropped:
+                self._wakeword_focus.finish(interaction_id, cancelled=True)
             if not dispatch_to_main:
                 # Heard, but not addressed to us (no wake word, outside the
                 # follow-up window). Not a missed response — an excluded one.
                 voice_metrics.exclude(interaction_id, voice_metrics.EXCL_NOT_ADDRESSED)
-            if defer_speaker_prepass and dispatch_to_main and not downstream_dropped:
+            if (dispatch_to_main and not downstream_dropped and not live_opener_consumed
+                    and speaker_prepass_thread is not None):
+                join_speaker_prepass()
+            if (defer_speaker_prepass and dispatch_to_main and not downstream_dropped
+                    and not live_opener_consumed):
                 resolve_turn_speaker_identity(after_realtime_decision=True)
 
-            if dispatch_to_main:
+            if manual_capture is not None and (
+                not self._running
+                or endpoint_method != "manual_tap"
+                or manual_capture.cancelled.is_set()
+                or not same_target(harness_voice, read_voice_mode())
+            ):
+                dispatch_to_main = False
+            if dispatch_to_main and not live_opener_consumed:
+                if combined and not downstream_dropped:
+                    hold_followup()
                 # Gemini's audio context and [TTS HISTORY] are session-local.
                 # When this turn is delegated or falls back to the main agent,
                 # persist the user's request before sending it downstream so a
@@ -2676,19 +3660,7 @@ class VoiceService:
                     identity=turn_identity,
                     harness_voice=harness_voice,
                 )
-                if (
-                    combined
-                    and not downstream_dropped
-                    and hal_config.WAKEWORD_ENABLED
-                    and not harness_listening
-                    and wakeword_authorized
-                ):
-                    if self._wakeword_focus.refresh():
-                        logger.info(
-                            "Wake-word follow-up focus refreshed for %.0fs",
-                            hal_config.WAKEWORD_FOLLOWUP_TIMEOUT_S,
-                        )
-            else:
+            elif not live_opener_consumed:
                 self._decorator.submit_speech_emotion_from_session(ser_audio_buffer)
                 # A rejected utterance deliberately has no downstream agent to
                 # replace the listening cue with thinking or TTS. Restore the
@@ -2742,3 +3714,4 @@ class VoiceService:
             # fresh empty buffer. Leaving this log here as a breadcrumb so
             # operators can confirm session boundaries in the log stream.
             logger.info("Session RESET — audio_buffer discarded, ready for next turn")
+        return reopen_mic

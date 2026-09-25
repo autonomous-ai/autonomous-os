@@ -272,6 +272,11 @@ def start_led_effect(req: LEDEffectRequest):
         )
         return {"status": "ok", "effect": req.effect, "speed": req.speed}
 
+    from hal.drivers.harness import led as harness_voice_led
+    if req.transient and req.effect == "breathing" and req.duration_ms is None and harness_voice_led.enabled():
+        # Ambient idle breathing must not replace the active mode indicator.
+        return {"status": "ok", "effect": req.effect, "speed": req.speed}
+
     # NOTE: no "light is off" guard here. A transient effect on this route is
     # a status cue (connectivity, error, OTA) or a companion overlay — it
     # carries information, so it may light a resting strip. What must NOT
@@ -375,6 +380,10 @@ def restore_led():
         state._start_mic_muted_effect()
         state.logger.info("LED restore: mic muted -- settling on privacy indicator")
         return {"status": "ok"}
+    from hal.drivers.harness import led as harness_led
+    if harness_led.enabled():
+        state._restore_user_led()
+        return {"status": "ok"}
     user_state = state._user_led_state
     if user_state is None:
         # No saved user preference — settle on the ambient resting look
@@ -418,6 +427,9 @@ def stop_led_effect():
     # Emotion effects settle back onto the red via their scheduled restore.
     if state._mic_muted_led_owns_strip():
         state.logger.info("LED effect/stop skipped -- mic-muted indicator owns strip")
+        return {"status": "ok"}
+    from hal.drivers.harness.led import owns_effect
+    if owns_effect():
         return {"status": "ok"}
     state._stop_current_effect()
     # Stopping a thread does not unpaint what it drew: the strip holds the

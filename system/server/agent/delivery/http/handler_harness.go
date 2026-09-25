@@ -1,7 +1,6 @@
 package http
 
 import (
-	"log/slog"
 	"time"
 
 	"go.autonomous.ai/os/system/domain"
@@ -11,19 +10,36 @@ import (
 )
 
 type harnessReplyState struct {
-	created   time.Time
-	webChat   bool
-	delivered bool
-	toolName  string
-	toolArgs  string
+	created     time.Time
+	webChat     bool
+	delegated   bool
+	localOnly   bool
+	delivered   bool
+	restored    bool
+	toolName    string
+	toolArgs    string
+	questionIDs map[string]bool
 }
 
 // MarkHarnessResponseRun holds a user turn open for the final recap from its
 // paired Harness agent. webChat selects display-only delivery.
-func (h *AgentHandler) MarkHarnessResponseRun(runID string, webChat bool) {
+func (h *AgentHandler) MarkHarnessResponseRun(runID string, webChat, delegated bool) {
+	h.markHarnessResponseRun(runID, webChat, delegated, false)
+}
+
+// MarkHarnessLocalResponseRun keeps device-generated errors distinct from remote results.
+func (h *AgentHandler) MarkHarnessLocalResponseRun(runID string, webChat bool) {
+	h.markHarnessResponseRun(runID, webChat, false, true)
+}
+
+func (h *AgentHandler) markHarnessResponseRun(runID string, webChat, delegated, localOnly bool) {
 	if runID == "" {
 		return
 	}
+	// Harness run ids carry no creation stamp, so the click watermark would
+	// otherwise date this run from its first spoken reply -- which lands
+	// after the click it should have respected. Date it from registration.
+	h.runCreatedAtMs(runID)
 	h.harnessRepliesMu.Lock()
 	if h.harnessReplies == nil {
 		h.harnessReplies = make(map[string]harnessReplyState)
@@ -34,7 +50,11 @@ func (h *AgentHandler) MarkHarnessResponseRun(runID string, webChat bool) {
 		}
 	}
 	if _, exists := h.harnessReplies[runID]; !exists {
-		h.harnessReplies[runID] = harnessReplyState{webChat: webChat, created: time.Now()}
+		h.harnessReplies[runID] = harnessReplyState{webChat: webChat, delegated: delegated, localOnly: localOnly, created: time.Now()}
+	} else if localOnly {
+		state := h.harnessReplies[runID]
+		state.localOnly = true
+		h.harnessReplies[runID] = state
 	}
 	h.harnessRepliesMu.Unlock()
 }
@@ -153,12 +173,25 @@ func (h *AgentHandler) DeliverHarnessResponse(runID, text string) bool {
 			Detail: map[string]string{"role": "assistant", "message": text, "source": "harness"},
 		})
 	}
-	if !state.webChat {
-		go func() {
-			if err := hal.SpeakReply(text); err != nil {
-				slog.Warn("speak Harness result failed", "component", "harness", "error", err)
-			}
-		}()
+	if !state.webChat && !state.restored {
+		// Same gate as every other reply: a run the user cancelled by click
+		// keeps its answer in history but loses the speaker. Harness results
+		// land tens of seconds later, exactly when a bypass is audible.
+		speak := hal.SpeakHarnessReply
+		if state.localOnly {
+			speak = hal.SpeakReply
+		}
+		h.deliverTTS(speak, text, runID, "speak Harness result")
 	}
 	return true
+}
+
+// MarkHarnessRestoredRun restores a display address without reviving its speaker.
+func (h *AgentHandler) MarkHarnessRestoredRun(runID string) {
+	h.harnessRepliesMu.Lock()
+	defer h.harnessRepliesMu.Unlock()
+	if state, ok := h.harnessReplies[runID]; ok {
+		state.restored = true
+		h.harnessReplies[runID] = state
+	}
 }

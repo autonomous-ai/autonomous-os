@@ -67,7 +67,7 @@ Feetech STS3215 servos on a TTL daisy chain, driven by a USB-to-TTL servo contro
 
 ## Speaker amplifier (PAM8610 v2) + 2× 3 W speakers
 
-Stereo class-D amp driven by a **USB audio board (DAC)** plugged into the SBC. The onboard codec → PAM8610 path was hissing / picking up static, so we moved the audio source off the SBC's onboard codec entirely. The onboard codec stays in use for **mic capture** only.
+Stereo class-D amp driven by a **USB audio board (DAC)** plugged into the SBC — since 2026-09-18 this is the line-out of the C-Media adapter (`0d8c:0014`) that also carries the sensing mic; the earlier TTGK USB speaker is no longer fitted. The onboard codec → PAM8610 path was hissing / picking up static, so we moved the audio source off the SBC's onboard codec entirely. The onboard codec is no longer used for audio at all: sensing moved to a USB mic on 2026-09-17 (see Microphones).
 
 Signal chain:
 
@@ -79,14 +79,14 @@ SBC → USB → USB audio board (DAC) → 3.5 mm line-out → PAM8610 L/R in →
 |---|---|---|
 | Audio source | USB audio board (line-out) | USB audio board (line-out) |
 | Connection | USB-A | USB-A |
-| ALSA alias | `plug:device_speaker` (mapped to USB DAC card) | `plug:device_speaker` (mapped to USB DAC card) |
+| ALSA alias | `plug:device_speaker` (mapped to USB DAC card) | `plug:device_speaker` = softvol stage (-30..0 dB) in front of card `device_cmedia`, whose hardware mixer is pinned at -31 dB by `lamp-cmedia-speaker.service`; the PAM8610 is hot enough that the raw mixer's bottom step was already audible, so the slider needed its own range |
 | DAC out → amp | 3.5 mm TRS → PAM8610 L/R inputs (twisted pair, short run) | same |
 | Speaker A | PAM8610 L+ / L− → speaker A | same |
 | Speaker B | PAM8610 R+ / R− → speaker B | same |
 | Amp Vcc | 12 V (do not feed 5 V — under-driven) | 12 V |
 | Amp GND | star-ground at buck output | same |
 
-> The onboard codec (WM8960 on Pi via Seeed HAT, ES8389 on OPi) is still wired in for mic capture (Mic 2 / sensing). Its line-out is no longer connected to the amp.
+> The onboard codec (WM8960 on Pi via Seeed HAT, ES8389 on OPi) is no longer used: its line-out is not connected to the amp and sensing capture moved to a USB mic (Mic 1). Only `ctl.!default` still points at `sndi2s4`.
 
 > Keep the DAC → amp lead short and twisted. Run it away from the 12 V power harness — the prior hiss was partly induced from the SBC's switching supply.
 
@@ -94,19 +94,19 @@ SBC → USB → USB audio board (DAC) → 3.5 mm line-out → PAM8610 L/R in →
 
 ## Microphones
 
-Two microphones are active: the Jieli USB mic handles voice capture and the
-onboard mic handles ambient sensing.
+Two microphones are active, both USB: the Jieli mic handles voice capture and
+the C-Media adapter handles ambient sensing.
 
 | Role | Device | ALSA alias | Code |
 |---|---|---|---|
 | Voice (Mic 2) | Jieli USB Composite Device | `plug:device_micro2` | `/opt/hal/.env` (`HAL_AUDIO_INPUT_ALSA`) |
-| Sensing (Mic 1) | onboard codec capture | `plug:device_micro1` | `/opt/hal/.env` (`HAL_AUDIO_SENSING_DEVICE`) |
+| Sensing (Mic 1) | C-Media USB Audio Adapter (Unitek Y-247A, `0d8c:0014`) | `plug:device_micro1` | `/opt/hal/.env` (`HAL_AUDIO_SENSING_DEVICE`) |
 
 The OPENAICAM audio endpoint (`device_micro3`) is not selected: a direct tone
 test returned near-digital silence, so it needs a hardware or firmware repair
 before it can be used for voice capture.
 
-> Mic 1 is the onboard MEMS mic that ships on the OrangePi 4 Pro PCB. It must be **desoldered from the OPi board and re-mounted in the lamp base with an extended cord** to the original pads. Keep the cord short enough to avoid noise pickup — twist the signal and ground together.
+> Mic 1 was the onboard ES8389 MEMS mic until 2026-09-17; it is now the capture side of the C-Media USB adapter (card `device_cmedia` by a udev rule keyed on `0d8c:0014`, alias `device_micro1` in asound.conf) (`/etc/udev/rules.d/99-lamp-device.rules`, tracked at `robots/lamp/rootfs/etc/udev/rules.d/`). No desoldering is needed anymore.
 
 > ALSA aliases live in `/etc/asound.conf`. Their tracked source is `robots/lamp/rootfs/etc/asound.conf`, installed onto `/` at image build and on every device-profile OTA. Cards are addressed by **name**, not index, since USB card numbers reorder across boots.
 

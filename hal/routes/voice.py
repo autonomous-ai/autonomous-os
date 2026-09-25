@@ -10,6 +10,9 @@ import json
 import threading
 import time
 from typing import Optional
+from typing import Literal
+
+from pydantic import BaseModel
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -297,6 +300,10 @@ def get_voices(provider: Optional[str] = None, lang: Optional[str] = None):
 @router.post("/voice/speak", response_model=StatusResponse)
 def speak_text(req: SpeakRequest):
     """Synthesize text to speech and play through the speaker."""
+    if req.harness_result and (req.cached or req.prerender):
+        raise HTTPException(400, "Harness result cue requires uncached speech")
+    if req.speed is not None and (req.cached or req.prerender):
+        raise HTTPException(400, "Speed preview requires uncached speech")
     if not state.tts_service:
         state.logger.error("POST /voice/speak: tts_service is None (not initialized)")
         raise HTTPException(
@@ -395,6 +402,8 @@ def speak_text(req: SpeakRequest):
         interruptible=req.interruptible,
         realtime_feedback=req.realtime_feedback,
         turn_id=req.turn_id,
+        **({"speed": req.speed} if req.speed is not None else {}),
+        **({"harness_result": True} if req.harness_result else {}),
     )
     if not started:
         raise HTTPException(409, "TTS is busy speaking")
@@ -442,13 +451,6 @@ def speak_queue_text(req: SpeakRequest):
         state.logger.info("POST /voice/speak-queue: suppressed -- speaker muted")
         return {"status": "suppressed"}
 
-    if getattr(state.voice_service, "live_active", False):
-        state.logger.info(
-            "POST /voice/speak-queue: suppressed -- a live session owns the "
-            "conversation (len=%d)", len(req.text or ""),
-        )
-        return {"status": "suppressed"}
-
     if state.music_service and state.music_service.streaming:
         state.logger.info("POST /voice/speak-queue: rejected -- music is playing")
         raise HTTPException(409, "Speaker busy -- music is playing")
@@ -461,12 +463,17 @@ def speak_queue_text(req: SpeakRequest):
         len(req.text or ""),
         req.interruptible,
     )
+    # Evaluate ownership inside TTS admission, not at an earlier HTTP snapshot.
+    queue_options = {}
+    if getattr(state.voice_service, "live_active", False):
+        queue_options["defer_preemption"] = lambda: state.voice_service.live_speaker_busy
     ok = state.tts_service.speak_queue(
         req.text,
         interruptible=req.interruptible,
         realtime_feedback=req.realtime_feedback,
         turn_id=req.turn_id,
         turn_seq=req.turn_seq,
+        **queue_options,
     )
     if not ok:
         raise HTTPException(503, "TTS not available")
@@ -479,6 +486,34 @@ def stop_tts():
     if state.tts_service:
         state.tts_service.stop()
     return {"status": "ok"}
+
+
+@router.post("/voice/wake-focus", response_model=StatusResponse)
+def grant_wake_focus(source: str = "os"):
+    """Open the wake-word follow-up window without a spoken wake phrase.
+
+    os-server calls this right after the boot greeting so the user can answer
+    without repeating the wake phrase. Same window a click / gaze / presence
+    grant opens; no-op when wake word is off or follow-up timeout is 0."""
+    voice = state.voice_service
+    if voice is None or not hasattr(voice, "grant_wakeword_focus"):
+        return {"status": "unavailable"}
+    return {"status": "ok" if voice.grant_wakeword_focus(source) else "skipped"}
+
+
+class FollowupActivityRequest(BaseModel):
+    interaction_id: str
+    run_id: str
+    phase: Literal["start", "end", "cancel"]
+
+
+@router.post("/voice/followup/activity", response_model=StatusResponse)
+def followup_activity(req: FollowupActivityRequest):
+    """Release the wake idle timer after an authorized voice run and its TTS."""
+    voice = state.voice_service
+    accepted = bool(voice and hasattr(voice, "followup_activity") and
+                    voice.followup_activity(req.interaction_id, req.run_id, req.phase))
+    return {"status": "ok" if accepted else "skipped"}
 
 
 @router.post("/voice/mute", response_model=StatusResponse)
@@ -599,7 +634,7 @@ async def mic_level_stream(request: Request):
             payload = json.dumps(
                 {
                     "level": round(level, 1),
-                    "threshold": vad_threshold,
+                    "threshold": float(getattr(vs, "vad_threshold", vad_threshold)) if vs else vad_threshold,
                     "active": active,
                     "muted": state._mic_muted,
                     # present = sound perception exists (noise bar should render,

@@ -14,6 +14,15 @@ Toàn bộ code tracking nằm trong package `hal/drivers/tracking/`:
 | `filters.py` | `AlphaBetaFilter2D`, `PID`, `smooth_damp`, `soft_deadband` |
 | `frame_utils.py` | `downscale`, `scale_bbox` (map tọa độ) |
 
+## Định tuyến intent giọng nói
+
+Yêu cầu voice không khớp rule local có thể qua nhánh Jev của OS để chọn
+`servo_track` với một trong 23 nhãn mục tiêu chuẩn hóa, hoặc `servo_track_stop`.
+OS kiểm tra mục tiêu và capability motion đã khai báo rồi dùng lại rule tracking
+hiện có; Jev không cấp payload HAL tự do. Mục tiêu thiếu/không hỗ trợ, camera
+bên ngoài và quyết định chưa đủ điểm chuyển main agent, giữ nguyên đường skill
+open-vocabulary. Xem [Định tuyến intent Jev](../../../../docs/vi/os-server_vi.md#fallback-intent-jev).
+
 ## Kiến trúc
 
 ```
@@ -391,6 +400,12 @@ Việc khôi phục bearing ở ưu tiên 3 là ngoại lệ, và nó an toàn v
 để sai. Đó chính là thứ cho phép cái đầu đang chúi xuống sàn lấy lại đúng độ cao — nếu chỉ chỉnh yaw,
 nó sẽ quét sàn theo vòng tròn dù hướng có đúng tới đâu.
 
+Một lượt aim đã di chuyển đầu thì đỗ body y như search (`nudge` và khôi phục bearing đều kết thúc
+bằng `move_and_hold`), nên `aim_for_look` lên lịch cùng `release_to_idle_later(HOLD_AFTER_FIND_S)`
+từ hàm dựng kết quả mỗi khi `iterations` hoặc `bearing_steps` khác 0 — xem *Trả body về idle* ở
+mục quét tìm kiếm để biết các guard. Gaze thường lấy lại body khi có mặt trong khung, vì thế chỗ
+này ít lộ hơn; không có mặt thì nó kẹt y hệt search.
+
 **Thứ tự ưu tiên:**
 
 1. **Thấy người** → căn giữa. Ưu tiên khung bao người hơn khung bao mặt: vật giơ lên hay che mất mặt
@@ -639,6 +654,20 @@ chuyển động cho ảnh nhòe và bộ phát hiện sẽ bỏ sót thứ đan
 
 Bị hủy bởi nút bấm vật lý giống như pha ngắm, và không bao giờ quét khi camera đang tắt — một pha quét
 là rất nhiều chuyển động lộ liễu để thực hiện khi người dùng vừa yêu cầu thiết bị đừng nhìn.
+
+**Trả body về idle.** Mọi đường ra của lượt quét đều kết thúc bằng `move_and_hold` — hit thì canh
+giữa đối tượng, miss và survey thì `_restore` về pose seed — và `move_and_hold` để body không phát
+gì (`_current_recording = None`, `_idle_settled`), giữ "cho tới lệnh play/emotion/idle kế tiếp".
+Trước đây không ai gửi lệnh đó: trên lamp-ac82 (2026-09-14) "Find my keyboard" canh giữa bàn phím
+rồi đứng yên tới khi restart HAL, đúng dấu hiệu `[preempt] dropped recording 'idle' for a direct
+move` mà gaze đã sửa cho reacquire theo giọng nói. Lượt quét giờ gọi
+`tracking/body.py: release_to_idle_later()` sau khi nhả quyền sở hữu servo: tìm thấy thì giữ hướng
+vào vật trong `HOLD_AFTER_FIND_S` (8 s) để câu trả lời phát trên pose đó, không thấy thì về idle
+ngay. Handback chạy trên daemon timer nên `search_for_subject` vẫn trả kết quả ngay cho lượt đang
+chờ, và chỉ dispatch `play(idle)` khi không ai sở hữu body (tracking, hold mode, zero mode) **và**
+chưa có gì bắt đầu phát từ đó — một emotion trong cửa sổ được để yên; vòng lặp animation tự về
+idle khi nó kết thúc. Lên lịch handback mới sẽ hủy cái trước. Cửa sổ là hằng số cố định, không gắn
+với lúc kết thúc nói: tracking không có hook speak-end để chờ.
 
 > Chưa làm: tín hiệu LED trong lúc quét. Trạng thái LED transient nằm sau các request model của route,
 > nên điều khiển nó từ đây sẽ phải đi vòng qua HTTP loopback (điều codebase này tránh) hoặc nhân bản

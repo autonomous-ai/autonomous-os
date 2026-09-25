@@ -74,13 +74,13 @@ func (h *harnessMetricCapture) executions() []map[string]any {
 	return result
 }
 
-func TestHarnessExecutionUsesLifecycleNotDeliveryText(t *testing.T) {
+func TestHarnessExecutionRequiresResultNotBareLifecycle(t *testing.T) {
 	for _, tc := range []struct {
 		kind              string
 		payload           map[string]any
 		outcome, evidence string
 	}{
-		{"turn.done", nil, "completed", "harness_turn_done"},
+		{"turn.done", nil, "", ""},
 		{"turn.summary", map[string]any{"fullText": "result"}, "completed", "harness_turn_summary"},
 		{"turn.summary", map[string]any{}, "", ""},
 		{"turn.error", nil, "failed", "harness_turn_error"},
@@ -91,7 +91,7 @@ func TestHarnessExecutionUsesLifecycleNotDeliveryText(t *testing.T) {
 		t.Run(tc.kind+tc.outcome, func(t *testing.T) {
 			capture := captureHarnessMetrics(t)
 			s := &Server{agentHandler: &agenthttp.AgentHandler{}}
-			s.registerHarnessReply("agent", "device-harness-test", true)
+			s.registerHarnessReply("agent", "device-harness-test", true, false)
 			frame := harness.Frame{"kind": tc.kind, "agentId": "agent", "runId": "device-harness-test"}
 			if tc.payload != nil {
 				frame["payload"] = tc.payload
@@ -129,16 +129,16 @@ func TestHarnessMetricRejectsAmbiguousOrMismatchedRoute(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			capture := captureHarnessMetrics(t)
 			s := &Server{agentHandler: &agenthttp.AgentHandler{}}
-			s.registerHarnessReply("agent", "first", true)
+			s.registerHarnessReply("agent", "first", true, false)
 			if tc.second {
-				s.registerHarnessReply("agent", "second", true)
+				s.registerHarnessReply("agent", "second", true, false)
 			}
 			if tc.expired {
 				r := s.harnessReplies["first"]
 				r.created = time.Now().Add(-16 * time.Minute)
 				s.harnessReplies["first"] = r
 			}
-			s.observeHarnessExecution("agent", "turn.done", harness.Frame{"runId": tc.eventRun})
+			s.observeHarnessExecution("agent", "turn.summary", harness.Frame{"runId": tc.eventRun, "payload": map[string]any{"fullText": "result"}})
 			if rows := capture.executions(); len(rows) != tc.want {
 				t.Fatalf("executions: %v", rows)
 			}
@@ -155,7 +155,7 @@ func TestHarnessDispatchUnknownAndLocalQuestionAreNotSuccess(t *testing.T) {
 	reportHarnessDispatchError("uncertain", "i2", &harness.DeliveryUnknownError{})
 	reportHarnessDispatchError("accepted", "i3", nil)
 	s := &Server{agentHandler: &agenthttp.AgentHandler{}}
-	s.registerHarnessReply("agent", "question", true)
+	s.registerHarnessReply("agent", "question", true, false)
 	s.deliverHarnessVoiceQuestion("agent", "question", "Next question?")
 	rows := capture.executions()
 	if len(rows) != 3 || rows[0]["outcome"] != "failed" || rows[1]["outcome"] != "unknown" || rows[2]["evidence"] != "harness_question_open" {
@@ -175,7 +175,7 @@ func (f *harnessAnswerMetricTransport) Request(ctx context.Context, frame harnes
 	case "status":
 		return harness.Frame{"openQuestion": map[string]any{"requestId": "q1", "questions": []any{map[string]any{"key": "choice", "q": "Choose"}}}}, nil
 	case "question.answer":
-		f.server.forwardHarnessEvent(harness.Frame{"agentId": "mike", "runId": f.runID, "kind": "turn.done"})
+		f.server.forwardHarnessEvent(harness.Frame{"agentId": "mike", "runId": f.runID, "kind": "turn.summary", "payload": map[string]any{"fullText": "answer result"}})
 		return harness.Frame{"receipt": map[string]any{"state": "queued"}}, nil
 	default:
 		return f.voiceRouteTransport.Request(ctx, frame)
@@ -186,7 +186,10 @@ func TestHarnessAnswerAPIStartsChatBeforeImmediateTerminal(t *testing.T) {
 	s := &Server{config: &config.Config{LLMAPIKey: "owner"}, agentHandler: &agenthttp.AgentHandler{}}
 	transport := &harnessAnswerMetricTransport{server: s}
 	s.harnessVoice = harness.NewVoiceController(transport, harness.VoiceCallbacks{
-		OnDispatch: func(agentID, runID string) { transport.runID = runID; s.registerHarnessReply(agentID, runID, true) },
+		OnDispatch: func(agentID, runID string) {
+			transport.runID = runID
+			s.registerHarnessReply(agentID, runID, true, false)
+		},
 	})
 	if err := s.harnessVoice.RefreshFocus(context.Background()); err != nil {
 		t.Fatal(err)
@@ -217,7 +220,7 @@ func TestHarnessAnswerAPIStartsChatBeforeImmediateTerminal(t *testing.T) {
 				t.Fatal("start run mismatch")
 			}
 		}
-		if row.params["evidence"] == "harness_turn_done" {
+		if row.params["evidence"] == "harness_turn_summary" {
 			doneIndex = i
 			if row.params["run_id"] != transport.runID {
 				t.Fatal("terminal run mismatch")

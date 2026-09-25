@@ -66,10 +66,25 @@ def test_threshold_zero_disables(monkeypatch):
 
 
 def test_non_gemini_provider_untouched(monkeypatch):
+    """OpenAI Realtime bills per token: an idle session is free, leave it open."""
     o = _orch(monkeypatch, idle_s=900)
     monkeypatch.setattr(hal_config, "REALTIME_PROVIDER", "openai", raising=False)
     o._maybe_park_idle_session()
     assert o._agent.disconnected == 0
+
+
+def test_gptlive_parks_on_its_own_threshold(monkeypatch):
+    """GPT-Live bills per session-minute while idle — park it like Gemini, but
+    on REALTIME_GPTLIVE_IDLE_PARK_S, not the Gemini knob."""
+    o = _orch(monkeypatch, idle_s=40, threshold=45.0)
+    monkeypatch.setattr(hal_config, "REALTIME_PROVIDER", "gptlive", raising=False)
+    monkeypatch.setattr(hal_config, "REALTIME_GPTLIVE_IDLE_PARK_S", 30.0, raising=False)
+    o._maybe_park_idle_session()
+    assert o._agent.disconnected == 1 and o._idle_parked
+    o2 = _orch(monkeypatch, idle_s=40)
+    monkeypatch.setattr(hal_config, "REALTIME_GPTLIVE_IDLE_PARK_S", 0.0, raising=False)
+    o2._maybe_park_idle_session()
+    assert o2._agent.disconnected == 0  # 0 disables
 
 
 def test_turn_in_flight_blocks_park(monkeypatch):
@@ -119,3 +134,39 @@ def test_failed_resume_reports_unavailable(monkeypatch):
     o.prepare_turn()
     assert o.available is False
     assert o._idle_parked is True, "stay parked so the next turn retries the resume"
+
+
+def test_prewarm_resumes_in_background_and_prepare_turn_joins(monkeypatch):
+    """Speech start resumes a parked session off-thread; prepare_turn() after the
+    STT final must join that resume, not fall back or connect a second time."""
+    o = _orch(monkeypatch, idle_s=90)
+    o._maybe_park_idle_session()
+    o._skip_post_idle_recycle = False
+    reasons = []
+
+    def slow_rebuild(reason, discard_old_on_failure=False, cancel_event=None):
+        try:
+            reasons.append(reason)
+            time.sleep(0.2)
+            o._agent = _Agent()
+            o._idle_parked = False
+            return True
+        finally:
+            o._finish_rebuild()
+
+    o._rebuild_locked = slow_rebuild
+    o._rebuild_now = lambda reason, **kw: (reasons.append(reason), True)[1]
+    assert o.prewarm() is True
+    assert o.rebuilding is True
+    assert o.prewarm() is False, "second prewarm must not start another rebuild"
+    o.prepare_turn()
+    assert reasons == ["idle-park-prewarm"], "prepare_turn must join, not reconnect"
+    assert o._idle_parked is False
+    assert o._skip_post_idle_recycle is True
+    assert o.available is True
+
+
+def test_prewarm_noop_when_not_parked(monkeypatch):
+    o = _orch(monkeypatch, idle_s=10)
+    assert o.prewarm() is False
+    assert o.rebuilding is False

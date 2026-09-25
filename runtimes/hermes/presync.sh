@@ -104,6 +104,23 @@ yq -i '
   | .agent.image_input_mode = "auto"
 ' "$CONFIG_YAML"
 
+# ── 1b2. TERMINAL CWD (always overwrite) ──────────────────────────────────────
+# Hermes discovers project-context files (AGENTS.md, .cursorrules) by walking up
+# from the CONFIGURED cwd — `resolve_context_cwd` in agent/runtime_cwd.py, which
+# returns None rather than falling back to the launch dir (a guard against an
+# agent self-spawned inside the Hermes source tree swallowing that repo's own
+# AGENTS.md). The stock `terminal.cwd: .` is relative, never bridges to
+# TERMINAL_CWD, and leaves that lookup empty — so an AGENTS.md we write is never
+# read. Pinning the absolute Hermes home is what makes the OS block reachable.
+#
+# The process already runs there (`WorkingDirectory=/root/.hermes` in the unit
+# Hermes installs), so this only states an existing fact; the agent's shell cwd
+# does not move. Verified on-device: with `.` a codeword planted in AGENTS.md was
+# absent from the prompt; with the absolute path the agent returned it.
+log "ensure config.yaml terminal.cwd (makes AGENTS.md discoverable)"
+[ "$(yq '.terminal | tag' "$CONFIG_YAML" 2>/dev/null)" = "!!map" ] || yq -i '.terminal = {}' "$CONFIG_YAML"
+yq -i '.terminal.cwd = "'"$HERMES_DIR"'"' "$CONFIG_YAML"
+
 # ── 1c. APPROVALS OFF (always overwrite) ───────────────────────────────────────
 # The device runs unattended (voice + chat channels) — a "Command Approval
 # Required" card is a dead end for a voice user and stalls the turn, so command
@@ -136,7 +153,25 @@ LLM_MODEL="$(jq -r '.llm_model // empty' "$CONFIG_JSON" 2>/dev/null || true)"
 # Custom brain → the alias cannot resolve; use the operator's model. Empty base
 # URL means the device is on the default proxy, so that keeps the alias too.
 case "$LLM_BASE_URL" in
-  ""|*campaign-api.autonomous.ai*) ;;
+  ""|*campaign-api.autonomous.ai*)
+    # Prompt-cache markers for the Auto-AI alias. Hermes only emits Anthropic
+    # `cache_control` breakpoints for a custom provider when that model declares
+    # `prompt_caching: true`; without it every turn re-sends the whole ~18k-token
+    # floor (system + 25 tool schemas) uncached. Measured on lamp-0c4e 2026-09-16,
+    # same "hello" in one session: no markers 18.3s → 12.6s, cache_read 0;
+    # markers 13.8s → 9.2s steady, cache_read ~85%. Scoped to the campaign-api
+    # proxy (known to honour the markers); a BYO brain keeps Hermes' own
+    # per-provider caching policy.
+    yq -i '.custom_providers[0].models["Auto-AI"].prompt_caching = true' "$CONFIG_YAML"
+    log "custom_providers[0].models.Auto-AI.prompt_caching = true (cache markers on)"
+    # 1h cache TTL: a lamp user typically speaks, then goes quiet for 10-20 min,
+    # which outlives the 5m default and re-bills the full prefill on the next
+    # turn (measured 2026-09-16: 3.6s with cache vs 11.8s after an 8 min gap).
+    # Hermes accepts only "5m" | "1h"; it sends `ttl: "1h"` on every marker. If
+    # the gateway ignores the field the cache silently stays at 5m - harmless.
+    yq -i '.prompt_caching.cache_ttl = "1h"' "$CONFIG_YAML"
+    log "prompt_caching.cache_ttl = 1h"
+    ;;
   *)
     if [ -n "$LLM_MODEL" ]; then
       yq -i ".model.default = \"$LLM_MODEL\"" "$CONFIG_YAML"

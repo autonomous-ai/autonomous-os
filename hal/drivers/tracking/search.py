@@ -39,6 +39,7 @@ from typing import Any, Callable, List, Optional
 
 import hal.app_state as state
 from hal.drivers.tracking import constants as C
+from hal.drivers.tracking import body
 from hal.drivers.tracking.aim import _detect_subject, _grab_frame
 
 logger = logging.getLogger(__name__)
@@ -708,7 +709,7 @@ def search_for_subject(target: str = "person", detector: Any = None,
     with aim.servo_ownership():
         capped = svc.set_joint_speed("base_yaw", SWEEP_YAW_SPEED)
         try:
-            return _sweep(svc, cap, detector, target, on_progress, exhaustive)
+            res = _sweep(svc, cap, detector, target, on_progress, exhaustive)
         finally:
             if capped:
                 # Back to the resting value the driver writes at startup — 0, no
@@ -719,6 +720,17 @@ def search_for_subject(target: str = "person", detector: Any = None,
                     "base_yaw",
                     getattr(svc, "UNWRITTEN_SPEED_EQUIVALENT", 0),
                 )
+
+    # Every exit of the sweep ends in `move_and_hold` — the hit centres on the
+    # subject, a miss and a survey `_restore` the seed pose — and every one
+    # leaves the body parked with nothing playing. Hand it back to idle AFTER
+    # the ownership above is released (the release checks for an owner), on a
+    # timer so the turn waiting on this result is not delayed: a find keeps
+    # pointing at the thing for HOLD_AFTER_FIND_S so the user sees what the
+    # reply is about; a miss has nothing to show and goes home now.
+    hold_s = body.HOLD_AFTER_FIND_S if res.found else 0.0
+    body.release_to_idle_later(hold_s, f"search for '{target}' ended")
+    return res
 
 
 def _look_list(seed_pose: Optional[dict], exhaustive: bool) -> list:

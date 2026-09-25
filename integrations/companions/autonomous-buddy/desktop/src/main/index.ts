@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Notification, Menu, shell, clipboard, nativeTheme } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Notification, Menu, shell, clipboard, nativeTheme, autoUpdater } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { execFileSync } from 'node:child_process'
@@ -8,11 +8,14 @@ import { Manager } from './manager'
 import { AgentDeviceBridge } from './agent-device-bridge'
 import { ProviderUsageService } from './provider-usage'
 import { NativeHelper } from './native-helper'
+import { AppUpdater } from './app-updater'
 import type { BuddyUpdate, AppearanceSettings } from '../shared/types'
 
 app.setName('Autonomous Buddy')
 if (process.env.BUDDY_DATA_DIR) app.setPath('userData', process.env.BUDDY_DATA_DIR)
 const rendererPath = join(__dirname, '../renderer/index.html')
+// Temporarily disable every entry point to the agent workspace while keeping device services running.
+const agentManagerUIEnabled = false
 let window: BrowserWindow | null = null
 let manager: Manager
 let settings: SettingsStore
@@ -22,6 +25,8 @@ let deviceConnected = false
 const providerUsage = new ProviderUsageService()
 let quitting = false
 let shutdownComplete = false
+let shutdownTask: Promise<void> | undefined
+let updates: AppUpdater | undefined
 const notified = new Map<string, string>()
 
 function publish(update: BuddyUpdate) {
@@ -65,6 +70,7 @@ function zoomBy(delta: number) {
   applyAppearance({ zoom: Math.min(1.5, Math.max(0.75, Math.round((current + delta) * 100) / 100)) })
 }
 function createWindow() {
+  if (!agentManagerUIEnabled) return
   window = new BrowserWindow({
     width: 1460,
     height: 920,
@@ -101,7 +107,7 @@ function createWindow() {
 }
 
 function showManager() {
-  if (quitting) return
+  if (!agentManagerUIEnabled || quitting) return
   if (!window) createWindow()
   if (window?.isMinimized()) window.restore()
   window?.show()
@@ -150,14 +156,50 @@ else {
       agentBridge = new AgentDeviceBridge(manager, (event) => native.agentEvent(event))
       native = new NativeHelper(nativeExecutable, (state) => {
         if (window && !window.isDestroyed()) window.webContents.send('buddy:nativeState', state)
+        if (state.available && updates) {
+          const status = updates.menuState
+          void native.setUpdateStatus(status.label, status.enabled).catch(() => {})
+        }
         const connected = state.available && state.connection === 'connected'
         if (connected && !deviceConnected) void agentBridge.reconnect().catch(() => {})
         deviceConnected = connected
       }, undefined, (action) => {
         if (action === 'quit') app.quit()
+        else if (action === 'check-updates') void updates?.check()
         else showManager()
       }, (command) => agentBridge.dispatch(command))
       native.start()
+      updates = new AppUpdater({
+        updater: autoUpdater,
+        supported: app.isPackaged && process.platform === 'darwin' &&
+          ['arm64', 'x64'].includes(process.arch) && process.env.BUDDY_NATIVE_TEST_MODE !== '1',
+        arch: process.arch,
+        version: app.getVersion(),
+        showMessage: (options) => dialog.showMessageBox(options),
+        notifyReady: (onClick) => {
+          if (!Notification.isSupported()) return
+          const notice = new Notification({ title: 'Autonomous Buddy update ready', body: 'Restart Buddy to install the update.' })
+          notice.on('click', onClick)
+          notice.show()
+        },
+        publish: (state) => {
+          const item = Menu.getApplicationMenu()?.getMenuItemById('check-updates')
+          if (item) { item.label = state.label; item.enabled = state.enabled }
+          void native.setUpdateStatus(state.label, state.enabled).catch(() => {})
+        },
+        install: async () => {
+          await prepareShutdown()
+          const fallback = () => {
+            // A downloaded Squirrel update also installs on a normal quit.
+            app.relaunch()
+            app.quit()
+          }
+          // Native restart failures arrive asynchronously on the error event.
+          autoUpdater.once('error', fallback)
+          try { autoUpdater.quitAndInstall() }
+          catch { fallback() }
+        },
+      })
       // Only this window's main frame can invoke the finite preload surface.
       const handle = (name: string, callback: (...args: unknown[]) => unknown) => {
         ipcMain.handle(`buddy:${name}`, (event, ...args: unknown[]) => {
@@ -233,11 +275,12 @@ else {
       ] as const)
         handle(method, manager[method].bind(manager) as (...args: unknown[]) => unknown)
       Menu.setApplicationMenu(
-        Menu.buildFromTemplate([
+        Menu.buildFromTemplate(agentManagerUIEnabled ? [
           {
             label: 'Autonomous Buddy',
             submenu: [
               { role: 'about' },
+              { id: 'check-updates', label: 'Check for Updates…', click: () => { void updates?.check() } },
               { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => {
                 showManager()
                 const target = window
@@ -262,8 +305,15 @@ else {
             { type: 'separator' }, { role: 'togglefullscreen' },
           ] },
           { role: 'windowMenu' },
+        ] : [
+          { label: 'Autonomous Buddy', submenu: [
+            { role: 'about' },
+            { id: 'check-updates', label: 'Check for Updates…', click: () => { void updates?.check() } },
+            { type: 'separator' }, { role: 'quit' },
+          ] },
         ]),
       )
+      updates.start()
       createWindow()
       app.on('activate', showManager)
     })
@@ -283,12 +333,26 @@ else {
     if (shutdownComplete) return
     event.preventDefault()
     if (quitting) return
-    quitting = true
-    providerUsage.dispose()
-    manager?.dispose()
-    void (native?.stop() ?? Promise.resolve()).finally(() => {
-      shutdownComplete = true
-      app.quit()
-    })
+    void prepareShutdown().finally(() => app.quit())
   })
+}
+
+// Updates and ordinary Quit share one shutdown, including helper termination.
+function prepareShutdown(): Promise<void> {
+  if (shutdownTask) return shutdownTask
+  quitting = true
+  updates?.dispose()
+  shutdownTask = Promise.resolve().then(async () => {
+    try {
+      providerUsage.dispose()
+      manager?.dispose()
+    } catch (error) {
+      console.error('[buddy] Could not finish persisting sessions during shutdown:', error)
+    } finally {
+      try { await native?.stop() }
+      catch (error) { console.error('[buddy] Could not stop native helper:', error) }
+      shutdownComplete = true
+    }
+  })
+  return shutdownTask
 }

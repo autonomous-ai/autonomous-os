@@ -404,8 +404,8 @@ STATUS_LED_PRESETS = {
 # value at import and silently ignore the override.
 BUTTON_LED_PRESETS = {
     # Physical Harness toggle confirmation; read at dispatch after device overlay.
-    "harness_on": {"effect": FX_PULSE, "color": [5, 8, 16], "duration_ms": 600},
-    "harness_off": {"effect": FX_PULSE, "color": [12, 12, 12], "duration_ms": 600},
+    "harness_on": {"effect": FX_BREATHING_FINE, "color": [2, 3, 0], "speed": 0.6},
+    "harness_off": {"effect": FX_BLINK, "color": [2, 2, 2], "speed": 1.0, "duration_ms": 300},
     "sleep_warn": {"color": [8, 5, 16]},  # sleepy purple (blinking) — hold 2-5s
     "shutdown_warn": {"color": [16, 0, 0]},  # red (blinking) — hold 5-10s
     "factory_reset": {"color": [16, 0, 0]},  # red (solid) — hold 10s+

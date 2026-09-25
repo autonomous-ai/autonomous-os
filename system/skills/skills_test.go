@@ -11,6 +11,9 @@ func contains(xs []string, want string) bool {
 	return false
 }
 
+// enabled is the catalog minus skills switched off in skill.json.
+func enabled() int { return len(Catalog) - len(Disabled) }
+
 // A maximal device (every capability) keeps the full catalog.
 func TestSupported_MaximalDeviceKeepsAll(t *testing.T) {
 	caps := map[string]bool{
@@ -18,8 +21,14 @@ func TestSupported_MaximalDeviceKeepsAll(t *testing.T) {
 		"motion": true, "light": true, "display": true, "expression": true, "media": true,
 		"connectivity": true, "companion": true, "system": true, "environment": true,
 	}
-	if got := Supported(caps); len(got) != len(Catalog) {
-		t.Fatalf("maximal device: got %d skills, want full catalog %d", len(got), len(Catalog))
+	got := Supported(caps)
+	if len(got) != enabled() {
+		t.Fatalf("maximal device: got %d skills, want full catalog %d", len(got), enabled())
+	}
+	for name := range Disabled {
+		if contains(got, name) {
+			t.Errorf("disabled skill %q must never be supported", name)
+		}
 	}
 }
 
@@ -28,16 +37,16 @@ func TestSupported_FailOpenPreservesLegacyOnly(t *testing.T) {
 	for _, caps := range []map[string]bool{nil, {}} {
 		got := Supported(caps)
 		for _, name := range Catalog {
-			if name == "environment" {
+			if name == "environment" || Disabled[name] {
 				if contains(got, name) {
-					t.Error("missing capabilities must not install environment")
+					t.Errorf("missing capabilities must not install %q", name)
 				}
 			} else if !contains(got, name) {
 				t.Errorf("legacy fail-open must preserve %q", name)
 			}
 		}
-		if len(got) != len(Catalog)-1 {
-			t.Errorf("got %d skills, want %d legacy skills", len(got), len(Catalog)-1)
+		if len(got) != enabled()-1 {
+			t.Errorf("got %d skills, want %d legacy skills", len(got), enabled()-1)
 		}
 	}
 }

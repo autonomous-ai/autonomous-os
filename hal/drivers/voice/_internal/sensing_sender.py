@@ -96,6 +96,7 @@ class SensingSender:
         image_b64: str = "",
         interaction_id: str = "",
         harness_voice: dict | None = None,
+        voice_turn_type: str = "",
     ) -> "SendResult":
         """POST decorated message to os-server /api/sensing/event with retry.
 
@@ -112,7 +113,20 @@ class SensingSender:
         if not skip_echo and self.is_echo(message):
             return SendResult()
 
+        # Someone spoke to the device: keep presence from timing out to AWAY
+        # (and the sleep announcement) while the camera cannot see them.
+        if event_type in ("voice", "voice_command", "voice_followup", "voice_agent_handled"):
+            try:
+                from hal import app_state as presence_state
+
+                presence_state.note_user_activity(event_type)
+            except Exception:
+                logger.exception("[voice] presence activity update failed")
+
         payload = {"type": event_type, "message": message}
+        # Observational classification only; never replace the routing event.
+        if voice_turn_type in ("voice", "voice_command", "voice_followup"):
+            payload["voice_turn_type"] = voice_turn_type
         if harness_voice is not None:
             payload["harness_voice"] = {
                 "enabled": harness_voice["enabled"],
@@ -152,10 +166,14 @@ class SensingSender:
         # images 8-20s but TEXT-DENSE images 23-38s per attempt) before the
         # response comes back — don't let the plain-text timeout abort them
         # into a spurious "failed to send" warning.
-        timeout_s = 90 if image_b64 else 5
+        harness_only = bool(harness_voice and harness_voice["enabled"])
+        user_voice = event_type in ("voice", "voice_command", "voice_followup")
+        # Local/Jev handling can take 3s for classification and multiple 5s HAL
+        # calls. Give it time to return a receipt; keep direct Harness unchanged.
+        timeout_s = 90 if image_b64 else (30 if user_voice and not harness_only else 5)
         # A transport error can occur after Harness accepted the turn. Never
         # retry that mutation without a known receipt / idempotency outcome.
-        max_retries = 1 if harness_voice and harness_voice["enabled"] else 3
+        max_retries = 1 if harness_only else 3
         for attempt in range(1, max_retries + 1):
             try:
                 resp = requests.post(OS_SENSING_URL, json=payload, timeout=timeout_s)
@@ -176,6 +194,12 @@ class SensingSender:
                     return _result_of(resp)
                 return SendResult()
             except requests.ConnectionError as e:
+                # A disconnect does not prove the POST was rejected. Relative
+                # dim/volume commands must not be replayed after a lost receipt.
+                # interaction_id is telemetry, not an idempotency guarantee.
+                if user_voice:
+                    logger.warning("Voice event delivery uncertain; not retrying: %s", e)
+                    return SendResult()
                 if attempt < max_retries:
                     logger.warning(
                         "os-server not reachable (attempt %d/%d), retrying in 2s...",

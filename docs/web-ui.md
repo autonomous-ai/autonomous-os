@@ -132,11 +132,12 @@ Defined at `.lm-root` in `index.css`:
 ### 3.4 Settings (`/setting`) — shared shell
 
 **Speech speed** in Voice (`/setting#tts`) loads effective `tts_speed` and
-shows the provider range (`0.7–1.2×` for ElevenLabs, `0.25–4.0×` otherwise)
+shows the selectable range (`0.7–1.5×` for ElevenLabs, `0.25–4.0×` otherwise)
 in `0.05` steps. **Save Changes** persists speed through
-`PUT /api/device/config`; save before using **Test Voice**. Saved speed takes
-precedence over `HAL_TTS_SPEED` (default `1.3`); ElevenLabs clamps the outgoing
-speed to `0.7–1.2`.
+`PUT /api/device/config`. **Test Voice** sends the current slider speed immediately
+without saving; the override applies only to the preview utterance. Saved speed takes
+precedence over `HAL_TTS_SPEED` (default `1.2`); ElevenLabs HTTP v3 applies speed locally while requesting provider speed
+`1.0`; other ElevenLabs models clamp the outgoing speed to `0.7–1.2`.
 
 **AI Brain key/URL mirroring.** The panel fills a blank TTS or STT field from the
 AI Brain's key and base URL, so a first-time setup only asks for one credential.
@@ -213,7 +214,9 @@ The Settings collapsible group lives in the shared sidebar `NAV` (`system/web/sr
 
 Monitor leaves serialize as the plain id, e.g. `/monitor#overview`, `/monitor#pairing`, `/monitor#system`, `/monitor#flow`. Defaults: `/monitor` with no/invalid hash → `overview`; `/setting` with no/invalid hash → `general` (URL normalized to `/setting#general`). Deep-links (e.g. `/setting#wifi`) and browser back/forward are honored via a `useLocation`-driven effect. Non-debug users only see the leaves in `PUBLIC_SECTIONS` (which includes Chat, Overview, **Pairing**, Info, Flow, Camera, **Sensing**, Users, **Logs**, **CLI**, and the public Settings leaves General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); Bluetooth remains available by direct URL but is hidden from navigation. `?debug=true` reveals the rest (Analytics, Servo, API Docs, Agent gateway, and the deeper Settings leaves AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Pressing `update` swaps the button for `updating…` immediately — the button never says "OK", which would read as "done" for a request that has only STARTED the install (and, for a component that finishes in seconds, arrived before the row could even show progress). Failures show the server's own reason (`rate-limited, retry in 8s`, `bootstrap unreachable`) rather than a bare "Failed". While an install runs, that row shows `updating…` in place of the button (an install takes tens of seconds — the component stops, is rebuilt and restarts — and a row that just sits there invites a second click, which is how a device once lost its HAL runtime). The `update` buttons in the Overview **Versions** card (Web / OS / HAL / Agent rows, plus Bootstrap and Device in debug) are gated the same way — regular viewers get no one-click OTA trigger. The top-bar **Debug** toggle beside the Dark/Light button toggles that query parameter while preserving the active route hash and any other query parameters; its amber state indicates that debug mode is enabled.
 
-The Overview **Versions** card has a fifth action column with `restart` for OS Server and HAL, including outside debug mode. Each button calls the admin-protected `POST /api/system/restart/:target` (`os-server` or `hal`). The server schedules the restart after 2 seconds and returns HTTP 202. The button shows `queued` and disables repeat clicks for 15 seconds; this acknowledges scheduling, not service recovery. Existing monitor polling refreshes status/uptime after reconnection. Errors remain visible beside the button. Restart is disabled while the row is known to be updating; OTA activity is polled in normal mode too. Narrow cards scroll horizontally to keep all five columns accessible.
+The Overview **Versions** card has a restart action column with `restart` for OS Server and HAL, including outside debug mode. Each button calls the admin-protected `POST /api/system/restart/:target` (`os-server` or `hal`). The server schedules the restart after 2 seconds and returns HTTP 202. The button shows `queued` and disables repeat clicks for 15 seconds; this acknowledges scheduling, not service recovery. Existing monitor polling refreshes status/uptime after reconnection. Errors remain visible beside the button. Restart is disabled while the row is known to be updating; OTA activity is polled in normal mode too. Narrow cards scroll horizontally to keep all six columns accessible.
+
+The Versions card shows **Current** and **Latest** side by side. Latest comes from each component's `target` in `/api/system/ota-versions`, including the active runtime via `agent`; it is the version published in the device's OTA feed, not an upstream release lookup. Metadata loads in normal and debug mode and refreshes after updates. Missing or empty targets, including Host, display `—`; an already-current component still shows its published target. Bootstrap and Device rows and update buttons remain debug-only.
 
 **Speech attention gate** lives in the public **General** settings card, not the debug-only Realtime section. Its checkbox writes the top-level `wakeword` flag; saving restarts HAL so the change applies. When enabled, speech must follow an attention trigger: a spoken phrase, single click, turning toward the lamp while speaking, or an enrolled person entering view (`presence.enter`). A stranger-only enter does not open the voice gate unless the deployment sets `HAL_PRESENCE_WAKE_STRANGERS=true`. The card lists the currently accepted **spoken** phrases, including the active agent's exact current name and the permanent `autonomous` and device-type aliases; the system manages that list. Reload Settings after an agent rename to see the new name. When disabled, every utterance is handled without a trigger.
 
@@ -709,7 +712,7 @@ Neither path restarts the runtime: backends with a skills dir pick new files up 
 - Tracks response by `runId` correlation across SSE events
 - Inline HW control markers (`[HW:/emotion:...]`) stripped from displayed text; the markdown-link form some LLMs emit (`[label](HW:/led/off:{})`) is also stripped, keeping the label. Both strip patterns mirror the os-server executor grammar exactly — a malformed variant the executor won't fire stays visible as raw text
 - 50-minute **idle** timeout: the deadline is refreshed by every SSE event that belongs to the pending run (`assistant_delta`, `thinking`, tool calls), so a turn that legitimately runs for minutes stays pending while the agent keeps working; only 50 minutes of true silence gives up. Sized to outlast the backend's own per-turn cap (`CODEX_TURN_TIMEOUT_S`, 45 min) rather than to guess how long an answer should take: the gatewayd always ends a turn and that terminal frame carries the pending run id, so this is a last-resort net. It cannot be shortened — `codex exec --json` emits nothing at all while it works, so any window shorter than the turn itself finalizes a healthy turn as "no response" (see `docs/agentic/codex.md` §2.1). On give-up: streamed text so far is kept as the reply, otherwise an error with a retry button. It is deliberately NOT an absolute cap — an absolute one used to finalize a long build turn as "no response" while the run was still going, a symptom MQTT chat and Telegram never had because neither has a client-side deadline.
-- **Pending-turn recovery and live fallback**: messages persist an epoch `ts`; a pending reply bubble younger than 10 minutes survives a page reload instead of being finalized as an error. On the first render with the Chat tab active, the UI re-attaches to the stored `runId` and the reply is backfilled from the flow JSONL replay (`/api/agent/flow-stream` re-sends the last 500 events of the day on every connect — `tts_send` / `tts_suppressed` / `no_reply` / `harness_response`). While a reply is pending, the same recent flow window is also fetched every three seconds as a fallback for a lost live SSE connection, so a final result appears without a reload. Recovery uses the same 12-minute idle budget as a live turn: reloading while a Harness or Codex turn is still running must not finalize it before its terminal event is written. Live events refresh this deadline.
+- **Pending-turn recovery and live fallback**: messages persist an epoch `ts`; a pending reply bubble younger than 10 minutes survives a page reload instead of being finalized as an error. On the first render with the Chat tab active, the UI re-attaches to the stored `runId` and the reply is backfilled from the flow JSONL replay (`/api/agent/flow-stream` re-sends the last 500 events of the day on every connect — `tts_send` / `tts_suppressed` / `no_reply` / `harness_response`). Recovery polling starts when an accepted `runId` is attached to a pending bubble, including when the POST completes after `sending` was already set. It tracks pending replies across all conversations, so switching or creating a chat does not lose the old reply. The same recent flow window is fetched again three seconds after each request completes, without overlapping requests, as a fallback for a lost live SSE connection. Results update only matching pending bubbles; completed or explicitly stopped bubbles are not reopened. Recovery uses the same 12-minute idle budget as a live turn: reloading while a Harness or Codex turn is still running must not finalize it before its terminal event is written. Live events refresh this deadline.
 - Local intent fast path: sub-50ms responses bypassing agent
 - Busy/dropped handling: shows "busy — try again"
 - Markdown rendering: bold, italic, inline code (amber-tinted), code blocks (monospace), `[label](url)` links, bare URLs (mangled http/https schemes like `hthtps://` from upstream limit banners are repaired before linkifying; unknown schemes stay plain text), ordered/unordered lists, and tables (styled header + zebra rows). Agent bubbles get full markdown; user bubbles stay verbatim except URLs, which are linkified with the same scheme repair
@@ -766,9 +769,12 @@ generic sensor label. A `null` sample or sample timestamp displays a waiting sta
 never an epoch date. The gas-index explanation appears only when VOC or NOx has a
 declared source or a measured value.
 
-Lamp still ships with `environment` commented out in `ROBOT.md` and SEN55/SCD41
-disabled in their respective JSON configurations, so this card remains hidden until the capability is
-declared. See [Lamp environmental sensing](../robots/lamp/docs/environment-sensing.md)
+Only Lamp hardware profiles `pro`, `pro-respeaker-lite` and `pro-xvf3800` declare optional
+`environment` (`required: false`) and enable SEN63C on `orangepi_sun60`,
+bus `0`. Standard shows `N/A` without polling because its capability is absent.
+SEN55/SCD41 and boards without matching entries remain disabled, even on Pro.
+On Pro, missing SEN63C shows an error and `N/A` while HAL retries, without
+blocking startup. Disable SEN63C before enabling SEN55 + SCD41 instead. See [Lamp environmental sensing](../robots/lamp/docs/environment-sensing.md)
 for wiring, enabling, and the HAL data contract.
 
 ## 6. LED Color API
@@ -875,3 +881,5 @@ and formatters. `useVisionSensing` polls once for all vision cards;
 cards do not fetch directly. Both clients use the existing authenticated
 `/api/hardware/*` proxy. Vision HTTP/response failures show an error instead of
 leaving the loading placeholder or old readings on screen.
+
+Harness delivery warnings no longer pause new voice requests or disable question answers. Check delivery inspects the current pending receipt; Dismiss without retrying clears that warning without cancelling or resending its task.

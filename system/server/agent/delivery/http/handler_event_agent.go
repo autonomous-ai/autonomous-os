@@ -8,8 +8,10 @@ import (
 	"strings"
 	"time"
 
+	migratepersona "go.autonomous.ai/os/system/agent/migrate_persona"
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/flow"
+	"go.autonomous.ai/os/system/lib/hal"
 	sensinghttp "go.autonomous.ai/os/system/server/sensing/delivery/http"
 	"go.autonomous.ai/os/system/telemetry"
 )
@@ -118,6 +120,11 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 
 	// Resolve OpenClaw UUID → device ID for consistent flow tracing across all agent events
 	flowRunID := h.resolveRunID(payload.RunID)
+	if payload.Stream == "lifecycle" && (payload.Data.Phase == "end" || payload.Data.Phase == "error") {
+		// Register all final reply submissions before releasing processing.
+		// The HAL bridge waits for their asynchronous admission callbacks.
+		defer hal.EndVoiceFollowup(flowRunID)
+	}
 	switch payload.Stream {
 	case "lifecycle":
 		slog.Info("lifecycle event", "component", "agent", "phase", payload.Data.Phase, "runId", payload.RunID, "flowRunId", flowRunID, "session", payload.SessionKey)
@@ -567,7 +574,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 		// Runs sync on the WS worker — the chat-stream error for the same
 		// run arrives after this returns, so wasErrorRecovered is reliable.
 		errorRecovered := false
-		if payload.Data.Phase == "error" {
+		if payload.Data.Phase == "error" && !strings.HasPrefix(payload.Data.Error, domain.RunExpiryErrorPrefix) {
 			errorRecovered = h.tryRecoverIncompleteTurn(payload.RunID, flowRunID, payload.SessionKey)
 			if errorRecovered {
 				h.markErrorRecovered(flowRunID)
@@ -582,6 +589,13 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			lcData["error"] = ""
 			lcData["recovered"] = true
 			lcData["original_error"] = payload.Data.Error
+		}
+		if payload.Data.Phase == "start" {
+			// Fingerprint of the memory this turn runs with (sizes + sha8, no
+			// content) so a routing regression can be tied to a memory write.
+			if st := migratepersona.MemoryState(); st != nil {
+				lcData["memory"] = st
+			}
 		}
 		flow.Log("lifecycle_"+payload.Data.Phase, lcData, flowRunID)
 		taskRunID := h.resolveTaskRunID(payload.RunID, flowRunID)
@@ -643,6 +657,16 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			sensinghttp.DefaultFillerManager.OnToolStart(flowRunID, toolArgs, toolName)
 			summary = fmt.Sprintf("Tool %s started", toolName)
 			h.rememberToolArgs(payload.Data.ToolCallID, toolArgs)
+			// Text streamed before this tool call is narration, not the reply
+			// — see demoteAssistantBufferToThinking. Keep it visible in the
+			// Flow Monitor thinking row, drop it from the reply buffer.
+			if narration := h.demoteAssistantBufferToThinking(payload.RunID); narration != "" {
+				slog.Info("assistant text before tool call demoted to thinking",
+					"component", "agent", "run_id", flowRunID, "tool", toolName,
+					"text", narration[:min(len(narration), 120)])
+				h.monitorBus.Push(domain.MonitorEvent{Type: "thinking", Summary: narration, RunID: flowRunID})
+				flow.Log("narration_demoted", map[string]any{"run_id": flowRunID, "tool": toolName, "text": narration}, flowRunID)
+			}
 			// DEFENSIVE (2026-07-23): the agent sometimes wraps an [HW:...]
 			// marker inside a shell tool call — e.g.
 			// `echo '[HW:/audio/play:{...}]'` — instead of emitting it as
@@ -823,6 +847,12 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			if sentence := h.tryFirstSentenceFlush(payload.RunID); sentence != "" {
 				cleaned := sanitizeAgentText(sentence)
 				if cleaned != "" {
+					readyAt := time.Now()
+					firstDeltaAt := h.assistantFirstDeltaAt(flowRunID)
+					if !firstDeltaAt.IsZero() {
+						slog.Info("[tts-timing] sentence_ready", "run_id", flowRunID,
+							"text_key", ttsTextKey(cleaned), "first_delta_to_ready_ms", readyAt.Sub(firstDeltaAt).Milliseconds())
+					}
 					// ADDED 2026-05-26: fire leading HW markers SYNC before TTS POST so
 					// state mutations (e.g. /scene/off → speaker unmute) apply in HAL
 					// before /voice/speak-queue arrives. Without this, TTS races ahead
@@ -851,6 +881,8 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 					flow.Log("tts_stream_send", map[string]any{"run_id": flowRunID, "text": cleaned}, flowRunID)
 					// Real speech ends filler eligibility even if more tools follow.
 					sensinghttp.DefaultFillerManager.Cancel(flowRunID)
+					slog.Info("[tts-timing] sentence_dispatch", "run_id", flowRunID,
+						"text_key", ttsTextKey(cleaned), "ready_to_dispatch_ms", time.Since(readyAt).Milliseconds())
 					h.deliverTTSQueue(cleaned, flowRunID, "streaming TTS delivery failed")
 				}
 			}
@@ -861,6 +893,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 	// When agent lifecycle ends, flush accumulated assistant text to TTS.
 	// Suppress TTS if the agent played music or already spoke via tool intercept.
 	if payload.Stream == "lifecycle" && payload.Data.Phase == "end" {
+		lifecycleEndAt := time.Now()
 		// Persist streaming summary to JSONL. Raw deltas only live in
 		// monitorBus (RAM) — Flow Monitor reads JSONL on reload, so
 		// without these summary events the pipeline rect shows no
@@ -876,12 +909,16 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 				}, flowRunID)
 			}
 			if s.assistantChunks > 0 {
-				flow.Log("agent_last_token", map[string]any{
-					"run_id": flowRunID,
-					"text":   s.assistantText.String(),
-					"chunks": s.assistantChunks,
-					"chars":  s.assistantChars,
-				}, flowRunID)
+				lastToken := map[string]any{
+					"run_id": flowRunID, "text": s.assistantText.String(),
+					"chunks": s.assistantChunks, "chars": s.assistantChars,
+				}
+				if elapsed, known := s.assistantElapsedMs(lifecycleEndAt); known {
+					lastToken["first_delta_to_end_ms"] = elapsed
+					slog.Info("[tts-timing] assistant_end", "run_id", flowRunID,
+						"first_delta_to_end_ms", elapsed)
+				}
+				flow.Log("agent_last_token", lastToken, flowRunID)
 			}
 		}
 
@@ -907,6 +944,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			suppressReason = "voice_agent_handled"
 		}
 		text, hwCalls := h.flushAssistantText(payload.RunID)
+		finalBufferReadyAt := time.Now()
 		// streamedCleanLen > 0 means the first sentence was dispatched
 		// mid-turn via tryFirstSentenceFlush; the remainder TTS POST
 		// below slices `text` at that offset to skip what already
@@ -1176,6 +1214,10 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 					// can display the complete reply — it only reads tts_send and would
 					// otherwise drop sentence 1 (logged separately as tts_stream_send).
 					flow.Log("tts_send", map[string]any{"run_id": flowRunID, "text": remainderText, "full_text": text, "streamed_len": streamedLen}, flowRunID)
+					slog.Info("[tts-timing] final_dispatch", "run_id", flowRunID,
+						"text_key", ttsTextKey(remainderText), "streamed_len", streamedLen,
+						"end_to_buffer_ready_ms", finalBufferReadyAt.Sub(lifecycleEndAt).Milliseconds(),
+						"buffer_ready_to_dispatch_ms", time.Since(finalBufferReadyAt).Milliseconds())
 					h.deliverTTSQueue(remainderText, flowRunID, "TTS delivery failed")
 				}
 				// Guard broadcast is handled above (before the if/else) to ensure

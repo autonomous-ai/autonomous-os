@@ -50,20 +50,28 @@ import (
 type Server struct {
 	externalHistory *externalhistory.Store
 
-	harnessService   *harness.Service
-	harnessVoice     *harness.VoiceController
-	harnessVoiceCtx  context.Context
-	harnessRepliesMu sync.Mutex
+	harnessPreparationMu    sync.Mutex
+	harnessPreparationWaits map[string]*harnessPreparationWait
+	harnessService          *harness.Service
+	harnessResults          *harness.ResultStore
+	harnessResultsMu        sync.Mutex
+	harnessResultWake       chan struct{}
+	harnessResultsPublished map[string]bool
+	harnessSelector         *harnessSelector
+	harnessVoice            *harness.VoiceController
+	harnessVoiceCtx         context.Context
+	harnessRepliesMu        sync.Mutex
 	// harnessReplies is keyed by the local device run ID. A single Harness
 	// agent can work on more than one user request at once, so it cannot be
 	// keyed by agent ID.
-	harnessReplies  map[string]harnessReply
-	harnessFollowup atomic.Int64
-	harnessResultMu sync.RWMutex
-	harnessResult   string
-	harnessResultAt time.Time
-	engine          *gin.Engine
-	config          *config.Config
+	harnessReplies       map[string]harnessReply
+	harnessOverlapAgents map[string]bool
+	harnessFollowup      atomic.Int64
+	harnessResultMu      sync.RWMutex
+	harnessResult        string
+	harnessResultAt      time.Time
+	engine               *gin.Engine
+	config               *config.Config
 
 	environmentStartup *environment.StartupCoordinator
 
@@ -84,6 +92,7 @@ type Server struct {
 	channelReconcile *agent.ChannelReconcile
 	mcpReconcile     *agent.MCPReconcile
 	userReconcile    *agent.UserProfileReconcile
+	memoryGuard      *agent.MemoryGuard
 	networkService   *network.Service
 	deviceService    *device.Service
 	ambientService   *ambient.Service
@@ -159,6 +168,7 @@ func ProvideServer(
 	cr *agent.ChannelReconcile,
 	mr *agent.MCPReconcile,
 	upr *agent.UserProfileReconcile,
+	mg *agent.MemoryGuard,
 	ns *network.Service,
 	mqttFactory *mqtt.Factory,
 	ambientSvc *ambient.Service,
@@ -188,6 +198,7 @@ func ProvideServer(
 		channelReconcile:  cr,
 		mcpReconcile:      mr,
 		userReconcile:     upr,
+		memoryGuard:       mg,
 		networkService:    ns,
 		deviceService:     ds,
 		mqttFactory:       mqttFactory,
@@ -206,6 +217,7 @@ func ProvideServer(
 	sensingH.SetHarnessConnected(harnessConnected)
 	sensingmsg.SetHarnessConnected(harnessConnected)
 	sensingH.SetHarnessFollowup(s.HarnessVoiceFollowup)
+	sensingH.SetHarnessTaskPending(s.HarnessTaskPending)
 	sensingH.SetHarnessFollowupContext(s.HarnessFollowupContext)
 	sensingH.SetHarnessVoice(s.handleHarnessVoice)
 	return s
@@ -236,6 +248,10 @@ func (s *Server) Serve(closeFn func()) error {
 		logger.SetGELFHost(s.config.DeviceID)
 	}
 	logger.SetGELFDeviceType(deviceType)
+	// No GELF_URL on the device (the shipped case) → relay through the cloud API
+	// with the device key; the collector credential stays server-side. No-op when
+	// GELF_URL is set or the device has no Autonomous credential to relay with.
+	logger.EnableGELFRelay(s.config.GELFRelayCredentials())
 
 	// Common fields for every tracking event this device sends (see
 	// system/telemetry). Set once here, where the resolved device class,
@@ -341,11 +357,25 @@ func (s *Server) Serve(closeFn func()) error {
 	if err := s.initializeExternalHistory(eventCtx); err != nil {
 		return err
 	}
-	harnessService, harnessErr := harness.NewService("config", harness.Callbacks{OnEvent: s.forwardHarnessEvent})
+	harnessService, harnessErr := harness.NewService("config", harness.Callbacks{
+		OnEvent:       s.forwardHarnessEvent,
+		BeforeEvent:   s.captureHarnessResult,
+		BeforeRequest: s.reserveHarnessResult,
+		OnReceipt:     s.bindHarnessResultReceipt,
+		OnRevoked: func() {
+			if s.harnessVoice != nil {
+				_, _ = s.harnessVoice.SetMode(eventCtx, false)
+			}
+		},
+	})
 	if harnessErr != nil {
 		slog.Error("harness service initialization failed", "component", "harness", "error", harnessErr)
 	} else {
 		s.harnessService = harnessService
+		if err := s.initializeHarnessResults("config/harness/results.json"); err != nil {
+			slog.Error("Harness result storage unavailable", "error", err)
+		}
+		go s.watchHarnessResults(eventCtx)
 		s.restoreHarnessHistoryReplies()
 		harnessService.Start(eventCtx)
 		s.deviceMQTTHandler.SetHarnessService(harnessService)
@@ -525,6 +555,7 @@ func (s *Server) Serve(closeFn func()) error {
 	buddy.GET("ws", s.buddyHandler.WS)
 	buddy.POST("command", localOnlyMiddleware(), s.buddyHandler.Command)
 	buddy.POST("observe", localOnlyMiddleware(), s.buddyHandler.Observe)
+	buddy.POST("suggest", localOnlyMiddleware(), s.buddyHandler.Suggest)
 	// /exec/:action is the marker-friendly variant used by OpenClaw skills via
 	// [HW:/buddy/exec/<action>:{...}]. Localhost-only (loopback from agent handler's hwMarker dispatcher).
 	buddy.POST("exec/:action", localOnlyMiddleware(), s.buddyHandler.Exec)
@@ -570,6 +601,9 @@ func (s *Server) Serve(closeFn func()) error {
 		s.userReconcile.Reconcile()
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(gin.H{"reconciled": true}))
 	})
+	// memory/reset: no-SSH recovery for self-written memory that poisoned
+	// routing (#421). Admin-only — it deletes learned memory (with a backup).
+	agent.POST("memory/reset", adminAuthMiddleware(s.config), s.agentHandler.ResetMemory)
 	// channel-turn: the Hermes gateway observer hook POSTs each turn here so
 	// channel (Telegram/Slack/…) turns surface in Flow Monitor. Loopback-only.
 	agent.POST("channel-turn", localOnlyMiddleware(), s.agentHandler.ChannelTurn)

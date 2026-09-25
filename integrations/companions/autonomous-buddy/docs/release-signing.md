@@ -2,9 +2,17 @@
 
 > **Unified product (September 2026):** Run build/signing commands from `integrations/companions/autonomous-buddy/`. `make build`, `app` and `install` package one Electron application containing the Swift helper, defaulting to the current Node architecture; use `make build BUDDY_ARCH=x64` for Intel. `make dmg`, `dmg-signed` and `notarize` default to `BUDDY_ARCHS="arm64 x64"`, producing or processing separate Apple Silicon and Intel DMGs sequentially. These are not universal binaries. App output: `desktop/artifacts/package/Autonomous Buddy-darwin-<arch>/Autonomous Buddy.app`; DMG: `dist/Autonomous-Buddy-<version>-<arch>.dmg`. Original Swift-only universal release recipes remain under explicit `native-*` targets and retain `AutonomousBuddy-<version>.dmg`. `make build`, `make install` and `make dmg` do not submit to Apple; `make dmg` is the local packaging flow, while the upload target defaults to notarized release artifacts. Cross-compilation does not establish Intel runtime compatibility; launch, terminal/native helper and permission behavior still need verification on target Macs.
 
+## Bundled Cua Driver
+
+The unified app packages official Cua Driver **0.28.2** under `Contents/Helpers/CuaDriver.app`, so users install only Buddy. The build downloads the pinned upstream release and verifies its SHA-256 checksum before staging it; no driver binary is committed. Preserve the nested app's vendor signature instead of re-signing it with Buddy's identity. Validate its signature and support for the selected architecture before signing the outer Buddy app. The updater ZIP carries the same nested driver as the DMG. The legacy Swift-only `native-*` targets remain a separate development flow.
+
+At runtime Buddy starts the embedded driver lazily and owns its lifetime; users do not run `cua-driver serve` or install a second app. Embedded mode uses Buddy's macOS permission identity. Test Accessibility, Screen Recording, the existing **Restart computer use** control after a permission change, Pause/cancellation and child shutdown from the packaged app on each target architecture. A standalone CuaDriver permission grant or a successful local build does not establish that the packaged Buddy app has permission, is notarized, or passes Gatekeeper. Verify the final distribution using the checks below.
+
+An older ad-hoc Screen Recording grant may still appear enabled while macOS rejects the current signature. If TCC reports `Failed to match existing code requirement`, remove the old Buddy row from Screen & System Audio Recording and add `/Applications/Autonomous Buddy.app` again, then restart Buddy. The installer never resets or edits macOS privacy grants.
+
 ## Architecture-specific uploads and OTA metadata
 
-From the repo root, `make upload-autonomous-buddy` bumps the shared patch version in `VERSION_AUTONOMOUS_BUDDY` once, builds, signs, notarizes and staples both DMGs, verifies their tickets and Gatekeeper acceptance, then uploads each to `${BUCKET_PREFIX}/ota/autonomous-buddy/<arch>/<version>.dmg` (normally `os/ota/autonomous-buddy/...`). Each selected metadata entry, `autonomous-buddy.arm64` or `autonomous-buddy.x64`, has its own `version`, `url`, `sha256` and `updated_at`. A release for one architecture preserves the other architecture's version and all unrelated component entries. When migrating the old flat metadata, the publisher preserves it as `arm64` if that entry is absent, because the previous published DMG was Apple Silicon only. A new Intel-only release therefore retains that older Apple Silicon download, including its checksum when present. Selected architectures are then updated and the old ambiguous top-level Buddy version/URL fields are removed. Download consumers must select the matching architecture; Buddy currently has no in-app updater, so these entries provide download discovery rather than automatic installation.
+From the repo root, `make upload-autonomous-buddy` bumps the shared patch version in `VERSION_AUTONOMOUS_BUDDY` once, builds, signs, notarizes and staples both DMGs, verifies their tickets and Gatekeeper acceptance, then uploads each to `${BUCKET_PREFIX}/ota/autonomous-buddy/<arch>/<version>.dmg` (normally `os/ota/autonomous-buddy/...`). Each selected metadata entry, `autonomous-buddy.arm64` or `autonomous-buddy.x64`, has its own `version`, `url`, `sha256` and `updated_at`. A release for one architecture preserves the other architecture's version and all unrelated component entries. When migrating the old flat metadata, the publisher preserves it as `arm64` if that entry is absent, because the previous published DMG was Apple Silicon only. A new Intel-only release therefore retains that older Apple Silicon download, including its checksum when present. Selected architectures are then updated and the old ambiguous top-level Buddy version/URL fields are removed. Manual download consumers select the matching architecture. Signed releases also publish a ZIP and Squirrel feed for the [in-app updater](app-updates.md); the shared metadata remains the DMG download catalog.
 
 ```bash
 # Use an existing notarytool Keychain profile (see one-time setup below).
@@ -19,7 +27,25 @@ BUDDY_SKIP_BUILD=1 make upload-autonomous-buddy
 BUDDY_SKIP_BUILD=1 BUDDY_ARCHS=x64 make upload-autonomous-buddy
 ```
 
-Keep the selected architectures and `BUDDY_DMG_TARGET` consistent when retrying. The upload target defaults to `BUDDY_DMG_TARGET=dmg-signed`. Before bumping the version or building, it requires `NOTARY_PROFILE` and checks its credentials with `notarytool history`. `BUDDY_SKIP_BUILD=1` needs no profile when DMGs are already notarized, but still runs `stapler validate` and Gatekeeper assessment on every selected DMG before any upload. `BUDDY_DMG_TARGET=dmg` is an explicit override for local/test distribution without notarization; these are the only two accepted targets, and standalone `native-*` artifacts are excluded. Custom `GCS_PATH` or `BUDDY_URL` overrides require a single `BUDDY_ARCHS` value to avoid assigning two DMGs the same destination. Every requested DMG must exist before any artifact upload. Failure to read existing metadata aborts metadata publication instead of replacing the shared feed; updating a signed feed, whether using a nested signed payload or a bare signature, requires `OTA_SIGNING_PRIVATE_KEY`. Artifact uploads may already have completed when metadata publication fails.
+Keep the selected architectures and `BUDDY_DMG_TARGET` consistent when retrying. The default `BUDDY_DMG_TARGET=dmg-signed` requires `NOTARY_PROFILE` and validates credentials with `notarytool history` before bumping or building. `BUDDY_SKIP_BUILD=1` reuses existing notarized DMGs without a version bump, rebuild, notary submission or profile; app stapling may retrieve an existing ticket. Before uploading anything, all selected DMGs must exist and pass version, architecture, signature, ticket and Gatekeeper checks; their updater ZIPs must also pass validation.
+
+`BUDDY_DMG_TARGET=dmg` is an explicit local/test override: it validates the app version, architecture and signature, publishes manual DMG metadata only, and leaves updater feeds untouched. These are the only accepted targets; standalone `native-*` artifacts are excluded. Custom `GCS_PATH` or `BUDDY_URL` requires one architecture and a `.dmg` suffix; the URL must use HTTPS. ZIP and `latest.json` destinations are siblings of the DMG.
+
+Failure to read existing metadata aborts metadata publication instead of replacing the shared feed. Updating signed shared metadata requires `OTA_SIGNING_PRIVATE_KEY`. Artifacts can already be uploaded when metadata publication fails.
+
+Before signing, packaging adds owner-write permission to bundle files and directories, preserving executable bits and never following symlinks. This is required for Squirrel installation: the SwiftPM privacy manifest can otherwise retain mode `0444`, preventing replacement. ZIP release validation rejects read-only resources, including `BUDDY_SKIP_BUILD=1` retries; rebuild, sign and notarize the app instead of changing permissions inside an already signed release.
+
+### Automatic-update ZIP and feed
+
+The signed upload extracts the exact app from each notarized DMG, staples the app, then verifies Developer ID signing, its ticket and Gatekeeper acceptance. Both plist versions (`CFBundleShortVersionString`, `CFBundleVersion`) and `Contents/Resources/app/package.json` must match `VERSION_AUTONOMOUS_BUDDY`; Electron, Swift helper and node-pty binaries must match the selected architecture; the bundled CuaDriver must include that architecture and retain its validated vendor signature. `ditto` creates `dist/Autonomous-Buddy-<version>-<arch>.zip`, preserving the app bundle name; a fresh extraction is verified again. To create only this ZIP from an existing notarized DMG, run `make update-zip BUDDY_ARCH=arm64` from the Buddy directory. No app rebuild is involved.
+
+Upload order is each architecture's `<version>.dmg` then `<version>.zip`, followed by shared `metadata.json`, then each architecture's `latest.json` last. The default ZIP path is `${BUCKET_PREFIX}/ota/autonomous-buddy/<arch>/<version>.zip`. The static Squirrel feed contains:
+
+```json
+{"currentRelease":"<version>","releases":[{"version":"<version>","updateTo":{"version":"<version>","name":"<release name>","url":"<HTTPS ZIP URL>","pub_date":"<timestamp>","sha256":"<ZIP SHA256>","size":12345}}]}
+```
+
+Squirrel consumes the ZIP feed; DMGs remain available for first installation and manual recovery. Buddy 0.0.21 and earlier need one manual installation to gain the updater. This source change does not publish a release or bump the version.
 
 This is the handover doc for whoever owns the Apple Developer enrolment. Once the one-time setup is done, every release boils down to:
 
@@ -38,7 +64,7 @@ With no usable Developer ID identity, packaging retains ad-hoc fallback and expl
 
 The legacy `native-*` Makefile recipes retain their existing identity detection and override rules. For a multi-certificate release, explicitly export the intended identity so every packaging/signing entry point uses the same certificate.
 
-What `make dmg-signed` adds on top of `make dmg` is notarization, stapling and Gatekeeper assessment, which needs `NOTARY_PROFILE`. Apple instructs developers to notarize the outermost distribution container: submitting each final DMG covers its nested app and binaries, so this flow does not require a separate app ZIP submission. See [Apple: Packaging Mac software for distribution](https://developer.apple.com/documentation/xcode/packaging-mac-software-for-distribution).
+What `make dmg-signed` adds on top of `make dmg` is notarization, stapling and Gatekeeper assessment, which needs `NOTARY_PROFILE`. Apple instructs developers to notarize the outermost distribution container: submitting each final DMG covers its nested app and binaries. The updater ZIP is built from that exact app after app-level stapling and validation; it does not require a separate ZIP submission. See [Apple: Packaging Mac software for distribution](https://developer.apple.com/documentation/xcode/packaging-mac-software-for-distribution).
 
 ## What changes vs the ad-hoc build
 
@@ -129,8 +155,8 @@ For each selected architecture, the make target does, in order:
 
 1. Compile the Electron main/renderer. Rebuild node-pty for the selected Electron architecture in a staged dependency copy, preserving the development dependencies.
 2. Cross-compile the Swift helper in release mode for the selected architecture (`x64` maps to Swift `x86_64`; Apple Silicon uses `arm64`).
-3. Package `desktop/artifacts/package/Autonomous Buddy-darwin-<arch>/Autonomous Buddy.app`, embedding the helper and SwiftPM resources under `Contents/Resources/native/`.
-4. `codesign` the app with Developer ID, hardened runtime, secure timestamp. Packaging verifies the signature and uses `lipo` to check the target architecture of Electron, the Swift helper, node-pty and its spawn helper.
+3. Package `desktop/artifacts/package/Autonomous Buddy-darwin-<arch>/Autonomous Buddy.app`, embedding the helper and SwiftPM resources under `Contents/Resources/native/` and the verified CuaDriver app under `Contents/Helpers/`.
+4. `codesign` the app with Developer ID, hardened runtime, secure timestamp. Packaging verifies the signature and uses `lipo` to check the target architecture of Electron, the Swift helper, node-pty and its spawn helper, plus architecture support and the vendor signature of bundled CuaDriver.
 5. `hdiutil create` the DMG (drag-to-Applications layout).
 6. `codesign` the DMG with Developer ID.
 7. `xcrun notarytool submit … --wait` — uploads to Apple, blocks 1-5 minutes until verdict.
@@ -189,5 +215,5 @@ Stapling is offline-capable, so users who first install when offline still get t
 ## Things this doc deliberately does NOT cover
 
 - **Mac App Store distribution.** Different cert (`Apple Distribution`), App Sandbox required, separate submission flow via App Store Connect. Out of scope for now.
-- **Sparkle / auto-update.** Buddy currently has no in-app updater; architecture-specific OTA metadata exposes DMG downloads for manual installation. Add Sparkle later if release cadence picks up.
+- **App updates.** The unified Electron app uses Squirrel.Mac with signed ZIP feeds; see [app updates](app-updates.md). The legacy native-only app has no updater.
 - **CI signing.** Doable (GitHub Actions with cert + notarytool keychain profile encrypted as secrets), but the current handoff assumes one dev signs locally. Set up CI when build cadence justifies it.

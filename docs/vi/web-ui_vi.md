@@ -131,11 +131,12 @@ Góc dưới sidebar hiển thị trạng thái OpenClaw (online/offline) và th
 ### 3.4 Settings (`/setting`) — shell dùng chung
 
 **Speech speed** trong Voice (`/setting#tts`) tải `tts_speed` hiệu lực,
-hiển thị khoảng theo provider (`0.7–1.2×` cho ElevenLabs, `0.25–4.0×` cho
+hiển thị khoảng có thể chọn (`0.7–1.5×` cho ElevenLabs, `0.25–4.0×` cho
 provider khác), bước `0.05`. **Save Changes** lưu tốc độ qua
-`PUT /api/device/config`; hãy lưu trước khi **Test Voice**. Giá trị đã lưu
-ưu tiên hơn `HAL_TTS_SPEED` (mặc định `1.3`); ElevenLabs giới hạn tốc độ gửi
-đi trong `0.7–1.2`.
+`PUT /api/device/config`. **Test Voice** gửi ngay tốc độ trên slider mà không cần
+lưu; tốc độ thử chỉ áp dụng cho câu preview. Giá trị đã lưu
+ưu tiên hơn `HAL_TTS_SPEED` (mặc định `1.2`); ElevenLabs HTTP v3 áp dụng tốc độ ở HAL và gửi provider speed `1.0`;
+các model ElevenLabs khác giới hạn tốc độ gửi đi trong `0.7–1.2`.
 
 **Mirror key/URL từ AI Brain.** Panel tự điền ô TTS hoặc STT còn trống bằng key
 và base URL của AI Brain, để lần setup đầu chỉ phải nhập một bộ. Riêng phần key
@@ -209,7 +210,9 @@ Nhóm Settings có thể thu gọn nằm trong `NAV` của sidebar dùng chung (
 
 Các mục Monitor được serialize thành id thuần, ví dụ `/monitor#overview`, `/monitor#pairing`, `/monitor#system`, `/monitor#flow`. Mặc định: `/monitor` không có hash / hash không hợp lệ → `overview`; `/setting` không có hash / hash không hợp lệ → `general` (URL được chuẩn hóa thành `/setting#general`). Deep-link (ví dụ `/setting#wifi`) và nút back/forward của trình duyệt được tôn trọng qua một effect dựa trên `useLocation`. Người dùng không-debug chỉ thấy các mục trong `PUBLIC_SECTIONS` (gồm Chat, Overview, **Pairing**, Info, Flow, Camera, **Sensing**, Users, **Logs**, **CLI**, và các mục Settings công khai General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); Bluetooth vẫn truy cập được bằng URL trực tiếp nhưng bị ẩn khỏi navigation. `?debug=true` mở khóa phần còn lại (Analytics, Servo, API Docs, Agent gateway, và các mục Settings sâu hơn AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Bấm `update` là nút đổi ngay thành `updating…` — nút KHÔNG bao giờ báo "OK", vì chữ đó đọc như "xong rồi" trong khi request mới chỉ KHỞI ĐỘNG việc cài (và với component chạy vài giây thì nó còn hiện trước cả lúc dòng kịp báo tiến trình). Khi lỗi thì hiện đúng lý do server trả về (`rate-limited, retry in 8s`, `bootstrap unreachable`) thay vì chữ "Failed" trống rỗng. Trong lúc đang cài, dòng đó hiện `updating…` thay cho nút (một lần cài mất vài chục giây — component dừng, build lại, khởi động lại — và một dòng đứng im khiến người dùng bấm lần hai, chính là cách một máy từng mất sạch HAL runtime). Các nút `update` trong card **Versions** ở Overview (dòng Web / OS / HAL / Agent, cộng Bootstrap và Device ở debug) cũng bị chặn theo cách này — người xem thường không có nút kích OTA một chạm. Toggle **Debug** trên top bar, ngay cạnh nút Dark/Light, bật/tắt query parameter này nhưng vẫn giữ hash của mục đang mở và các query parameter khác; màu amber cho biết debug mode đang bật.
 
-Card **Versions** ở Overview có cột thao tác thứ năm với nút `restart` cho OS Server và HAL, kể cả ngoài debug. Mỗi nút gọi `POST /api/system/restart/:target` có bảo vệ admin (`os-server` hoặc `hal`). Server hẹn restart sau 2 giây và trả HTTP 202. Nút hiện `queued`, khóa bấm lại trong 15 giây; trạng thái này chỉ xác nhận đã lên lịch, chưa xác nhận service phục hồi. Polling sẵn có của monitor cập nhật trạng thái/uptime sau khi kết nối lại. Lỗi được giữ hiển thị cạnh nút. Restart bị vô hiệu hóa khi biết dòng đó đang cập nhật; hoạt động OTA được poll cả ở chế độ thường. Card hẹp cuộn ngang để truy cập đủ năm cột.
+Card **Versions** ở Overview có cột thao tác với nút `restart` cho OS Server và HAL, kể cả ngoài debug. Mỗi nút gọi `POST /api/system/restart/:target` có bảo vệ admin (`os-server` hoặc `hal`). Server hẹn restart sau 2 giây và trả HTTP 202. Nút hiện `queued`, khóa bấm lại trong 15 giây; trạng thái này chỉ xác nhận đã lên lịch, chưa xác nhận service phục hồi. Polling sẵn có của monitor cập nhật trạng thái/uptime sau khi kết nối lại. Lỗi được giữ hiển thị cạnh nút. Restart bị vô hiệu hóa khi biết dòng đó đang cập nhật; hoạt động OTA được poll cả ở chế độ thường. Card hẹp cuộn ngang để truy cập đủ sáu cột.
+
+Card Versions hiển thị **Current** và **Latest** cạnh nhau. Latest lấy từ `target` của từng component trong `/api/system/ota-versions`, gồm runtime đang dùng qua alias `agent`; đây là bản được publish trong OTA feed của thiết bị, không phải tra release upstream. Metadata được tải ở cả chế độ thường và debug, rồi làm mới sau cập nhật. Target thiếu hoặc rỗng, gồm Host, hiện `—`; component đã ở bản hiện tại vẫn hiển thị target đã publish. Hai hàng Bootstrap, Device và nút update vẫn chỉ hiện trong debug.
 
 **Speech attention gate** nằm trong card **General** công khai, không nằm ở mục Realtime chỉ-debug. Checkbox vẫn ghi cờ `wakeword` top-level; lưu Settings sẽ restart HAL để áp dụng. Khi bật, speech phải đi sau một attention trigger: wake phrase nói ra, single click, quay về phía lamp rồi nói, hoặc một người đã enrolled xuất hiện trong khung (`presence.enter`). Event chỉ có stranger không mở voice gate, trừ khi deployment đặt `HAL_PRESENCE_WAKE_STRANGERS=true`. Card liệt kê các phrase **nói ra** hiện được chấp nhận, gồm tên agent hiện tại chính xác cùng các alias cố định `autonomous` và device type; hệ thống quản lý danh sách này. Tải lại Settings sau khi đổi tên agent để thấy tên mới. Khi tắt, mọi câu nói được xử lý mà không cần trigger.
 
@@ -692,7 +695,7 @@ Cả hai đường đều KHÔNG restart runtime: backend nào có thư mục sk
 - Theo dõi response qua `runId` correlation trên SSE events
 - HW control markers inline (`[HW:/emotion:...]`) được lọc bỏ khỏi text hiển thị; dạng markdown-link một số LLM emit (`[label](HW:/led/off:{})`) cũng được lọc, giữ lại label. Cả hai pattern lọc mirror đúng grammar của executor os-server — biến thể malformed mà executor không fire sẽ hiển thị nguyên văn
 - Timeout 50 phút tính theo **idle**: mỗi SSE event thuộc run đang chờ (`assistant_delta`, `thinking`, tool call) đều đẩy lùi hạn, nên một turn chạy nhiều phút vẫn ở trạng thái pending chừng nào agent còn làm việc; chỉ 50 phút im lặng thật sự mới bỏ cuộc. Đặt dài hơn mức chặn turn của backend (`CODEX_TURN_TIMEOUT_S`, 45 phút) chứ không phải đoán xem câu trả lời nên mất bao lâu: gatewayd luôn kết thúc turn và frame kết thúc đó mang đúng runId đang chờ, nên đây chỉ là lưới an toàn cuối. Không rút ngắn được — `codex exec --json` không emit gì trong lúc chạy, nên mọi cửa sổ ngắn hơn chính turn đó sẽ chốt nhầm một turn khoẻ mạnh thành "no response" (xem `docs/vi/agentic/codex_vi.md` §2.1). Khi bỏ cuộc: giữ phần text đã stream làm câu trả lời, không có thì báo lỗi kèm nút retry. Cố ý KHÔNG phải hạn tuyệt đối — hạn tuyệt đối từng chốt một turn build dài thành "no response" trong khi run vẫn đang chạy; MQTT chat và Telegram không dính vì chúng không có deadline phía client.
-- **Khôi phục turn đang chờ và fallback live**: message lưu kèm epoch `ts`; bubble reply đang pending dưới 10 phút sẽ sống sót qua reload thay vì bị chốt thành lỗi. Ở lần render đầu khi tab Chat active, UI re-attach vào `runId` đã lưu và backfill câu trả lời từ flow JSONL replay (`/api/agent/flow-stream` gửi lại 500 event cuối trong ngày mỗi lần connect — `tts_send` / `tts_suppressed` / `no_reply` / `harness_response`). Khi reply đang pending, UI cũng fetch cửa sổ flow gần nhất mỗi ba giây như fallback nếu SSE live bị mất, nên kết quả cuối hiện ra mà không cần reload. Recovery dùng cùng ngân sách idle 12 phút với turn đang chạy: reload khi Harness hoặc Codex vẫn làm việc không được chốt lỗi trước khi terminal event được ghi. Event live làm mới deadline này.
+- **Khôi phục turn đang chờ và fallback live**: message lưu kèm epoch `ts`; bubble reply đang pending dưới 10 phút sẽ sống sót qua reload thay vì bị chốt thành lỗi. Ở lần render đầu khi tab Chat active, UI re-attach vào `runId` đã lưu và backfill câu trả lời từ flow JSONL replay (`/api/agent/flow-stream` gửi lại 500 event cuối trong ngày mỗi lần connect — `tts_send` / `tts_suppressed` / `no_reply` / `harness_response`). Polling khôi phục bắt đầu khi bubble pending được gắn `runId` đã nhận, kể cả khi POST hoàn tất sau lúc `sending` đã được bật. UI theo dõi reply pending của mọi conversation, nên chuyển hoặc tạo chat không làm mất reply cũ. Cửa sổ flow gần nhất được fetch lại ba giây sau khi request trước hoàn tất, không chồng request, để khôi phục khi SSE live bị mất. Kết quả chỉ cập nhật bubble pending khớp run; bubble đã hoàn tất hoặc bị người dùng dừng không được mở lại. Recovery dùng cùng ngân sách idle 12 phút với turn đang chạy: reload khi Harness hoặc Codex vẫn làm việc không được chốt lỗi trước khi terminal event được ghi. Event live làm mới deadline này.
 - Local intent fast path: response dưới 50ms bypass agent
 - Busy/dropped: hiển thị "busy — try again"
 - Markdown: bold, italic, inline code (tô màu amber), code block (monospace), link `[label](url)`, URL trần (scheme http/https bị gõ lỗi như `hthtps://` từ banner giới hạn quota upstream được sửa lại trước khi linkify; scheme lạ giữ nguyên plain text), danh sách, và bảng (header có nền + hàng zebra). Bubble agent render đủ markdown; bubble user giữ nguyên văn bản, riêng URL được linkify với cùng cơ chế sửa scheme
@@ -748,8 +751,12 @@ với `status.timing` cấp cao nhất và nhãn cảm biến chung. Sample ho�
 sample là `null` sẽ hiện trạng thái chờ, không hiển thị ngày epoch. Giải thích về
 gas index chỉ xuất hiện khi VOC hoặc NOx có nguồn được khai báo hoặc giá trị đo.
 
-Lamp vẫn để `environment` được comment trong `ROBOT.md` và SEN55/SCD41 tắt trong
-file JSON tương ứng, nên card này ẩn cho đến khi capability được khai báo. Xem
+Chỉ hardware profile `pro`, `pro-respeaker-lite` và `pro-xvf3800` của Lamp khai báo `environment`
+tùy chọn (`required: false`) và bật SEN63C trên `orangepi_sun60`, bus `0`.
+Standard hiện `N/A` mà không polling vì không có capability này. SEN55/SCD41
+và board thiếu entry tương ứng vẫn tắt, ngay cả trên Pro. Trên Pro, thiếu
+SEN63C thì hiện lỗi và `N/A` trong khi HAL thử lại, không chặn khởi động.
+Tắt SEN63C trước khi bật SEN55 + SCD41 thay thế. Xem
 [tài liệu cảm biến môi trường của Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md)
 về đấu dây, bật cảm biến và contract dữ liệu HAL.
 
@@ -858,3 +865,5 @@ hàm định dạng. `useVisionSensing` poll một lần cho toàn bộ card vis
 card không trực tiếp fetch. Cả hai dùng reverse proxy có xác thực
 `/api/hardware/*` sẵn có. Lỗi HTTP/response của vision hiển thị thông báo lỗi,
 không giữ màn hình loading hoặc số liệu cũ.
+
+Cảnh báo delivery Harness không còn chặn câu nói mới hoặc khóa trả lời câu hỏi. Check delivery kiểm receipt pending hiện tại; Dismiss without retrying bỏ cảnh báo mà không hủy hoặc gửi lại task.

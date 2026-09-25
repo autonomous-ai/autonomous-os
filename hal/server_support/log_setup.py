@@ -91,19 +91,44 @@ def setup_logging() -> logging.Logger:
     _usage.addHandler(_usage_file)
     _usage.propagate = False
 
-    # Qwen twin of the gemini usage log: "hal.realtime.usage.qwen" is a CHILD
-    # of the logger above, so propagate=False here keeps qwen lines out of
-    # gemini_usage.log — one file per provider, comparable line-for-line.
-    _usage_qwen = logging.getLogger("hal.realtime.usage.qwen")
-    _usage_qwen.setLevel(logging.DEBUG)
-    _usage_qwen_file = logging.handlers.RotatingFileHandler(
-        log_dir / "qwen_usage.log",
+    # OpenAI twin of the gemini usage log: "hal.realtime.usage.openai" is a
+    # CHILD of the logger above, so propagate=False here keeps OpenAI lines out
+    # of gemini_usage.log — one file per provider, comparable line-for-line.
+    _usage_openai = logging.getLogger("hal.realtime.usage.openai")
+    _usage_openai.setLevel(logging.DEBUG)
+    _usage_openai_file = logging.handlers.RotatingFileHandler(
+        log_dir / "openai_usage.log",
         maxBytes=5 * 1024 * 1024,
         backupCount=3,
     )
-    _usage_qwen_file.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
-    _usage_qwen.addHandler(_usage_qwen_file)
-    _usage_qwen.propagate = False
+    _usage_openai_file.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    _usage_openai.addHandler(_usage_openai_file)
+    _usage_openai.propagate = False
+
+    # GPT-Live twin: per-session-minute usage ("hal.realtime.usage.gptlive"),
+    # kept in its own file for the same reason.
+    _usage_gptlive = logging.getLogger("hal.realtime.usage.gptlive")
+    _usage_gptlive.setLevel(logging.DEBUG)
+    _usage_gptlive_file = logging.handlers.RotatingFileHandler(
+        log_dir / "gptlive_usage.log",
+        maxBytes=5 * 1024 * 1024,
+        backupCount=3,
+    )
+    _usage_gptlive_file.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    _usage_gptlive.addHandler(_usage_gptlive_file)
+    _usage_gptlive.propagate = False
+
+    # Pipecat v1 twin: per-turn TTFB + LLM token lines ("hal.realtime.usage.pipecat").
+    _usage_pipecat = logging.getLogger("hal.realtime.usage.pipecat")
+    _usage_pipecat.setLevel(logging.DEBUG)
+    _usage_pipecat_file = logging.handlers.RotatingFileHandler(
+        log_dir / "pipecat_usage.log",
+        maxBytes=5 * 1024 * 1024,
+        backupCount=3,
+    )
+    _usage_pipecat_file.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    _usage_pipecat.addHandler(_usage_pipecat_file)
+    _usage_pipecat.propagate = False
 
     # GELF handler: send INFO+ logs to centralized Graylog. A simulated body
     # must be fully local — no surprise network traffic while a developer is
@@ -115,7 +140,9 @@ def setup_logging() -> logging.Logger:
             from hal.drivers.gelf_handler import GELFHandler
             from hal.config import _os_cfg_get
 
-            _gelf = GELFHandler()
+            # config.json supplies the cloud API relay target when GELF_URL
+            # is unset (the shipped case — no Graylog credential on the device).
+            _gelf = GELFHandler(os_cfg_get=_os_cfg_get)
             _gelf.setFormatter(logging.Formatter("%(message)s"))
             _device_id = _os_cfg_get("device_id")
             if _device_id:

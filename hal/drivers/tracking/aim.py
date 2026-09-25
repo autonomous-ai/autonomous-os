@@ -24,6 +24,7 @@ stretches the move rather than being bypassed to hit the deadline.
 from __future__ import annotations
 
 import contextlib
+from contextvars import ContextVar
 import logging
 import threading
 import time
@@ -32,9 +33,20 @@ from typing import Any, Callable, Optional, Tuple
 
 import hal.config as config
 from hal.safety.policy import min_move_duration
-from hal.drivers.tracking import look_debug
+from hal.drivers.tracking import body, look_debug
 
 logger = logging.getLogger(__name__)
+_filler_interaction = ContextVar("look_filler_interaction", default="")
+
+
+@contextlib.contextmanager
+def filler_ownership(interaction_id: str):
+    """Pin metric ownership to the look request, including delayed fillers."""
+    token = _filler_interaction.set(interaction_id)
+    try:
+        yield
+    finally:
+        _filler_interaction.reset(token)
 
 # How close to frame centre counts as "aimed", as a fraction of frame width.
 # Wide enough that the lamp does not hunt for a perfect centre it cannot hold.
@@ -478,10 +490,8 @@ def _say(pool: str) -> None:
     try:
         import requests
 
-        from hal.telemetry import voice_metrics
-
         payload = {"pool": pool}
-        owner = voice_metrics.current_interaction()
+        owner = _filler_interaction.get()
         if owner:
             payload["owner"] = owner
         requests.post(config.OS_SENSING_FILLER_URL, json=payload, timeout=1.0)
@@ -1006,6 +1016,13 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
         added later cannot forget to.
         """
         _score_prediction(bearing_steps, found=found_any)
+        # A moved head is a parked head (`nudge` and `_step_toward_bearing`
+        # both end in `move_and_hold`) — hand it back to idle after the
+        # capture the caller is about to take. Not when nothing moved:
+        # playback was never preempted, and dispatching idle over a running
+        # idle restarts it.
+        if iterations > 0 or bearing_steps > 0:
+            body.release_to_idle_later(body.HOLD_AFTER_FIND_S, f"look-aim {reason}")
         return AimResult(
             aimed, reason, iterations, yaw_total, last_dx_frac, bearing_steps,
             start_yaw, _yaw_of(svc), bearing_consulted, steps, last_move_deg,

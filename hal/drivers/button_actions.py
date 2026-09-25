@@ -152,7 +152,7 @@ def _random_head_pat_phrase() -> str:
     return _random_from(HEAD_PAT_PHRASES_BY_LANG)
 
 
-def _announce_listening():
+def _announce_listening(capture_state=None):
     """Speak the localized listening cue, preempting any in-flight TTS.
     speak_cached() uses a non-blocking acquire — if the service is busy
     and the current speech wasn't marked interruptible, the cue is
@@ -163,7 +163,17 @@ def _announce_listening():
     lock releases. ~6s total cap covers a worst-case fresh render before
     giving up silently."""
     text = _phrase(PHRASE_LISTENING)
-    state.tts_service.stop()
+    if capture_state is None:
+        capture_state = getattr(state.tts_service, "input_capture_state", (False, 0))
+    if capture_state[0]:
+        logger.info("listening cue dropped -- user capture already active")
+        return
+    prepare = getattr(state.tts_service, "prepare_listening_cue", None)
+    if prepare is not None:
+        if not prepare(capture_state):
+            return
+    else:
+        state.tts_service.stop()
     # First attempt is immediate: when TTS is idle (the common case — mic
     # unmute path) the cue plays with zero added delay. Backoff only kicks
     # in when the lock is still held by winding-down playback.
@@ -172,6 +182,9 @@ def _announce_listening():
     for delay in (0, 0.15, 0.4, 0.8, 1.6, 3.0):
         if delay:
             time.sleep(delay)
+        if getattr(state.tts_service, "input_capture_state", (False, 0)) != capture_state:
+            logger.info("listening cue dropped -- user started speaking during retry")
+            return
         if state.tts_service.speak_cached(text, interruptible=True):
             return
     logger.warning("listening cue dropped: TTS busy after retries")
@@ -200,7 +213,7 @@ def _wake_if_sleepy(source: str):
     try:
         from hal.models import EmotionRequest
         from hal.routes.emotion import express_emotion
-        express_emotion(EmotionRequest(emotion="stretching"))
+        express_emotion(EmotionRequest(emotion="stretching"), source=source)
     except Exception as e:
         logger.warning("Wake emotion call failed: %s", e)
 
@@ -253,6 +266,7 @@ def announce_listening_cue(source: str = "button"):
     if _tts_available():
         threading.Thread(
             target=_announce_listening,
+            args=(getattr(state.tts_service, "input_capture_state", (False, 0)),),
             daemon=True,
             name=f"{source}-single-click-tts",
         ).start()
@@ -315,6 +329,10 @@ def single_click_action(source: str = "button", announce: bool = True, chime: bo
     announce=False skips the cue (caller fires announce_listening_cue later).
     chime=False skips the ack ping (caller already chimed at gesture start).
     unmute_output=False leaves speaker restoration to the privacy switch."""
+    # A touch proves someone is at the device, even when the gesture itself is
+    # refused below. Runs before the wake: presence only records the moment and
+    # leaves the strip to sleep until the wake emotion takes over.
+    state.note_user_activity(source)
     # Stopping movement is safe even with the hardware mic kill switch off: it
     # does not wake or unmute the microphone, but still lets the user cancel an
     # active follow session with the same direct-attention gesture.
@@ -431,6 +449,7 @@ def head_pat_action(source: str = "touch"):
     (the device already talking), drop silently so petting mid-speech doesn't
     truncate her sentence. After the phrase actually plays, ping the OS server
     so the agent records the petting moment (silent — NO_REPLY)."""
+    state.note_user_activity(source)
     text = _random_head_pat_phrase()
     logger.info("%s head pat -- %r", source, text)
     if not _tts_available() or not text:
@@ -478,6 +497,7 @@ def mic_toggle_action(source: str = "touch"):
     Respect the configured hardware switch when present. The mic-muted LED
     reflects the resulting state, and both routes below repaint it themselves.
     """
+    state.note_user_activity(source)
     # The HW kill switch is the authority when configured. Devices without one
     # report None and fall through; touch gestures cannot override a muted
     # physical switch. Guarding here as well as in unmute_mic
@@ -527,6 +547,10 @@ def sleep_action(source: str = "button"):
     if state._sleeping:
         logger.info("%s sleep hold -- already sleeping", source)
         return
+    from hal.routes.emotion import harness_blocks_sleep
+    if harness_blocks_sleep():
+        logger.info("%s sleep hold -- ignored, Harness is on", source)
+        return
 
     logger.info("%s sleep hold -- announcing sleepy emotion", source)
     if _tts_available():
@@ -540,8 +564,9 @@ def sleep_action(source: str = "button"):
         from hal.routes.emotion import express_emotion
 
         # Reuse /emotion so sleep keeps one authoritative implementation for
-        # servo animation/release, LED off, camera off, and audio mute.
-        express_emotion(EmotionRequest(emotion="sleepy"))
+        # servo animation/release, LED off, camera off, and audio mute -- and,
+        # with `source`, one authoritative record of who asked for it.
+        express_emotion(EmotionRequest(emotion="sleepy"), source=source)
     except Exception as e:
         logger.warning("%s sleep hold failed: %s", source, e)
 
@@ -584,13 +609,15 @@ def shutdown_action(source: str = "button"):
     shutdown_os()
 
 
-def hold_release_action(held_s: float, source: str = "button"):
+def hold_release_action(held_s: float, source: str = "button", *, factory_reset: bool = True):
     """Map a released hold duration to its explicit device action.
 
     Input drivers supply released hold durations. This mapping shares the
     sleep/shutdown/factory-reset decision tree across GPIO and MPR121 inputs.
+    Inputs that must not factory-reset (MPR121) pass factory_reset=False and
+    keep any longer hold at shutdown.
     """
-    if held_s >= FACTORY_RESET_DURATION:
+    if factory_reset and held_s >= FACTORY_RESET_DURATION:
         factory_reset_action(source)
     elif held_s >= LONG_PRESS_DURATION:
         shutdown_action(source)
@@ -598,25 +625,25 @@ def hold_release_action(held_s: float, source: str = "button"):
         sleep_action(source)
 
 
-def button_hold_tier(held_s, *, behavior="standard", hold_s=5.0):
+def button_hold_tier(held_s, *, behavior="standard", hold_s=5.0, factory_reset=True):
     """Select shared feedback for normal and dedicated reset buttons."""
     if behavior == "factory_reset":
         return 3 if held_s >= hold_s else 0
-    return (3 if held_s >= FACTORY_RESET_DURATION else
+    return (3 if factory_reset and held_s >= FACTORY_RESET_DURATION else
             2 if held_s >= LONG_PRESS_DURATION else
             1 if held_s >= SLEEP_HOLD_DURATION else 0)
 
 
 def button_hold_release_action(held_s, feedback, *, behavior="standard", hold_s=5.0,
-                               source="button"):
+                               source="button", factory_reset=True):
     """Commit the actual policy's LED and action using a released duration."""
-    if not button_hold_tier(held_s, behavior=behavior, hold_s=hold_s):
+    if not button_hold_tier(held_s, behavior=behavior, hold_s=hold_s, factory_reset=factory_reset):
         return
     if behavior == "factory_reset":
         if feedback.commit_tier(3) is not False:
             factory_reset_action(source)
-    elif feedback.commit(held_s) is not False:
-        hold_release_action(held_s, source=source)
+    elif feedback.commit(held_s, factory_reset=factory_reset) is not False:
+        hold_release_action(held_s, source=source, factory_reset=factory_reset)
 
 
 def _factory_reset_phrase() -> str:
@@ -746,8 +773,8 @@ class HoldLEDFeedback:
                 return
             self._request(0)
 
-    def commit(self, held_s):
-        tier = 3 if held_s >= FACTORY_RESET_DURATION else 2 if held_s >= LONG_PRESS_DURATION else 0
+    def commit(self, held_s, *, factory_reset=True):
+        tier = 3 if factory_reset and held_s >= FACTORY_RESET_DURATION else 2 if held_s >= LONG_PRESS_DURATION else 0
         return self.commit_tier(tier)
 
     def commit_tier(self, tier):

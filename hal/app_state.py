@@ -297,6 +297,10 @@ SLEEPY_SPEAKER_GRACE_S = 2.0       # wait this long for an announcement to START
 SLEEPY_SPEAKER_DRAIN_MAX_S = 15.0  # hard cap on the whole drain
 _SLEEPY_DRAIN_POLL_S = 0.1
 _sleepy_drain_cancel: Optional[threading.Event] = None
+# Same drain for scenes with speaker "off": the /scene marker lands before the
+# reply text, so an inline mute swallowed the scene's own line. Sleepy takes
+# the drain over when both arrive in one reply.
+_scene_drain_cancel: Optional[threading.Event] = None
 # Fires idle again after a still emotion (a preset with servo=None) halted the
 # animation loop, so the body never stays frozen once the moment has passed.
 # Cancelled on every /emotion (see routes/emotion.py).
@@ -574,6 +578,84 @@ def _persist_sleep_state():
     )
 
 
+def _prune_sleep_log():
+    """Drop journal days past the retention window. Cheap to run inline: a
+    device produces a handful of transitions a day, so this lists one small
+    directory a few times per day, not per turn.
+
+    Swallows its own failures rather than letting them surface as the caller's:
+    an un-prunable old file is a disk-space question, not a reason to report
+    that a transition went unrecorded when it did not.
+    """
+    try:
+        cutoff = time.time() - config.SLEEP_LOG_MAX_DAYS * 86400
+        for name in os.listdir(config.SLEEP_LOG_DIR):
+            if not name.endswith(".jsonl"):
+                continue
+            path = os.path.join(config.SLEEP_LOG_DIR, name)
+            try:
+                if os.stat(path).st_mtime < cutoff:
+                    os.unlink(path)
+            except OSError:
+                continue
+    except Exception as e:
+        logger.warning("Sleep journal prune failed: %s", e)
+
+
+def _log_sleep_transition(event: str, emotion: str, source: str):
+    """Append one sleep/wake transition to today's journal.
+
+    The sleep sidecar cannot answer "how many times have I slept": it holds a
+    single record, every transition overwrites it, and a reboot deletes it. So
+    the device had no way to know it had ever slept -- the agent asked and got
+    nothing, because nothing was ever written down.
+
+    Called from the ONE place every route into and out of sleep converges,
+    routes/emotion.py, so the physical button is recorded as faithfully as an
+    agent's marker. That matters: os-server's flow events only see transitions
+    it fired itself, which is roughly half of them, and the half they miss is
+    the half a person caused by hand.
+
+    Never raises. A journal that cannot be written is worth strictly less than
+    the sleep it describes, so a failure here logs and lets sleep proceed.
+    """
+    import json
+
+    from hal.clock import device_fromtimestamp, device_timezone
+
+    try:
+        os.makedirs(config.SLEEP_LOG_DIR, exist_ok=True)
+        ts = time.time()
+        # Local wall-clock, resolved through hal.clock so it follows the CURRENT
+        # /etc/timezone -- the agent and the web UI can both change the zone at
+        # runtime, and datetime.now() would keep the one glibc cached when HAL
+        # started. `local` is the field a reader actually wants; `ts` stays as
+        # the ordering key and the only value safe to subtract across a zone
+        # change. `tz` names the zone so a row can be re-read years later, and
+        # is empty exactly when the zone could not be resolved and the device
+        # fell back to naive local time -- a wrong clock then shows up in the
+        # data instead of hiding in it.
+        when = device_fromtimestamp(ts)
+        zone = device_timezone()
+        entry = {
+            "ts": round(ts, 2),
+            "local": when.isoformat(timespec="seconds"),
+            "tz": zone.key if zone else "",
+            "date": when.strftime("%Y-%m-%d"),
+            "hour": when.hour,
+            "event": event,
+            "emotion": emotion,
+            "source": source,
+        }
+        path = os.path.join(config.SLEEP_LOG_DIR, f"{entry['date']}.jsonl")
+        with open(path, "a") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        logger.info("Sleep journal: %s (emotion=%s source=%s)", event, emotion, source)
+        _prune_sleep_log()
+    except Exception as e:
+        logger.warning("Sleep journal write failed (%s): %s", event, e)
+
+
 def start_voice_service(reason: str) -> bool:
     """Start the voice pipeline unless a live enrollment owns the mic.
 
@@ -624,25 +706,21 @@ def _finalize_sleepy_peripherals(mute_mic: bool, mute_speaker: bool):
         if music_service and music_service.playing:
             music_service.stop()
         if not _speaker_muted:
+            # A pending scene drain yields to sleep so wake can restore the mute.
+            _cancel_scene_speaker_drain()
             _start_sleepy_speaker_drain()
 
     _persist_sleep_state()
     logger.info("Sleepy finalized: LED off, mic muted, speaker draining")
 
 
-def _start_sleepy_speaker_drain():
-    """Mute the speaker once the going-to-sleep announcement has played.
+def _run_speaker_drain(cancel: threading.Event, commit, name: str) -> None:
+    """Let the current turn's announcement play, then call `commit`.
 
-    Waits SLEEPY_SPEAKER_GRACE_S for one to start, then lets it finish. The
-    grace is far wider than the measured 100ms so this never depends on
-    os-server's marker budget. SLEEPY_SPEAKER_DRAIN_MAX_S caps it: without
-    that, a stalled TTS would leave a sleeping device able to speak. A wake
-    cancels the drain.
+    Waits SLEEPY_SPEAKER_GRACE_S for TTS to start (well above the ~100ms
+    marker→text gap), lets it finish, and gives up at SLEEPY_SPEAKER_DRAIN_MAX_S.
+    Setting `cancel` abandons the drain without committing.
     """
-    global _sleepy_drain_cancel
-    _cancel_sleepy_speaker_drain()
-    cancel = threading.Event()
-    _sleepy_drain_cancel = cancel
 
     def _drain():
         deadline = time.monotonic() + SLEEPY_SPEAKER_DRAIN_MAX_S
@@ -655,9 +733,21 @@ def _start_sleepy_speaker_drain():
                 break  # the announcement finished, or none ever came
             cancel.wait(_SLEEPY_DRAIN_POLL_S)
         if not cancel.is_set():
-            _mute_speaker_for_sleep()
+            commit()
 
-    threading.Thread(target=_drain, daemon=True, name="sleepy-speaker-drain").start()
+    threading.Thread(target=_drain, daemon=True, name=name).start()
+
+
+def _start_sleepy_speaker_drain():
+    """Mute the speaker once the going-to-sleep announcement has played.
+
+    A wake cancels the drain.
+    """
+    global _sleepy_drain_cancel
+    _cancel_sleepy_speaker_drain()
+    cancel = threading.Event()
+    _sleepy_drain_cancel = cancel
+    _run_speaker_drain(cancel, _mute_speaker_for_sleep, "sleepy-speaker-drain")
 
 
 def _cancel_sleepy_speaker_drain():
@@ -666,6 +756,50 @@ def _cancel_sleepy_speaker_drain():
     if _sleepy_drain_cancel is not None:
         _sleepy_drain_cancel.set()
         _sleepy_drain_cancel = None
+
+
+def _start_scene_speaker_drain(scene: str):
+    """Mute the speaker for `scene` once its confirmation line has played.
+
+    Skipped while sleep owns the speaker (asleep or sleepy drain pending).
+    """
+    global _scene_drain_cancel
+    _cancel_scene_speaker_drain()
+    if _sleeping or _sleepy_drain_cancel is not None:
+        logger.info("Scene %s: speaker mute left to sleep", scene)
+        return
+    cancel = threading.Event()
+    _scene_drain_cancel = cancel
+    _run_speaker_drain(cancel, lambda: _mute_speaker_for_scene(scene), "scene-speaker-drain")
+    logger.info("Scene %s: speaker draining", scene)
+
+
+def _cancel_scene_speaker_drain():
+    """Stop a pending scene drain. Safe to call when none is running."""
+    global _scene_drain_cancel
+    if _scene_drain_cancel is not None:
+        _scene_drain_cancel.set()
+        _scene_drain_cancel = None
+
+
+def _mute_speaker_for_scene(scene: str):
+    """Commit a scene's deferred mute; re-checked under privacy.lock like sleep."""
+    global _speaker_muted
+    with privacy.lock:
+        if _active_scene != scene:
+            logger.info("Scene %s speaker drain: scene gone -- speaker left live", scene)
+            return
+        if _sleeping:
+            logger.info("Scene %s speaker drain: asleep -- mute left to sleep", scene)
+            return
+        if _speaker_muted:
+            return
+        _speaker_muted = True
+        _persist_speaker_state()
+    # The flag only gates playback that has not started; stop a TTS the cap cut.
+    if tts_service and tts_service.speaking:
+        tts_service.stop()
+    logger.info("Scene %s: speaker muted", scene)
 
 
 def _mute_speaker_for_sleep():
@@ -860,6 +994,38 @@ def led_should_stay_dark() -> bool:
     earn their light.
     """
     return _user_led_state is None and ambient_resting_is_dark()
+
+
+def note_user_activity(source: str):
+    """Tell presence the user is here: a voice turn or a physical gesture.
+
+    Presence otherwise only hears the camera, so a user talking with the camera
+    off or outside the frame timed out to AWAY and the device went to sleep
+    mid-conversation. Never raises: presence is a courtesy to the caller.
+    """
+    svc = sensing_service
+    if svc is None:
+        return
+    try:
+        svc.presence.on_activity(source)
+    except Exception as e:
+        logger.warning("Presence activity (%s) failed: %s", source, e)
+
+
+def note_presence_wake():
+    """Restart the presence countdown when the device wakes from sleep.
+
+    Called from the one place every wake converges (express_emotion), so the
+    web UI, API and agent wakes reset it too, not only a face on camera.
+    Never raises: a presence failure must not break the wake.
+    """
+    svc = sensing_service
+    if svc is None:
+        return
+    try:
+        svc.presence.on_wake()
+    except Exception as e:
+        logger.warning("Presence wake reset failed: %s", e)
 
 
 def _get_current_led_color() -> tuple:
@@ -1149,6 +1315,10 @@ def _restore_user_led():
     if _thinking_cue_active:
         logger.info("LED restore: realtime thinking cue still active -- repainting")
         _apply_emotion_led_display(EMO_THINKING, 0.7, force_led=True)
+        return
+
+    from hal.drivers.harness.led import restore as restore_harness_led
+    if restore_harness_led():
         return
 
     state = _user_led_state
@@ -1613,31 +1783,14 @@ def _auto_camera_on(reason: str) -> bool:
 
 
 def _read_agent_name() -> str:
-    """Read agent name from the ACTIVE runtime's IDENTITY.md (a rename lands
-    in the active workspace only — reading a fixed openclaw path returns a
-    stale/template name on other runtimes). Falls back to the device type
-    (lamp/dog/intern) so wake words follow the device class, not a brand."""
-    identity_path = os.path.join(
-        _hal_config.ACTIVE_AGENT_WORKSPACE_DIR, "IDENTITY.md"
-    )
-    try:
-        with open(identity_path) as f:
-            for line in f:
-                lower = line.lower()
-                idx = lower.find("**name:**")
-                if idx >= 0:
-                    name = (
-                        line[idx + len("**name:**") :]
-                        .strip()
-                        .split("\u2014")[0]
-                        .split("-")[0]
-                        .strip()
-                    )
-                    if name:
-                        return name.lower()
-    except Exception:
-        pass
-    # No IDENTITY.md name → use the device type (lamp/dog/intern) so an unnamed
+    """Resolve the active runtime's name through its context manager layout."""
+    from hal.realtime.context_manager import CONTEXT_MANAGERS, OpenClawContextManager
+
+    context_cls = CONTEXT_MANAGERS.get(_hal_config.AGENT_GATEWAY, OpenClawContextManager)
+    name = context_cls.read_agent_name(_hal_config.ACTIVE_AGENT_WORKSPACE_DIR)
+    if name:
+        return name
+    # No explicit identity name → use the device type (lamp/dog/intern) so an unnamed
     # device is addressed by its class instead of a hardcoded "lamp".
     try:
         from hal.config import resolve_device_type
