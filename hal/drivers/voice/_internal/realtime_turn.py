@@ -24,6 +24,7 @@ from hal.realtime.models import AudioOutput as RTAudioOutput
 from hal.realtime.models import TextOutput as RTTextOutput
 from hal.realtime.models.signal import DelegateSignal, LookReplaySignal, RejectSignal
 from hal.drivers.voice._internal import config as voice_cfg
+from hal.drivers.voice.tts.gemini import native_voice
 from hal.drivers.voice._internal.cot_leak_filter import CoTLeakFilter, clean_transcript
 
 logger = logging.getLogger("hal.voice")
@@ -560,7 +561,7 @@ def run_realtime_turn(
     delegate_msg = ""
     handoff_context = ""
     route = ROUTE_NOT_STARTED
-    native = hal_config.REALTIME_NATIVE_AUDIO and tts is not None
+    native = (hal_config.REALTIME_NATIVE_AUDIO or native_voice(tts) is not None) and tts is not None
     native_started = False  # cleanup guard: True between begin and end
     native_played = False    # did native audio actually play this turn (for handled)
 

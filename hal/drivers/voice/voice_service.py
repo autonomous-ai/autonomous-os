@@ -40,6 +40,7 @@ from hal.realtime.orchestrator import (
 from hal.realtime.utils import StreamingResampler, pcm16_bytes_to_float32, resample_float32
 from hal.drivers.voice._internal import config as voice_cfg
 from hal.drivers.voice._internal import live_playback
+from hal.drivers.voice.tts.gemini import native_voice
 from hal.drivers.voice._internal.live_gate import AdaptiveLiveGate
 from hal.drivers.voice._internal.live_reply import LiveReplyGuard
 from hal.drivers.voice._internal.audio_dsp import resample_to_stt, rms
@@ -304,6 +305,8 @@ class VoiceService:
             enable_expression=enable_expression,
             # pipecat_v1 runs STT inside its pipeline on this same provider.
             stt_provider=stt_provider,
+            # Gemini TTS selected → Live speaks in the same voice (native audio).
+            voice_override=lambda: native_voice(tts_service),
         )
 
         # Hook into TTS on_speak_end to feed spoken text back to the realtime agent.
@@ -1502,7 +1505,7 @@ class VoiceService:
             native_started = False
             transcript = ""
             # False => Gemini was opened TEXT-only and OUR TTS speaks the reply.
-            native = hal_config.REALTIME_NATIVE_AUDIO
+            native = hal_config.REALTIME_NATIVE_AUDIO or native_voice(self._tts) is not None
             sentence_buf = ""
             buffer_reply_key = ""
             first_sent = False

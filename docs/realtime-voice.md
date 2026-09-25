@@ -2534,7 +2534,9 @@ threshold). Leaving the echo-risk window also releases duck. If Gemini has alrea
 interruption event is not guaranteed during remaining ElevenLabs playback;
 local ducking alone does not guarantee a complete stop in that case.
 Native audio remains a separate setting and
-is not enabled by selecting this path; ElevenLabs remains supported. The threshold
+is not enabled by selecting this path (except with Gemini TTS selected, where
+Gemini Live speaks natively in the TTS voice — see `docs/os-server.md` Gemini
+TTS); ElevenLabs remains supported. The threshold
 reported through SSE follows the adaptive gate, and bounded `live-aec` logs
 report active-session state at most once per second. This implementation is
 inspired by the standalone hardware test, not an identical algorithm or a

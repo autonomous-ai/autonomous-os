@@ -2471,7 +2471,9 @@ sau onset 1,5 giây, rồi mỗi 400 ms khi VAD vẫn báo nói (VAD kết thúc
 500 ms dưới ngưỡng). Ra khỏi cửa sổ rủi ro vọng cũng khôi phục gain. Nếu Gemini đã sinh xong nhưng
 ElevenLabs còn phát, không đảm bảo provider sẽ gửi tín hiệu ngắt; hạ âm cục
 bộ chưa đảm bảo dừng hẳn trong trường hợp này.
-Native audio vẫn là cấu hình riêng, không tự bật khi chọn đường này; ElevenLabs
+Native audio vẫn là cấu hình riêng, không tự bật khi chọn đường này (trừ khi
+chọn Gemini TTS: khi đó Gemini Live nói native bằng đúng voice TTS — xem mục
+Gemini TTS trong `docs/vi/os-server_vi.md`); ElevenLabs
 vẫn được hỗ trợ. Ngưỡng báo qua SSE cập nhật theo bộ chặn thích nghi; log
 `live-aec` có giới hạn, báo trạng thái phiên đang hoạt động tối đa mỗi giây
 một lần. Triển khai lấy ý tưởng từ script test hardware, không phải thuật

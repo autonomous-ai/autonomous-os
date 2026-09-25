@@ -493,6 +493,10 @@ Requires sensing with camera (InsightFace). Enrolled person JPEGs persist under 
 `POST /api/voice/preview` accepts optional `speed` (`0.25–4.0`) and forwards it
 to HAL `/voice/speak` for that uncached utterance only. It does not persist the
 rate or change the shared service speed. Omission retains the runtime default.
+`provider` / `voice` (+ `tts_api_key` / `tts_base_url`) on `/voice/speak` are the
+same: HAL builds a preview backend for that utterance and the running service
+keeps its saved provider, backend and voice. They require uncached speech (`400`
+with `cached`/`prerender`). This covers web **Test Voice** and MQTT `tts.preview`.
 
 `GET /api/device/config` returns effective `tts_speed`; `PUT /api/device/config`
 accepts `{"tts_speed":1.2}`. This optional field accepts `0.25–4.0`; omitting
@@ -517,6 +521,15 @@ it. Voices are the 30 multilingual Gemini prebuilt voices, so the language
 filter does not apply. Gemini has no speed parameter: HAL applies the saved
 speed locally, like ElevenLabs HTTP v3. Bracket audio tags are stripped. In
 Settings → Voice it is the third vendor under `Autonomous (proxy)`.
+
+When Gemini TTS is selected and the realtime provider is Gemini Live, chit-chat
+the Live model answers itself plays as **native audio in the TTS voice**, with no
+TTS call (`native_voice()` in `hal/drivers/voice/tts/gemini.py`), regardless of
+`HAL_REALTIME_NATIVE_AUDIO`. The Live session is opened with the TTS voice
+instead of `realtime.gemini.voice`; after a voice or provider change the session
+is rebuilt before the next turn (`gemini-voice-change`). Delegated replies are
+still spoken by Gemini TTS. Native audio plays at 1.0×; the saved TTS speed only
+applies to TTS. Any other TTS provider leaves native audio as configured.
 
 ### Piper — on-device TTS
 
