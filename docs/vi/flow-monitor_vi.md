@@ -352,3 +352,13 @@ Log dịch vụ OS-server có các mốc `[tts-timing]` cho câu trả lời str
 Các mốc có `run_id` và `text_key` là 12 ký tự hex đầu SHA-256, không lặp lại nội dung câu hay credential. Hash ở handler dùng text trước bước làm sạch của runtime; hash HAL POST dùng payload cuối và nối được với HAL `queue_requested` khi text không đổi. Nếu runtime bỏ markdown/tag, dùng hash POST cuối để đối chiếu. Lời nói không gắn turn theo đường cũ có thể có run ID rỗng. Không có mốc câu đầu nếu streaming không đủ điều kiện hoặc chưa có câu hoàn chỉnh an toàn trước final flush. Không thay đổi gate ownership/silence hay cách buffer TTS.
 
 `assistant_end` và event `agent_last_token` hiện có bổ sung `first_delta_to_end_ms` khi biết thời điểm delta đầu. Mốc này bao phủ câu trả lời chỉ phát lúc cuối và đo toàn bộ khoảng xuất assistant text kể cả khi câu đầu đã streaming. `final_dispatch` ghi `end_to_buffer_ready_ms`, `buffer_ready_to_dispatch_ms`; `streamed_len` cho biết có phải phần còn lại hay không. “Buffer ready” là lúc lấy text cuối từ assistant buffer; khoảng sau đó bao gồm làm sạch text, gọi hardware và kiểm tra routing. Chỉ ghi dispatch khi thực sự đi vào đường gửi TTS, không ghi cho câu bị suppress hoặc rỗng. Nếu không có thời điểm delta đầu thì bỏ trường đo, không thay bằng số 0.
+
+
+### Nhãn kết quả chung Harness
+
+Flow card gắn nhãn `Harness` cho kết quả và `Shared result` cho tham chiếu từ các
+input còn lại; tooltip tham chiếu có run ID nhận kết quả đầy đủ. `harness_response`
+là giao kết quả, không phải bằng chứng đã phát TTS. Nội dung tham chiếu vẫn đóng
+đúng turn pending và khôi phục qua JSONL/SSE; chỉ input mới nhất trong nhóm hiển
+thị toàn bộ câu trả lời. Kết quả chung được gửi TTS một lần theo input mới nhất,
+tuân thủ điều kiện voice và cancellation. Các nhãn không khẳng định đã nghe âm thanh.

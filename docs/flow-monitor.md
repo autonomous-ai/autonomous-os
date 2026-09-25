@@ -567,3 +567,14 @@ OS-server service logs include `[tts-timing]` markers for both progressive repli
 Markers contain `run_id` and a 12-hex-character SHA-256 `text_key`, without repeating reply text or credentials. The handler hash identifies text before runtime sanitization; the HAL POST hash identifies the final payload and can be correlated with HAL `queue_requested` for unchanged text. If a runtime strips markdown or tags, use the final POST hash for that correlation. Legacy unowned speech may have an empty run ID. First-sentence timing is absent when streaming is ineligible or no complete safe sentence appears before the final flush. Runtime ownership/silence gates and TTS buffering are unchanged.
 
 `assistant_end` and the existing `agent_last_token` event also carry `first_delta_to_end_ms` when a first-delta timestamp is known. This covers final-only replies and measures the entire assistant output interval even when sentence 1 streamed early. `final_dispatch` records `end_to_buffer_ready_ms` and `buffer_ready_to_dispatch_ms`, with `streamed_len` indicating whether this is the remainder. “Buffer ready” means the raw final assistant buffer was extracted; the following interval includes sanitization, hardware calls and routing checks. The dispatch marker is emitted only on the actual TTS delivery path, never for suppressed or empty replies. Unknown first-delta timing is omitted, not replaced with zero.
+
+
+### Harness shared-result labels
+
+Flow cards label Harness result output as `Harness` and sibling references as
+`Shared result`, with the owning run ID available in the reference tooltip.
+A `harness_response` is result delivery, not evidence of TTS playback. Reference
+text still completes its exact pending turn and survives JSONL/SSE recovery;
+only the newest grouped input displays the full answer. The shared result is
+submitted for speech once under that newest input, subject to voice eligibility
+and cancellation. These display labels do not claim that audio was heard.

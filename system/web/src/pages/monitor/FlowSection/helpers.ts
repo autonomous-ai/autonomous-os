@@ -337,6 +337,31 @@ function externalResponseText(ev: DisplayEvent): string {
   return typeof text === "string" ? text.trim() : "";
 }
 
+// A persisted Harness reply proves output, not speaker playback. Keep its
+// presentation separate from turn completion and pending-chat recovery.
+export function harnessOutputPresentation(turn: Turn, output: string): {
+  label: "Harness" | "Shared result";
+  resultRunId?: string;
+} | null {
+  if (!turn.runId || !output) return null;
+  for (const event of [...turn.events].reverse()) {
+    if (extractEventRunId(event) !== turn.runId) continue;
+    const detail = event.detail as FlowEventDetail | undefined;
+    const data = detail?.data ?? detail;
+    const isFlowReply = event.type === "flow_event" && detail?.node === "harness_response";
+    const isChatReply = event.type === "chat_response" && event.state === "final" && data?.source === "harness";
+    if (!isFlowReply && !isChatReply) continue;
+    const text = isFlowReply ? externalResponseText(event) : data?.message ?? event.summary;
+    if (typeof text !== "string" || text.trim() !== output.trim()) continue;
+    const reference = data?.result_reference === true || data?.result_reference === "true";
+    return {
+      label: reference ? "Shared result" : "Harness",
+      resultRunId: reference && typeof data?.result_run_id === "string" ? data.result_run_id : undefined,
+    };
+  }
+  return null;
+}
+
 export function turnHasOutput(turn: Turn): boolean {
   return turn.events.some((ev) =>
     Boolean(externalResponseText(ev)) ||

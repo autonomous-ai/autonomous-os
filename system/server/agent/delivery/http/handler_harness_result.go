@@ -3,6 +3,7 @@ package http
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"go.autonomous.ai/os/system/domain"
@@ -37,6 +38,7 @@ func (h *AgentHandler) DeliverHarnessGroupedResult(resultID, outcome, text strin
 		}
 		seen[id] = true
 	}
+	runIDs = h.harnessResultRunOrderLocked(runIDs)
 	for _, id := range runIDs {
 		state := h.harnessReplies[id]
 		state.delivered = true
@@ -61,6 +63,29 @@ func (h *AgentHandler) DeliverHarnessGroupedResult(resultID, outcome, text strin
 	return true
 }
 
+// harnessResultRunOrderLocked selects a local presentation/speech owner without
+// changing the producer's immutable membership. Device timestamps are the turn's
+// actual creation time; registration time breaks ties for unstamped run IDs.
+// The caller holds harnessRepliesMu and has validated every member.
+func (h *AgentHandler) harnessResultRunOrderLocked(runIDs []string) []string {
+	ordered := append([]string(nil), runIDs...)
+	times := make(map[string]int64, len(ordered))
+	for _, id := range ordered {
+		times[id] = h.runCreatedAtMs(id)
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		a, b := ordered[i], ordered[j]
+		if times[a] != times[b] {
+			return times[a] > times[b]
+		}
+		if h.harnessReplies[a].created != h.harnessReplies[b].created {
+			return h.harnessReplies[a].created.After(h.harnessReplies[b].created)
+		}
+		return a < b
+	})
+	return ordered
+}
+
 // SpeakHarnessGroupedResult submits exactly one synchronous HAL request. Nil
 // means HAL accepted the request, never proof of playback. The caller must claim
 // its durable outbox before calling and must not retry an uncertain submission.
@@ -82,21 +107,22 @@ func (h *AgentHandler) speakHarnessGroupedResult(text string, runIDs []string, s
 		}
 		seen[id] = true
 	}
+	runIDs = h.harnessResultRunOrderLocked(runIDs)
 	h.harnessRepliesMu.Unlock()
-	for _, id := range runIDs {
-		if h.isSpeechCancelled(id) {
-			flow.Log("tts_cancelled", map[string]any{"run_id": id, "source": h.speechCancelSource(id)}, id)
-			return fmt.Errorf("%w: member %q lost the speaker", ErrHarnessResultSpeechSuppressed, id)
-		}
+	owner := runIDs[0]
+	// An earlier member may have lost the speaker before the user supplied a
+	// new input. The merged answer belongs to that newest input's speech turn;
+	// never let cancellation of an older member cancel the newer request too.
+	if h.isSpeechCancelled(owner) {
+		flow.Log("tts_cancelled", map[string]any{"run_id": owner, "source": h.speechCancelSource(owner)}, owner)
+		return fmt.Errorf("%w: latest member %q lost the speaker", ErrHarnessResultSpeechSuppressed, owner)
 	}
 	// Immutable correlated results are never replaced by a local paraphrase.
 	if isLLMLimitText(text) {
 		return fmt.Errorf("%w: usage-limit banner is display-only", ErrHarnessResultSpeechSuppressed)
 	}
-	for _, id := range runIDs {
-		defer hal.BeginVoiceFollowupSpeech(id)()
-	}
-	err := send(text, runIDs[0])
+	defer hal.BeginVoiceFollowupSpeech(owner)()
+	err := send(text, owner)
 	if errors.Is(err, hal.ErrSpeakerMuted) {
 		flow.Log("tts_muted", map[string]any{"run_id": runIDs[0], "text": text}, runIDs[0])
 		return fmt.Errorf("%w: %v", ErrHarnessResultSpeechSuppressed, err)

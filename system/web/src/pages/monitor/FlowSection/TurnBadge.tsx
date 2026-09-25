@@ -8,7 +8,7 @@ import type { Turn } from "./types";
 import { TYPE_LUCIDE, TURN_INPUT_FALLBACK } from "./types";
 import { HW } from "../types";
 import { useTheme } from "@/lib/useTheme";
-import { turnIO, turnTokenStats, turnCurrentUser, externalHistory, turnDisplayType } from "./helpers";
+import { turnIO, turnTokenStats, turnCurrentUser, externalHistory, turnDisplayType, harnessOutputPresentation } from "./helpers";
 import { turnMemoryState, memoryBadge } from "./memory";
 import { PoseBucketModal } from "./PoseBucketModal";
 import { UserAvatar } from "./UserAvatar";
@@ -65,6 +65,7 @@ export function TurnBadge({ turn, pairTint, userPhotos, isDebug, onViewPipeline 
     : /touch|head_pat/.test(turn.type) ? "var(--lm-green)"                  // button
     : "var(--lm-teal)";
   const { input, output, hwOutput, snapshotUrls, audioUrls, poseBucket } = turnIO(turn);
+  const harnessOutput = harnessOutputPresentation(turn, output);
   // When a motion.activity turn folded in a posture nudge, append the
   // first two worst pose snapshots to the existing strip (capped to 3
   // tiles total including the motion frame). The remaining samples are
@@ -377,7 +378,7 @@ export function TurnBadge({ turn, pairTint, userPhotos, isDebug, onViewPipeline 
         </div>,
         document.body,
       )}
-      {/* Row 3: output — TTS or no reply */}
+      {/* Row 3: output — source attribution does not imply speech playback. */}
       {output === "[no reply]" ? (
         <div style={{
           fontSize: 11.5, color: "var(--lm-text-muted)", marginBottom: 2,
@@ -391,11 +392,12 @@ export function TurnBadge({ turn, pairTint, userPhotos, isDebug, onViewPipeline 
           fontSize: 12, color: "var(--lm-text-dim)", marginBottom: 2,
           overflowWrap: "anywhere" as const, lineHeight: 1.5,
         }}>
-          <span style={{
+          <span title={harnessOutput?.resultRunId ? `Shared reply in run ${harnessOutput.resultRunId}` : undefined} style={{
             color: "var(--lm-purple)", fontWeight: 600, marginRight: 6,
             display: "inline-flex", alignItems: "center", gap: 3, verticalAlign: "text-bottom",
           }}>
-            {history ? <><MessageSquare size={12} strokeWidth={2} /> Context</> : ["telegram","discord","slack","wechat","channel"].includes(turn.type)
+            {history ? <><MessageSquare size={12} strokeWidth={2} /> Context</> : harnessOutput
+              ? <><MessageSquare size={12} strokeWidth={2} /> {harnessOutput.label}</> : ["telegram","discord","slack","wechat","channel"].includes(turn.type)
               ? <MessageSquare size={12} strokeWidth={2} />
               : <><Volume2 size={12} strokeWidth={2} /> TTS</>}
           </span>
