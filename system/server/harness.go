@@ -453,7 +453,11 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 	}
 	if !terminal {
 		s.agentHandler.DeliverHarnessProgress(reply.runID, text)
-		s.agentHandler.AnnounceHarnessProgress(reply.runID, text)
+		// turn.done lands milliseconds before its result; speaking "finished,
+		// receiving its result" just delays the result itself.
+		if kind != "turn.done" {
+			s.agentHandler.AnnounceHarnessProgress(reply.runID, text)
+		}
 		return
 	}
 	// A legacy single-input summary uses only the event's own text. Neither
