@@ -194,8 +194,9 @@ silently select an agent.
 
 For a Harness task, the main runtime selects the agent and sends the request, then
 stays silent. The terminal `turn.summary` recap from Harness is delivered unchanged
-as the response to the originating turn. Voice reads that recap; Web Chat displays
-it and suppresses TTS.
+as the response to the originating turn. Web Chat displays it and suppresses TTS;
+voice does not read it raw but queues it with the Harness announcer, which speaks
+a short rendered version (see [Harness update announcements](#harness-update-announcements)).
 
 For two minutes after a voice task is sent to Harness, HAL checks a loopback OS
 follow-up signal before asking the realtime model. A short clarification such as
@@ -207,6 +208,61 @@ outputs and summaries remain untrusted data. A spoken “yes” is not permissio
 approve a tool or blindly type into a terminal prompt. Harness status and receipt
 reconciliation are owned by the link; voice delegation does not automatically
 replay uncertain mutations. Live speech routing still requires later validation.
+
+### Harness update announcements
+
+Harness results, structured questions and progress reach HAL through
+`POST /voice/harness/update` and wait in a queue
+(`hal/drivers/harness/update_queue.py`). The announcer thread
+(`hal/drivers/harness/announcer.py`) takes a snapshot only while nothing is
+speaking or listening, no user turn is in flight (`turn_in_flight`, set by
+`prepare_turn()` and cleared when the reply ends or by `finish_capture()` when
+`_stream_session` returns, so a capture dropped as noise does not hold it), no music or
+Harness capture is active, and `HAL_HARNESS_ANNOUNCE_GRACE_S` has passed since
+the last speech or transcript. Results and questions are always spoken; a
+progress-only snapshot is spoken with probability `HAL_HARNESS_PROGRESS_SPEAK_P`
+and per-run limits. The queue policy and OS side are described in
+[Spoken Harness updates](harness.md#spoken-harness-updates).
+
+**Realtime rendering.** `VoiceAgentBase.supports_announce` says whether a
+provider can open a response from text alone; `announce(text)` queues an
+`AnnounceInput`:
+
+| Provider | Announcements | Wire |
+|----------|---------------|------|
+| Gemini (text-capable models, e.g. 3.1) | yes, turn-based mode | `send_client_content(role=user, turn_complete=True)`; `_turn_done` is cleared so the next commit waits for this response. Refused with an immediate `TurnDoneEvent` while a tool call is pending or a user activity is open. |
+| Gemini 2.5 native-audio | no | Same wire-shape guard that drops `send_text` (WS 1011). |
+| `pipecat_v1` | yes, turn-based mode | New generation and user-turn ID (past any `end_turn()` fence), then `LLMMessagesAppendFrame(run_llm=True)`. Refused while a committed turn awaits its reply or a response or tool call is open; an uncommitted manual turn left by a noise-dropped capture does not block it. |
+| OpenAI Realtime, GPT-Live | no | Not implemented; the fallback below speaks. |
+| Any provider in live mode | no | The live pump owns the output queue. |
+
+`RealtimeOrchestrator.prepare_announcement(allow_resume)` readies the session the
+same way `prepare_turn()` does (parked resume, unresolved-tool rebuild, Gemini
+pre-turn idle recycle) but refuses while a user turn is in flight, and never
+resumes a parked session for progress. `announce(text, stop_event)` flushes stale
+output, sends the input and yields exactly like `stream_output()`, with the
+silent-turn watchdog raised to `ANNOUNCE_RECV_TIMEOUT_S` (20 s; the pipecat relay
+measured 11.6 s to first token on a cold 12.5k-token context);
+`realtime_announce.play_realtime_announcement` plays the reply like a normal
+realtime turn (native model audio with owner `run:<run id>`, or sentence-split
+TTS with `realtime_reply`), preceded by the Harness result chime. The spoken
+reply is saved to realtime memory as a `[Harness update]` turn.
+
+**User preemption.** `prepare_turn()` sets the running announcement's
+`stop_event`. The announcement stops yielding, its queued speech is cancelled,
+and the orchestrator drains the rest of that response (up to
+`ANNOUNCE_DRAIN_S`, 3 s) and calls `end_turn()`. The user's `flush_output()`
+waits for that drain, so the two never read the output queue together and none
+of the announcement is spoken during the user's turn. An announcement that is
+preempted before any speech (including one skipped because a capture began
+right after `prepare_announcement()`) returns its results and questions to the
+queue; progress is dropped.
+
+**Fallback.** When no realtime rendering is possible or the model returns no
+speech, the realtime summarizer model (`RealtimeSummarizer` with a speech
+prompt, `HAL_HARNESS_ANNOUNCE_SUMMARIZER_TIMEOUT_S`) rewrites the update and TTS
+speaks it with `harness_result` and `realtime_feedback`; without a summarizer
+the markup-stripped opening sentences are spoken. Progress never falls back.
 
 ### Voice control of legacy Buddy agent sessions
 
@@ -2991,6 +3047,14 @@ is a top-level `config.json` flag:
 |----------|---------|-------|
 | `HAL_REALTIME_ENABLED` | `true` | Master gate for the realtime pipeline |
 | `wakeword` | ROBOT.md `voice.wakeword` on a fresh config, else `false` | Top-level config-file wake-word gate. When true, a matching interim transcript is provisional only: HAL commits buffered audio to realtime or forwards a command only after an STT **final** result confirms a configured wake phrase. The transcript is split into sentences (`.` `!` `?`) and the phrase is accepted at the start **or the end** of any sentence; mid-sentence occurrences are rejected. The confirmation re-checks the assembled, still-punctuated transcript so the `\w+`-only merge step cannot retract a gate a partial opened. If that exact re-check fails but a partial had already matched exactly, the name alone may differ by one letter and the gate still confirms: STT rewrites its own hypothesis in the final, and on lamp-0c89 (04/09/2026) the partial `hello lamp` came back as `Hello, lamb.`, which dropped the whole turn — no realtime turn, no thinking cue, and the question fell through to the much slower main agent. The prefix (`hello`, `hey`, …) must still match exactly and the loose rule can never OPEN a gate, only confirm one an exact partial opened, so a near-miss word in ambient speech still wakes nothing. It is logged as `Wake-word confirmed with a one-letter STT slip` so the rate stays countable — many of them means the STT boost terms are not doing their job. The supported prefixes are `hello`, `hey`, `hi`, `alo`, `okay`, `ok`, and `wake up`, applied to the permanent common alias (`hey autonomous`), device type (`hey lamp`), and current agent name (`hey Luna`). A runtime rename updates only the agent-name aliases. Bare names and other prefixes do not arm the gate. A rejected utterance is discarded and its transient listening LED restores to the normal resting state; it never leaves the persistent idle effect active. A confirmed turn opens the follow-up focus window; turns in that window are forwarded as `voice_followup` without another phrase. Every authorized turn dispatches to os-server: a spoken realtime reply becomes a silent `voice_agent_handled` sync event; unavailable, silent, failed, or delegated realtime follows the normal path. If realtime is disabled or unavailable, the confirmed final transcript follows the normal os-server/main-agent path. With Live ON and realtime available, the confirmed capture enters full-duplex live without a manual audio commit. Missing/false preserves the pre-gate always-listening flow unchanged. On a config.json os-server creates, the initial value comes from the body's `voice.wakeword` (see Wake-word gate above); a config loaded without the key stays `false`. HAL restarts after a local Settings save or MQTT `wakeword.gate`. |
+| `HAL_HARNESS_PROGRESS_SPEAK_P` | `0.15` | Chance a progress-only Harness snapshot is spoken; `0` disables spoken progress. See [Harness update announcements](#harness-update-announcements). |
+| `HAL_HARNESS_PROGRESS_MIN_GAP_S` | `60` | At most one spoken progress line per Harness run within this window. |
+| `HAL_HARNESS_PROGRESS_QUIET_START_S` | `15` | No spoken progress this soon after the request. |
+| `HAL_HARNESS_PROGRESS_MAX_AGE_S` | `30` | Queued progress older than this is dropped. |
+| `HAL_HARNESS_UPDATE_MAX_AGE_S` | `600` | Unspoken results/questions older than this are dropped. |
+| `HAL_HARNESS_ANNOUNCE_GRACE_S` | `1.5` | Quiet time after any speech or user transcript before the next snapshot. |
+| `HAL_HARNESS_ANNOUNCE_CONTENT_MAX_CHARS` | `4000` | Harness text handed to the renderer is cut to this length. |
+| `HAL_HARNESS_ANNOUNCE_SUMMARIZER_TIMEOUT_S` | `12` | Fallback summarizer bound before sanitized text is spoken instead. |
 | `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` | `20` | Idle seconds for the short post-command focus window. Each accepted `voice_command` or `voice_followup` refreshes it. `0` disables follow-ups and requires a wake phrase for every mic session. Ignored when `wakeword` is false. |
 | `HAL_ENDPOINT_SILENCE_S` | `0.8` | Silence needed after STT final arrival, only while `final_ts >= last_confirmed_speech`. Continued confirmed speech after that final restores the 2.5s fallback until a new final arrives. `0` disables the short clock, leaving `HAL_SILENCE_TIMEOUT`. With the shared gate enabled this only proposes an endpoint; `HAL_TURN_END_*` decides closure. |
 | `HAL_TURN_END_ENABLED` | `true` | Shared provisional endpoint gate for non-Live hands-free capture before commit; no change to Live or manual capture. `false` restores legacy silence clocks and session ceiling. |
@@ -3089,7 +3153,9 @@ is a top-level `config.json` flag:
 | `voice_agent/pipecat_pipeline.py` | The Pipecat side: builds the pipeline (`HALSTTService` → user aggregator → `OpenAILLMService` → `EventSink` → assistant aggregator) on the `pipecat-io` loop, tool handlers, `PipelineHandle` (thread-safe queue_frame / proposals / finalize / stop), `_CommittedTurnStopStrategy` |
 | `voice_agent/pipecat_stt.py` | `HALSTTService`: Pipecat `STTService` over HAL's `STTProvider` (per-turn or long session on a `pipecat-stt` sender thread), `STTFinalizeFrame` |
 | `context_manager/{base,openclaw,hermes}.py` | Prompt + memory + skills assembly per gateway |
-| `summarizer.py` | Anthropic-based memory summarizer |
+| `summarizer.py` | Anthropic-based memory summarizer (also the Harness announcer's fallback renderer via `system_prompt=`) |
+| `../drivers/harness/{announcer,update_queue}.py` | Harness update queue, snapshot policy, gate and renderer selection |
+| `../drivers/voice/_internal/realtime_announce.py` | Harness announcement envelope and realtime playback |
 | `config.py` | Provider config models (`GeminiConfig`, `OpenAIConfig`, `GPTLiveConfig`, `PipecatV1Config`) |
 | `models/`, `enums/` | Input/output/event types, provider + gateway enums |
 | `resources/` | System prompts (shared `system_prompt.md` + per-provider `system_prompt_gemini.md` / `system_prompt_openai.md` / `system_prompt_gptlive.md` / `system_prompt_pipecat.md`) |

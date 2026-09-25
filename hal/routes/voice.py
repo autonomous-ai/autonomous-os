@@ -21,6 +21,7 @@ import hal.app_state as state
 from hal.telemetry import tts_hooks
 from hal.config import AUDIO_INPUT_ALSA, get_tts_speed, TTS_VOICE, TTS_INSTRUCTIONS
 from hal.models import (
+    HarnessUpdateRequest,
     RealtimeHistoryRequest,
     SpeakRequest,
     StatusResponse,
@@ -408,6 +409,28 @@ def speak_text(req: SpeakRequest):
     if not started:
         raise HTTPException(409, "TTS is busy speaking")
     return {"status": "ok"}
+
+
+@router.post("/voice/harness/update", response_model=StatusResponse)
+def harness_update(req: HarnessUpdateRequest):
+    """Queue a Harness update to be spoken once the device is free.
+
+    Returns immediately: `queued` means accepted, never proof of playback (the
+    same contract as /voice/speak). `suppressed` while the speaker is muted, so
+    os-server records the mute exactly as it does for a speak.
+    """
+    if not state.tts_service:
+        raise HTTPException(503, "TTS not initialized")
+    if state._speaker_muted:
+        state.logger.info("POST /voice/harness/update: suppressed -- speaker muted")
+        return {"status": "suppressed"}
+    from hal.drivers.harness.announcer import default_announcer
+    from hal.drivers.harness.update_queue import HarnessUpdate
+
+    default_announcer().submit(
+        HarnessUpdate(kind=req.kind, text=req.text, run_id=req.turn_id, outcome=req.outcome)
+    )
+    return {"status": "queued"}
 
 
 @router.post("/voice/realtime/history", response_model=StatusResponse)

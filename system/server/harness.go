@@ -425,6 +425,7 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 		s.harnessRepliesMu.Unlock()
 		if ok && time.Since(reply.created) <= 15*time.Minute {
 			s.agentHandler.DeliverHarnessTool(reply.runID, toolName, toolArgs)
+			s.agentHandler.AnnounceHarnessProgress(reply.runID, harnessToolProgressText(toolName, toolArgs))
 		}
 		return
 	}
@@ -452,6 +453,7 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 	}
 	if !terminal {
 		s.agentHandler.DeliverHarnessProgress(reply.runID, text)
+		s.agentHandler.AnnounceHarnessProgress(reply.runID, text)
 		return
 	}
 	// A legacy single-input summary uses only the event's own text. Neither
@@ -463,6 +465,19 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 	}
 	// Consume only the exact original response route.
 	s.deliverHarnessFinal(agentID, reply.runID, text)
+}
+
+// harnessToolProgressText describes a remote tool start for the announcer,
+// which turns it into one spoken sentence at most.
+func harnessToolProgressText(toolName, toolArgs string) string {
+	text := "Harness agent is using the tool " + toolName + "."
+	if args := []rune(strings.TrimSpace(toolArgs)); len(args) > 0 {
+		if len(args) > 300 {
+			args = args[:300]
+		}
+		text += " Arguments: " + string(args)
+	}
+	return text
 }
 
 func (s *Server) hasHarnessReply(agentID, runID string) bool {

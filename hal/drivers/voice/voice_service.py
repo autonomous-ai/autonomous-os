@@ -513,6 +513,11 @@ class VoiceService:
     def harness_capture_active(self) -> bool:
         return self._harness_capture.active
 
+    @property
+    def realtime(self) -> RealtimeOrchestrator:
+        """The realtime orchestrator, for device-initiated announcements."""
+        return self._realtime
+
     def start_harness_capture(self, snapshot: dict) -> bool:
         from hal import app_state
 
@@ -2261,6 +2266,13 @@ class VoiceService:
             release_input()
             for iid in followup_ids:
                 self._wakeword_focus.finish(iid)
+            # A capture dropped as noise (or routed without a realtime reply)
+            # never reaches stream_output, which is what normally ends the
+            # realtime turn; without this the announcer's gate stays shut for
+            # TURN_IN_FLIGHT_MAX_S after every noise blip.
+            realtime = getattr(self, "_realtime", None)
+            if realtime is not None:
+                realtime.finish_capture()
 
     def _stream_session_impl(
         self,

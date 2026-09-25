@@ -248,12 +248,6 @@ func SpeakReply(text string) error {
 	return postSpeak("/voice/speak", body)
 }
 
-// SpeakHarnessReply uses the normal voice with a turn-owned result earcon.
-func SpeakHarnessReply(text string) error {
-	body, _ := json.Marshal(map[string]any{"text": text, "realtime_feedback": true, "harness_result": true})
-	return postSpeak("/voice/speak", body)
-}
-
 // FeedRealtimeHistory records an agent reply with the realtime voice agent
 // WITHOUT speaking it. Needed for a reply the speaker never gets: a turn muted
 // by the physical cancel gesture keeps running and its text is still the
