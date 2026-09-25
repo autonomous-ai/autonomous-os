@@ -24,7 +24,24 @@ Repo riêng `autonomous-harness-desktop` đã archive; thay đổi Desktop hiệ
 
 ## Chính sách công việc số của Lamp
 
-Persona Lamp mặc định là physical assistant dùng Harness làm digital assistant. Yêu cầu thực hiện công việc số dùng `harness-use` mà không cần nói “nhờ Harness” hay “nhờ agent”: coding, research tạo báo cáo, tài liệu, bảng tính, slide, thiết kế CAD/3D, tạo media hoặc nhạc, phân tích khoa học và mô phỏng. Đây là ví dụ, không phải bảng định tuyến cố định từ ứng dụng sang agent. Lựa chọn rõ của người dùng về workflow khác, gồm Autonomous Buddy, được ưu tiên.
+Ưu tiên Harness khi đang kết nối. Với task số mới chưa từng gửi, Harness offline/
+chưa pair không còn bắt người dùng mở hoặc pair app: main thực hiện bằng tool và
+skill đang có, giữ nguyên yêu cầu app, file và đầu ra. Nếu thiếu khả năng, main
+nói rõ giới hạn. Yêu cầu chỉ định Harness/agent/workspace từ xa và việc tiếp tục
+task từ xa vẫn giữ đích. Task đã gửi hoặc delivery chưa rõ phải đối chiếu trước
+khi thực hiện bằng cách khác; offline không chứng minh gửi thất bại. Chưa kiểm tra
+được kết nối, thiếu capability hoặc preparation lỗi không cấp phép fallback này.
+Buddy vẫn chỉ dùng khi được yêu cầu rõ.
+
+Voice, Web Chat và MQTT Chat nhận quan sát kết nối hiện tại từ callback RAM sẵn
+có, không thêm RPC hay lượt gọi model. Replay hàng đợi thay quan sát trạng thái
+cố định và bỏ địa chỉ response của run đó khi mất kết nối; reconnect khôi phục
+địa chỉ. Request disconnected không nhận remote reply route hay kết quả follow-up
+cũ. Không có provider trạng thái nghĩa là chưa biết, không khẳng định offline.
+Đây là hướng dẫn policy cho main, không phải router tự thực thi hay bằng chứng
+model tuân thủ. Harness-only mode giữ nguyên.
+
+Persona Lamp mặc định là physical assistant dùng Harness làm digital assistant. Khi Harness đang kết nối, yêu cầu thực hiện công việc số dùng `harness-use` mà không cần nói “nhờ Harness” hay “nhờ agent”: coding, research tạo báo cáo, tài liệu, bảng tính, slide, thiết kế CAD/3D, tạo media hoặc nhạc, phân tích khoa học và mô phỏng. Đây là ví dụ, không phải bảng định tuyến cố định từ ứng dụng sang agent. Lựa chọn rõ của người dùng về workflow khác, gồm Autonomous Buddy, được ưu tiên.
 
 Hội thoại và câu hỏi kiến thức vẫn là hội thoại. Điều khiển vật lý/thiết bị, phát nhạc, nhắc việc, memory và dịch vụ đã có connector trên thiết bị giữ route hiện có. Realtime chuyển trung thực yêu cầu đã hiểu sang main agent; main agent dùng skill chọn agent hiện có từ bằng chứng project/recap thực tế hoặc tìm package Store và chuẩn bị agent mới. Chỉ khi dữ liệu list chưa đủ, mới đọc cặp `{recap,text}` mới nhất của tối đa hai ứng viên. Target follow-up đã giữ không được ghi đè việc chọn agent cho task số mới.
 
@@ -183,7 +200,7 @@ Harness-only voice lưu từng input và câu trả lời kèm source Harness, m
 
 OS chỉ thêm `[harness-reply ...]`, hướng dẫn routing Harness và context follow-up đã giữ vào request voice/chat khi service Harness vừa paired vừa connected. Trạng thái transport được kiểm tra từng request: ngắt kết nối thì ngừng chèn metadata, kết nối lại thì khôi phục. Không yêu cầu bật Harness-only voice mode; skill delegation khi đang kết nối vẫn cần reply route.
 
-Helper của skill kiểm tra `/api/harness/status` trước thao tác từ xa: `HARNESS_UNPAIRED` hướng dẫn ghép đôi; `HARNESS_OFFLINE` yêu cầu mở Harness trên máy đã ghép đôi và kiểm tra mạng nội bộ, không ghép đôi lại. Lỗi gọi API status không chứng minh thuộc trạng thái nào trong hai trạng thái này. Kiểm tra không tạo mutation mới hay xóa delivery chưa rõ kết quả. `resolve` cục bộ và `receipt` không có request pending vẫn dùng được khi offline. Task không tự xếp hàng hay gửi lại khi kết nối phục hồi.
+Helper của skill kiểm tra `/api/harness/status` trước thao tác từ xa: `HARNESS_UNPAIRED` / `HARNESS_OFFLINE` áp dụng policy fallback task mới ở trên trước. Chỉ hướng dẫn pair/mở app nếu task cần Harness hoặc main thiếu tool cần thiết; máy đã pair không phải pair lại. Lỗi gọi API status không chứng minh thuộc trạng thái nào trong hai trạng thái này. Kiểm tra không tạo mutation mới hay xóa delivery chưa rõ kết quả. `resolve` cục bộ và `receipt` không có request pending vẫn dùng được khi offline. Task không tự xếp hàng hay gửi lại khi kết nối phục hồi.
 
 Thu giọng Harness có bộ âm hai nốt riêng: đi lên khi sẵn sàng ghi âm, đi xuống khi tap kết thúc và ngừng chuyển audio. Âm kết thúc xác nhận đóng phần thu, không xác nhận gửi thành công tới agent hay hoàn thành task. Tiếng ping của gesture thường giữ nguyên. Tap ngắt TTS vẫn phát ping xác nhận cũ sau khi dừng phát tiếng; không mở thu giọng.
 

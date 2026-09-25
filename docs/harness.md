@@ -24,7 +24,25 @@ The standalone `autonomous-harness-desktop` repository is archived; current Desk
 
 ## Lamp digital-work policy
 
-The default Lamp persona is a physical assistant that uses Harness as its digital assistant. Requests to execute digital work use `harness-use` without requiring “ask Harness” or “ask an agent”: coding, research deliverables, documents, spreadsheets, slides, CAD/3D design, media or music creation, scientific analysis and simulation. These are examples, not a fixed application-to-agent routing table. Explicit user choices of another workflow, including Autonomous Buddy, take precedence.
+Harness is preferred when connected. For a new digital task that has never been
+dispatched, an offline/unpaired Harness no longer requires opening or pairing the
+app: main executes with its available tools and skills, preserving the requested
+app, files and output constraints. If those capabilities are insufficient, main
+explains the limitation. Explicit Harness/remote agent/workspace requests and
+continuations of remote work keep their destination. Dispatched or uncertain work
+must be reconciled before any alternative execution; offline is not proof that
+delivery failed. Unknown connection status, unsupported capabilities or preparation
+failure do not grant this fallback. Buddy remains explicit-only.
+
+Voice, Web Chat and MQTT Chat receive a current transport observation from the
+existing in-memory connection callback, without another RPC or model call. Queue
+replay replaces the fixed availability observation and removes that run's response
+address when disconnected; reconnect restores it. Disconnected requests receive no
+remote reply route or stale follow-up result. No connection provider means unknown,
+not a claim of offline. This is main-agent policy guidance, not automatic execution
+by the router or proof of model compliance. Harness-only mode is unchanged.
+
+The default Lamp persona is a physical assistant that uses Harness as its digital assistant. When Harness is connected, requests to execute digital work use `harness-use` without requiring “ask Harness” or “ask an agent”: coding, research deliverables, documents, spreadsheets, slides, CAD/3D design, media or music creation, scientific analysis and simulation. These are examples, not a fixed application-to-agent routing table. Explicit user choices of another workflow, including Autonomous Buddy, take precedence.
 
 Conversation and knowledge questions stay conversational. Physical/device controls, music playback, reminders, memory and services already covered by device connectors keep their existing routes. Realtime forwards the faithfully understood request to the main agent; the main agent uses the skill to select an existing agent from actual project/recap evidence or discover a Store package and prepare a new agent. It reads the newest `{recap,text}` pair for at most two candidates only when list evidence is insufficient. A retained follow-up target does not override selection for a new digital task.
 
@@ -183,7 +201,7 @@ Harness-only voice now persists each input and reported response with Harness so
 
 OS adds `[harness-reply ...]`, Harness routing instructions and retained follow-up context to voice/chat requests only while the Harness service is both paired and connected. The transport state is checked per request, so a disconnect stops this metadata immediately and a reconnect restores it. This does not require Harness-only voice mode to be enabled; connected skill delegation still needs its reply route.
 
-The skill helper checks `/api/harness/status` before remote operations: `HARNESS_UNPAIRED` directs the user to pairing; `HARNESS_OFFLINE` asks them to open Harness on the already paired computer and check the local network, without pairing again. A failed status API call does not establish either state. These checks do not reserve a new mutation or clear uncertain delivery. Local `resolve` and a `receipt` with no pending request remain available offline. Tasks are not automatically queued or retried on reconnect.
+The skill helper checks `/api/harness/status` before remote operations: `HARNESS_UNPAIRED` / `HARNESS_OFFLINE` first apply the fresh-task fallback policy above. Only a task requiring Harness or missing necessary main-agent tools gets pairing/open-app guidance; an already paired computer must not be paired again. A failed status API call does not establish either state. These checks do not reserve a new mutation or clear uncertain delivery. Local `resolve` and a `receipt` with no pending request remain available offline. Tasks are not automatically queued or retried on reconnect.
 
 Harness capture uses its own two-note sound: rising tones when recording is ready, falling tones on the finish tap after audio forwarding stops. The finish sound acknowledges capture closure, not successful remote delivery or task completion. Normal gesture pings stay unchanged. Tapping to interrupt TTS still plays the normal acknowledgment ping after stopping playback; it does not open recording.
 
