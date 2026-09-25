@@ -131,8 +131,7 @@ Góc dưới sidebar hiển thị trạng thái OpenClaw (online/offline) và th
 ### 3.4 Settings (`/setting`) — shell dùng chung
 
 **Speech speed** trong Voice (`/setting#tts`) tải `tts_speed` hiệu lực,
-hiển thị khoảng có thể chọn (`0.7–1.5×` cho ElevenLabs, `0.25–4.0×` cho
-provider khác), bước `0.05`. **Save Changes** lưu tốc độ qua
+hiển thị khoảng có thể chọn (`0.5–2.0×` cho mọi provider), bước `0.05`. **Save Changes** lưu tốc độ qua
 `PUT /api/device/config`. **Test Voice** gửi ngay tốc độ trên slider mà không cần
 lưu; tốc độ thử chỉ áp dụng cho câu preview. Giá trị đã lưu
 ưu tiên hơn `HAL_TTS_SPEED` (mặc định `1.2`); ElevenLabs HTTP v3 áp dụng tốc độ ở HAL và gửi provider speed `1.0`;
