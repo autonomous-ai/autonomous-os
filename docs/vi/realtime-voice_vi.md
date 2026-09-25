@@ -551,16 +551,6 @@ Fragment lưu bền là toàn bộ câu trả lời trong cả hai trường h�
 `[TTS HISTORY, not spoken]`, vì dòng đó tồn tại để model không lặp lại thứ user
 ĐÃ NGHE, mà ở một turn bị huỷ thì user chưa nghe gì cả.
 
-Khi hoàn tất, HAL còn kiểm tra quan sát ghi frame lời nói thực tế trước khi
-nạp history. Nếu bị huỷ hoặc lỗi tổng hợp mà chưa ghi frame lời nói nào,
-HAL nạp `spoken=False` (`[TTS HISTORY, not spoken]`). Âm báo kết quả Harness
-không được tính là lời nói. Nếu đã bắt đầu phát rồi bị huỷ, nhãn là
-`[TTS HISTORY, interrupted; only part may have been heard]`; vẫn lưu toàn bộ
-kết quả nhưng không khẳng định user đã nghe hết. Trạng thái được chụp trước
-khi callback kết thúc có thể đổi chủ sở hữu playback. Đây là phép đo ghi vào
-thiết bị âm thanh, không chứng minh tiếng đã tới tai, và không tự phát lại
-kết quả bị huỷ.
-
 Đường thứ hai làm câu trả lời không được nghe nằm trong HAL, và os-server không
 thấy được: `speak_queue` bỏ turn bị vượt mặt (một `turn_seq` cũ tới sau khi turn
 mới hơn đã sở hữu hàng đợi) rồi **trả về thành công**, nên caller tưởng đã nói.
