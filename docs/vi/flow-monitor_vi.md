@@ -339,3 +339,16 @@ Snapshot quan sát được từ `agent.prepare` / `operation.get` ghi `harness_
 ### Hết hạn chờ preparation Harness
 
 `harness_preparation_wait_expired` ghi deadline lượt phản hồi local, với `task_dispatched:false`; không phải lỗi operation từ xa hay kết quả task. Native Hermes kết thúc đúng owner qua `lifecycle_error` sau hủy có giới hạn. Lỗi có prefix `OS_RUN_EXPIRED:` bỏ qua recovery câu trả lời dở để không biến lượt chờ hết hạn thành thành công được khôi phục. Progress preparation bỏ snapshot liên tiếp trùng theo run/operation active và ngăn các thông báo thay đổi bằng đoạn mới.
+
+### Log đo thời gian TTS của main agent
+
+Log dịch vụ OS-server có các mốc `[tts-timing]` cho câu trả lời streaming và gửi TTS cuối turn. Đây là log chẩn đoán, không phải event Flow Monitor hay endpoint KPI acknowledge mới:
+
+- `sentence_ready`: `first_delta_to_ready_ms` đo từ assistant delta không rỗng đầu tiên OS-server nhận được đến khi có câu đầu đủ điều kiện đọc. Bao gồm thời gian gom câu và các gate an toàn hiện có, không bao gồm thời gian model trước delta đầu.
+- `sentence_dispatch`: `ready_to_dispatch_ms` bao gồm gọi hardware ở đầu câu và hủy filler trước khi gửi TTS.
+- `delivery_start` / `delivery_complete`: `dispatch_to_send_ms`, `send_ms`, `dispatch_to_complete_ms` tách thời gian chờ goroutine khỏi lời gọi gửi qua runtime.
+- `hal_post_start` / `hal_post_complete`: `http_ms` đo HTTP request tới HAL đến khi đọc response. `success` nghĩa là lời gọi không trả lỗi (bao gồm kiểm tra response muted hiện có), không chứng minh loa đã phát tiếng.
+
+Các mốc có `run_id` và `text_key` là 12 ký tự hex đầu SHA-256, không lặp lại nội dung câu hay credential. Hash ở handler dùng text trước bước làm sạch của runtime; hash HAL POST dùng payload cuối và nối được với HAL `queue_requested` khi text không đổi. Nếu runtime bỏ markdown/tag, dùng hash POST cuối để đối chiếu. Lời nói không gắn turn theo đường cũ có thể có run ID rỗng. Không có mốc câu đầu nếu streaming không đủ điều kiện hoặc chưa có câu hoàn chỉnh an toàn trước final flush. Không thay đổi gate ownership/silence hay cách buffer TTS.
+
+`assistant_end` và event `agent_last_token` hiện có bổ sung `first_delta_to_end_ms` khi biết thời điểm delta đầu. Mốc này bao phủ câu trả lời chỉ phát lúc cuối và đo toàn bộ khoảng xuất assistant text kể cả khi câu đầu đã streaming. `final_dispatch` ghi `end_to_buffer_ready_ms`, `buffer_ready_to_dispatch_ms`; `streamed_len` cho biết có phải phần còn lại hay không. “Buffer ready” là lúc lấy text cuối từ assistant buffer; khoảng sau đó bao gồm làm sạch text, gọi hardware và kiểm tra routing. Chỉ ghi dispatch khi thực sự đi vào đường gửi TTS, không ghi cho câu bị suppress hoặc rỗng. Nếu không có thời điểm delta đầu thì bỏ trường đo, không thay bằng số 0.

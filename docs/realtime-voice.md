@@ -902,11 +902,32 @@ the `tts-1` fallback), HAL requests provider `speed=1.0` and applies
 A streaming ffmpeg `atempo` filter changes duration while preserving pitch,
 before resampling, speaker output, and AEC reference capture. Speed `1.0`
 bypasses the filter. ffmpeg is already included in device provisioning.
+The filter process starts before the HTTP fetch, overlapping startup with
+network/provider wait, and uses one filter thread for mono speech.
+
+Cancellation is polled while waiting for filter output, so a pending HTTP fetch
+does not keep ffmpeg alive after cancellation. Head/tail producers retain a
+cancellation generation and use bounded queue writes; clearing the shared stop
+event for a new turn cannot revive an old producer. A synchronous HTTP read
+already in flight may remain until data arrives or its configured timeout;
+its late audio is discarded and its source is closed.
+
 
 The v3 WAV cache key includes a discriminator so previously synthesized v3
 audio is not reused under this speed policy. This changes playback duration;
 it does not reduce provider time to first byte (TTFB). Other TTS backends keep
 their existing speed behavior.
+
+Realtime text playback (turn mode and LIVE, regardless of provider) releases a complete sentence even when the same text delta also starts an unfinished next sentence. The exact unfinished tail stays buffered; partial tags, numeric periods and common abbreviations are held conservatively. Existing complete-buffer playback, native audio, provider completion/delegation and cancellation gates remain unchanged. `[tts-timing] stage=realtime_first_text` marks the first text received by the playback path; compare its owner with `speak_requested`/`queue_requested` and HTTP timing to isolate text buffering from synthesis latency.
+
+TTS diagnostics use `[tts-timing]`: request/queue admission, playback worker,
+HTTP start/headers/first decoded bytes, first 4096-byte buffer, first tempo
+output, and first completed speaker write. A per-HTTP `request` ID separates
+parallel fetches; `text_key` (SHA-256 prefix) links synthesis and playback logs.
+Repeated identical text shares a key, so also use timestamps and playback owner.
+HTTP durations include proxy/network/provider time; they cannot isolate provider
+compute. First write is not acoustic onset. Logging preserves PCM chunk boundaries
+and does not change KPI definitions or playback/cancellation policy.
 
 ### Why there is no voice-driven interrupt on the cancelled mic
 

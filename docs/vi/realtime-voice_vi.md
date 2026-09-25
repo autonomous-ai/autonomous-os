@@ -870,12 +870,32 @@ từ `tts-1`), HAL gửi `speed=1.0` tới provider và áp dụng `tts_speed` t
 `config.json` ở máy cục bộ qua đường `get_tts_speed` sẵn có. Bộ lọc ffmpeg
 `atempo` dạng streaming thay đổi thời lượng nhưng giữ cao độ, trước khi
 resample, phát loa và lấy tham chiếu AEC. Tốc độ `1.0` bỏ qua bộ lọc.
-ffmpeg đã có trong quy trình chuẩn bị thiết bị.
+ffmpeg đã có trong quy trình chuẩn bị thiết bị. Process bộ lọc khởi động
+trước HTTP để chồng thời gian khởi động với thời gian chờ mạng/provider,
+và dùng một filter thread cho giọng mono.
+
+Trong lúc chờ đầu ra bộ lọc, HAL kiểm tra hủy để HTTP đang chờ không giữ
+ffmpeg sống sau khi hủy. Producer đầu/đuôi giữ thế hệ hủy và ghi queue có
+timeout; xóa stop event cho turn mới không làm producer cũ chạy lại. HTTP
+đồng bộ đang chờ vẫn có thể tồn tại tới khi nhận dữ liệu hoặc hết timeout
+đã cấu hình; audio về muộn bị bỏ và nguồn được đóng.
+
 
 Khóa WAV cache của v3 có dấu phân biệt để không dùng lại audio v3 đã tổng hợp
 theo chính sách tốc độ cũ. Thay đổi này điều chỉnh thời lượng phát, không giảm
 thời gian chờ byte đầu tiên (TTFB) từ provider. Các backend TTS khác giữ nguyên
 hành vi tốc độ hiện có.
+
+Phát text realtime (cả turn mode và LIVE, không phụ thuộc provider) gửi câu hoàn chỉnh ngay cả khi cùng delta đã chứa đầu câu tiếp theo chưa xong. Phần đuôi được giữ nguyên để ghép tiếp; tag chưa đóng, dấu chấm trong số và viết tắt phổ biến vẫn được giữ thận trọng. Luồng phát buffer hoàn chỉnh, native audio, điều kiện hoàn tất/delegate và cancel không đổi. `[tts-timing] stage=realtime_first_text` đánh dấu text đầu tiên tới đường playback; đối chiếu owner với `speak_requested`/`queue_requested` và timing HTTP để tách thời gian giữ text khỏi tổng hợp giọng.
+
+Log TTS `[tts-timing]` ghi lúc nhận yêu cầu/queue, worker phát, bắt đầu HTTP,
+headers/byte giải mã đầu tiên, buffer 4096 byte đầu, đầu ra tempo đầu tiên và
+lần ghi loa đầu hoàn tất. `request` riêng cho từng HTTP phân biệt các lần tải
+song song; `text_key` (tiền tố SHA-256) nối log tổng hợp và playback. Câu giống
+nhau có cùng key nên cần đối chiếu thêm timestamp và owner. Timing HTTP gồm
+proxy/mạng/provider, chưa tách được thời gian tính toán provider. Ghi loa chưa
+phải lúc âm thanh thực sự tới tai. Log giữ nguyên ranh giới chunk PCM, KPI và
+chính sách phát/cancel.
 
 ### Vì sao không có cắt lời bằng giọng nói trên mic đã khử vọng
 

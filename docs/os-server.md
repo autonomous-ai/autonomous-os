@@ -81,15 +81,36 @@ neither forces a hardware measurement nor starts an agent turn.
 The OS environment worker reads HAL independently and posts sustained changes
 as `environment.update` to `/api/sensing/event`. Its top-level `environment`
 config is read/written through admin `GET`/`PUT /api/device/config`: evaluation
-10 seconds, sustain 60 seconds, cooldown 900 seconds, retry 60 seconds, maximum
-sample age 10 seconds by default. Metric deltas and warm-up are configurable.
+10 seconds, sustain 60 seconds, cooldown 1800 seconds, retry 60 seconds, maximum
+sample age 10 seconds by default. Each metric supports an absolute `delta`,
+`relative_delta_pct` (0–100) and `warmup_s`. The effective change gate is
+`max(delta, abs(baseline) * relative_delta_pct / 100)`; equality qualifies and
+the baseline changes only after accepted dispatch. Default relative floors are
+20% for PM1/PM2.5/CO₂ and 25% for PM4/PM10; other metrics use 0%. PM4/PM10
+absolute defaults are 25 µg/m³. These are provisional notification choices,
+not WHO exposure limits or manufacturer-prescribed noise bounds.
 Registered HAL components share one metric schema: SEN55 + SCD41 or SEN63C
 use the same API, initial report and change flow. Per-component JSON `enabled`
 flags control hardware; OS does not select sensor models. The status sample
 always has nine nullable metric keys: unsupported or unavailable values are
 null and ignored by detection. Measured `co2_ppm` has default change
-200 ppm and warm-up 60 seconds. Explicit `metrics` maps still replace the map
-and retain the configured subset. Composite snapshots include `components`,
+`max(200 ppm, 20% of baseline)` and warm-up 60 seconds. Explicit `metrics`
+maps still replace the map and retain the configured subset. A supplied rule
+without `relative_delta_pct` keeps 0% for legacy compatibility; explicit stored
+deltas are preserved. Omitting the whole metrics map uses the new defaults.
+Optional per-metric `comfort` rules detect a persistent high/low condition
+independently of delta, including steady conditions. New defaults monitor
+temperature outside 19–27°C, humidity outside 35–65%, CO₂ above 1000 ppm and
+PM2.5 above 35 µg/m³ for 300 seconds; entry comparisons are strict. Recovery
+requires hysteresis (1°C, 5 humidity points, 150 ppm and 5 µg/m³ respectively)
+for the same duration. Accepted transitions latch state; delta-only dispatch
+does not reset it. These are companion comfort choices, not WHO limits.
+Events can contain `comfort` transitions with empty `changes`; shared cooldown,
+retry, sleep and busy gates still apply. Supplied legacy rules without
+`comfort` keep it disabled; invalid/null comfort objects are rejected.
+No config migration rewrites device settings; adopting the new policy on an
+existing device requires an explicit config update after updating os-server.
+See the linked Lamp document for sources, examples and field-validation limits. Composite snapshots include `components`,
 `sources`, and `metric_timestamps`: freshness and continuity are checked per
 metric/source, so a failed SEN55 does not suppress healthy SCD41 CO₂.
 Disabling this policy drops automatic events (`dropped_disabled`); diagnostic

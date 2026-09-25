@@ -77,14 +77,35 @@ lượt agent.
 Worker môi trường của OS đọc HAL độc lập và POST thay đổi kéo dài bằng
 `environment.update` tới `/api/sensing/event`. Config `environment` cấp cao
 nhất đọc/ghi qua admin `GET`/`PUT /api/device/config`: mặc định đánh giá mỗi
-10 giây, duy trì 60 giây, cooldown 900 giây, retry 60 giây, tuổi mẫu tối đa
-10 giây. Delta và warm-up từng chỉ số cấu hình được. Component HAL đã đăng ký
+10 giây, duy trì 60 giây, cooldown 1800 giây, retry 60 giây, tuổi mẫu tối đa
+10 giây. Mỗi chỉ số có `delta` tuyệt đối, `relative_delta_pct` (0–100)
+và `warmup_s`. Ngưỡng hiệu lực là
+`max(delta, abs(baseline) * relative_delta_pct / 100)`; bằng ngưỡng cũng đạt
+và baseline chỉ đổi khi dispatch được chấp nhận. Mặc định phần trăm là 20%
+cho PM1/PM2.5/CO₂, 25% cho PM4/PM10 và 0% cho chỉ số khác; delta tuyệt đối
+PM4/PM10 là 25 µg/m³. Đây là lựa chọn thông báo tạm thời, không phải giới hạn
+phơi nhiễm WHO hay ngưỡng nhiễu do hãng quy định. Component HAL đã đăng ký
 dùng chung schema chỉ số: SEN55 + SCD41 hoặc SEN63C đi cùng API, thông báo
 ban đầu và flow thay đổi. Cờ `enabled` trong JSON từng component điều khiển
 hardware; OS không chọn model sensor. Sample status luôn có chín key chỉ số
 nullable: số đo không hỗ trợ/chưa khả dụng là null, bị detector bỏ qua.
-`co2_ppm` đo thật có delta mặc định 200 ppm và warm-up 60 giây. Map
-`metrics` khai báo tường minh vẫn thay toàn bộ map, giữ nguyên nhóm đã chọn.
+`co2_ppm` đo thật có ngưỡng mặc định `max(200 ppm, 20% baseline)` và
+warm-up 60 giây. Map `metrics` khai báo tường minh vẫn thay toàn bộ map, giữ
+nguyên nhóm đã chọn. Rule được khai báo nhưng thiếu `relative_delta_pct`
+giữ 0% để tương thích; delta đã lưu được giữ nguyên. Bỏ toàn bộ map metrics
+thì dùng mặc định mới. Rule `comfort` tùy chọn phát hiện tình trạng cao/thấp
+kéo dài độc lập với delta, kể cả số đo đứng yên. Mặc định mới theo dõi nhiệt độ
+ngoài 19–27°C, độ ẩm ngoài 35–65%, CO₂ trên 1000 ppm, PM2.5 trên 35 µg/m³
+trong 300 giây; so sánh lúc vào là nghiêm ngặt. Hồi phục cần vượt khoảng trễ
+tương ứng 1°C, 5 điểm độ ẩm, 150 ppm, 5 µg/m³ trong cùng thời gian. Chuyển
+trạng thái được chấp nhận mới được ghi nhận; dispatch chỉ có delta không reset
+nó. Đây là lựa chọn tiện nghi cho bạn đồng hành, không phải giới hạn WHO.
+Event có thể có `comfort` với `changes` rỗng; vẫn qua cooldown, retry, sleep
+và busy gate chung. Rule cũ thiếu `comfort` giữ tắt; object comfort lỗi/null
+bị từ chối. Không migration ghi đè cấu hình device; máy hiện có
+cần cập nhật config tường minh sau khi cập nhật os-server để dùng policy mới.
+Xem tài liệu Lamp được liên kết bên dưới để biết nguồn, ví dụ và giới hạn
+kiểm chứng thực địa.
 Snapshot tổng hợp có `components`, `sources`, `metric_timestamps`: kiểm tra
 độ mới/tính liên tục theo chỉ số và nguồn, nên SEN55 lỗi không chặn CO₂ SCD41
 còn tốt. Tắt policy sẽ bỏ event
