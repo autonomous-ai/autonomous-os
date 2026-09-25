@@ -1,7 +1,6 @@
 """Voice metrics measurement — observations only, no behaviour change.
 
-Two audio questions, measured on the device because HAL is the only process that
-knows when audio actually reached the speaker:
+Acknowledgement and audio observations, timed on HAL:
 
   the response metric  Was the user's voice command acknowledged within
          ``ACK_DEADLINE_MS`` of the detected end of their speech?
@@ -20,12 +19,10 @@ execution without observed terminal errors, not answer correctness. See
 
 Design rules that decide whether a number is trustworthy:
 
-* **Playback, not acceptance.** The ack signal is the first frame actually
-  written to the audio stream (``TTSService._note_audio_written``), never an
-  HTTP 200, a queued sentence, model output, or ``on_speak_start`` — the
-  cached path fires that one *before* taking the stream lock, so speech that
-  is stopped or fails before its first write would look played. Even the first
-  write is not the acoustic onset: ALSA/Bluetooth buffering sits after it.
+* **Explicit acknowledgement evidence.** Schema 2 accepts either owned audio
+  actually written to the stream or an OS receipt accepting this user task.
+  Queued TTS, a model delegate tool alone and history sync are not receipts.
+  First-audio latency stays separate; a stream write is not acoustic onset.
 * **Explicit ownership.** Every playback carries the owner that claimed the
   speaker (``run:<turn_id>`` or ``interaction:<id>``). Audio with **no** owner
   is recorded as ``unknown`` and never counted as an acknowledgement — a
@@ -80,6 +77,10 @@ EVENT_INTERACTION = "voice_metrics_interaction"
 EVENT_SUPPRESSION = "voice_metrics_suppression"
 
 # --- Playback kinds (what was heard) ---------------------------------------
+ACK_SCHEMA_VERSION = 2
+KIND_DELEGATE_ACCEPTED = "delegate_accepted"
+KIND_LOCAL_ACCEPTED = "local_accepted"
+
 KIND_AGENT_REPLY = "agent_reply"          # main agent's answer, via the TTS queue
 KIND_NATIVE_REALTIME = "native_realtime"  # realtime model's own voice
 KIND_REALTIME_TTS = "realtime_tts"        # realtime text answer synthesized through TTS
@@ -136,6 +137,7 @@ class _Interaction:
         "answer_latency_ms", "answer_kind", "ack_played_at", "answer_played_at",
         "task_started_at_ms", "task_revision", "task_exclusion_reason",
         "endpoint_known", "mode", "suppressed", "provider_turn_id",
+        "ack_at", "audio_latency_ms", "audio_kind", "speaker_muted",
     )
 
     def __init__(self, iid: str, speech_end: float, method: str):
@@ -153,6 +155,10 @@ class _Interaction:
         self.run_id = ""
         self.ack_latency_ms = None
         self.ack_played_at = None
+        self.ack_at = None
+        self.audio_latency_ms = None
+        self.audio_kind = ""
+        self.speaker_muted = False
         self.ack_modality = ""
         self.ack_kind = ""
         # When the ANSWER itself was heard, as opposed to the receipt. A
@@ -349,19 +355,21 @@ def _valid_endpoint(at: float) -> bool:
 def set_endpoint(iid: str, method: str, at: float) -> None:
     """Upgrade transcript-only evidence when a real provider endpoint arrives.
 
-    Arrival can follow playback if the event carries an earlier real endpoint.
-    An endpoint timestamp after first playback cannot establish an ack latency.
+    Arrival may follow acknowledgement if it carries an earlier real endpoint.
+    An endpoint after first acceptance/audio cannot establish an ack latency.
     """
     with _lock:
         it = _interactions.get(iid)
         if (it is None or it.endpoint_known or not _valid_endpoint(at)
-                or (it.ack_played_at is not None and at > it.ack_played_at)):
+                or (it.ack_at is not None and at > it.ack_at)):
             return
         it.speech_end = at
         it.speech_end_method = method
         it.endpoint_known = True
+        if it.ack_at is not None:
+            it.ack_latency_ms = _ms(it.ack_at - at)
         if it.ack_played_at is not None:
-            it.ack_latency_ms = _ms(it.ack_played_at - at)
+            it.audio_latency_ms = _ms(it.ack_played_at - at)
         if it.answer_played_at is not None:
             it.answer_latency_ms = _ms(it.answer_played_at - at)
         amendment = _amend_params(it, "late_endpoint") if it.reported else None
@@ -381,6 +389,29 @@ def bind_run(iid: str, run_id: str) -> None:
         it.run_id = run_id
         _by_run[run_id] = iid
         amendment = _amend_params(it, "late_run_binding") if it.reported else None
+    if amendment:
+        _report_amendment(amendment)
+
+
+def dispatch_accepted(iid: str, *, local: bool = False) -> None:
+    """Observe confirmed OS admission, not task completion or audio playback.
+
+    Call only for a user-task receipt, never history sync or an unconfirmed POST.
+    Earlier owned audio wins. A late receipt amends the existing verdict.
+    """
+    at = _now()
+    with _lock:
+        it = _interactions.get(iid)
+        if it is None or (it.ack_at is not None and it.ack_at <= at):
+            return
+        it.ack_at = at
+        it.ack_kind = KIND_LOCAL_ACCEPTED if local else KIND_DELEGATE_ACCEPTED
+        it.ack_modality = "processing_accepted"
+        if it.endpoint_known:
+            it.ack_latency_ms = _ms(at - it.speech_end)
+        amendment = _amend_params(it, "late_dispatch_ack") if it.reported else None
+        logger.info("[voice-metrics] ack (interaction=%s kind=%s latency_ms=%s)",
+                    iid, it.ack_kind, it.ack_latency_ms)
     if amendment:
         _report_amendment(amendment)
 
@@ -470,6 +501,7 @@ def playback_audio(owner: str, tts=None) -> None:
     ``unknown`` and NEVER counts as an acknowledgement.
     """
     started = _now()
+    amendment = None
     with _lock:
         iid = _owner_interaction(owner)
         kind = _classify(owner, tts)
@@ -499,8 +531,16 @@ def playback_audio(owner: str, tts=None) -> None:
                 it.last_activity = started
                 it.closed = False
                 _arm_lifetime(it)
-            if it is not None and not it.ack_kind:
+            changed = False
+            if it is not None and it.ack_played_at is None:
+                changed = True
                 it.ack_played_at = started
+                it.audio_kind = kind
+                if it.endpoint_known:
+                    it.audio_latency_ms = _ms(started - it.speech_end)
+            if it is not None and (it.ack_at is None or started < it.ack_at):
+                changed = True
+                it.ack_at = started
                 if it.endpoint_known:
                     it.ack_latency_ms = _ms(started - it.speech_end)
                 it.ack_kind = kind
@@ -510,6 +550,7 @@ def playback_audio(owner: str, tts=None) -> None:
                     iid, kind, it.ack_latency_ms,
                 )
             if it is not None and not it.answer_kind and kind in _ANSWER_KINDS:
+                changed = True
                 it.answer_played_at = started
                 if it.endpoint_known:
                     it.answer_latency_ms = _ms(started - it.speech_end)
@@ -518,25 +559,27 @@ def playback_audio(owner: str, tts=None) -> None:
                     "[voice-metrics] answer (interaction=%s kind=%s latency_ms=%s)",
                     iid, kind, it.answer_latency_ms,
                 )
+            if it is not None and changed and it.reported:
+                amendment = _amend_params(it, "late_audio")
         _observe_playback(kind, iid, started, None)
+    if amendment:
+        _report_amendment(amendment)
 
 
 def playback_muted(owner: str) -> None:
     """The speaker refused this speech because the device is muted.
 
-    Recorded when it happens. Sampling the mute flag at scoring time instead
-    (what this did until 08/09/2026) mislabelled a muted turn as an unanswered
-    one whenever someone unmuted in between — device-observed on lamp-0c89.
-    An unresolved owner stays unknown; unrelated muted audio must not exclude
-    the newest command from the denominator.
+    Record the observed refusal, not the mute flag at report time. Schema 2
+    keeps valid silent tasks eligible: only accepted dispatch or owned audio
+    acknowledges them. Unowned muted notices cannot mark another interaction.
     """
     with _lock:
         iid = _owner_interaction(owner)
         it = _interactions.get(iid) if iid else None
-        if it is None or it.exclusion_reason or it.ack_latency_ms is not None:
+        if it is None or it.speaker_muted:
             return
-        it.exclusion_reason = EXCL_SPEAKER_MUTED
-        it.closed = True
+        # Mute does not prevent accepting a silent task under ack schema 2.
+        it.speaker_muted = True
         amendment = _amend_params(it, "late_mute") if it.reported else None
     if amendment:
         _report_amendment(amendment)
@@ -862,7 +905,11 @@ def _interaction_params(it: "_Interaction") -> dict:
         "exclusion_reason": exclusion_reason,
         # Raw observation, kept whatever the verdict, so the (provisional)
         # threshold can change without re-instrumenting the device.
+        "ack_schema_version": ACK_SCHEMA_VERSION,
         "ack_latency_ms": it.ack_latency_ms,
+        "audio_latency_ms": it.audio_latency_ms,
+        "audio_kind": it.audio_kind,
+        "speaker_muted": it.speaker_muted,
         "ack_modality": it.ack_modality,
         "ack_kind": it.ack_kind,
         # The wait for the real reply, independent of the receipt above. null

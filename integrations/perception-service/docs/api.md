@@ -89,10 +89,15 @@ Emo-AffectNet leave them `null`.
 
 ```json
 // request  (EmotionRecognizeRequest)
-{"image_b64": "<base64 face crop>", "threshold": 0.5}
+{"image_b64": "<base64 face crop>", "threshold": 0.5, "raw": false}
 // response (EmotionRecognizeResponse) — same shape as the WS detections array
-{"detections": [{"emotion": "Happy", "confidence": 0.82, "face_confidence": 1.0, "bbox": [0,0,W,H]}]}
+{"detections": [{"emotion": "Happy", "confidence": 0.82, "face_confidence": 1.0, "bbox": [0,0,W,H], "probabilities": null}]}
 ```
+
+`raw: true` skips the per-label gate **and** the `threshold` drop: the response
+always carries the raw argmax plus `probabilities` (every class, keyed by class
+name) so the client can apply its own gate. HAL sends `raw: true` and gates on
+the device. Without `raw` the response is unchanged and `probabilities` is `null`.
 
 **HTTP `GET /hal/api/dl/emotion-labels`** → `{"labels": ["Happy", "Sad", ...]}`
 (label set of the active model).

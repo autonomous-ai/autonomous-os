@@ -61,9 +61,8 @@ recorded as `unknown` and **never counts as an acknowledgement** — guessing
 command. The count rides on every interaction row as
 `unknown_owner_playbacks`.
 
-A muted playback also needs a resolvable owner to exclude an interaction as
-`speaker_muted`. An unrelated or unowned muted notice cannot exclude the
-newest voice command. Queued segments carry their own classification metadata
+In ack schema 2, speaker mute alone does not exclude an interaction: a silent
+accepted task can still acknowledge processing. Queued segments carry their own classification metadata
 (answer/filler/system), so they do not inherit the kind of the speech that
 opened their shared stream. These snapshots do not change feedback or
 interruption behavior.
@@ -84,8 +83,8 @@ shorten the measured wait. This change does not alter those cues or VAD.
 Transcript-only and receive-only observations retain
 `exclusion_reason=speech_endpoint_unavailable` with null ack/answer latency.
 KPI-3 eligibility is independent. A real timestamp delivered late can amend a
-missing-endpoint verdict only if it precedes or equals the first owned playback;
-HAL retains the original ack/answer playback timestamps, including owned fillers.
+missing-endpoint verdict only if it precedes or equals the first acknowledgement;
+HAL retains acceptance and owned audio/answer timestamps independently.
 Invalid, nonfinite, future or after-ack endpoints never become zero latency.
 
 The installed google-genai 2.12.1 converter preserves `voiceActivity` and
@@ -130,7 +129,7 @@ known utterances; correlate first writes and cancellations using the same owner.
 Verify idle/noise, valid filler, barge-in, suppressed-before-write, delayed old
 output, delegation and LIVE OFF. Report missing endpoint coverage and eligible
 `no_ack` alongside latency. Local tests cannot establish device endpoint coverage
-or acoustic accuracy. The ack point remains the first successful stream write;
+or acoustic accuracy. The audio latency point remains the first successful stream write;
 ALSA/speaker buffering requires acoustic loopback to measure. The existing
 10-second reporting timer starts at interaction creation, which can be transcript
 observation; amendments may follow, so it is not a guaranteed 10-second window
@@ -170,17 +169,30 @@ it does not close the physical audio stream.
 
 ## What counts as an acknowledgement
 
-The first frame **actually written to the audio stream**
-(`TTSService._note_audio_written`, called from every real write path: streamed
-synth, the queued-sentence drain, cached WAV playback, and realtime native
-frames).
+**Ack schema 2** measures the earliest confirmed acknowledgement after the
+user's speech endpoint: either owned audio actually written, an OS-confirmed
+accepted main/harness handoff (`run_id` plus `delivered`), or a confirmed locally
+handled result. Merely choosing the delegate route, calling a tool, starting a
+POST, or receiving a generic HTTP 200 does not prove acceptance. History-sync
+notifications never earn acceptance credit. A main task that legitimately uses
+`NO_REPLY` can therefore acknowledge without speaking or completing execution.
 
-`on_speak_start` is **not** that signal and is not used for the KPI: the
-cached path fires it before taking the stream lock and before writing
-anything, so speech that is stopped or fails in between would look played.
-Neither does HTTP acceptance — `speak_queue()` deliberately returns `True` for
-requests it drops (superseded turn), and os-server's `deliverTTS` can be muted
-after accepting text.
+Acceptance records `ack_kind=delegate_accepted` or `local_accepted`, with
+`ack_modality=processing_accepted`. An earlier owned filler or answer keeps its
+ack credit; acceptance does not replace it with a later timestamp. Audio remains
+independent: `audio_latency_ms`/`audio_kind` record the first owned write, while
+`answer_latency_ms`/`answer_kind` require an actual answer. None of these hooks
+changes routing, playback, cancellation, or when the main agent executes.
+
+For audio, the first frame **actually written to the audio stream** is used
+(`TTSService._note_audio_written`, across streamed synth, queued sentences,
+cached WAV and realtime native frames). `on_speak_start` and TTS HTTP acceptance
+are not evidence of playback: queued requests can be dropped or muted before
+writing. This is distinct from confirmed task acceptance above.
+
+**Version 1 was audio-only.** Missing `ack_schema_version` means 1. Its old
+`no_ack` rows cannot be reinterpreted as version 2 without acceptance evidence;
+report versions separately, including their different mute eligibility rules.
 
 Even the first write is **not the acoustic onset**: ALSA (and more so
 Bluetooth) buffering sits between the write and the speaker. The measurement
@@ -199,19 +211,11 @@ The physical-gesture acknowledgement chime is not a voice-command receipt.
 Its writes bypass the speech measurement hook: they neither inherit a pending
 reply's owner nor consume its first-frame hook.
 
-**Waiting audio counts as an acknowledgement — decided, not accidental.**
-The question this metric answers is *"did the device let the user know it
-heard them?"*, not *"did it answer?"*. A filler ("one moment") is a real
-receipt: the user stops wondering whether they were heard. So a turn whose
-first sound is a filler is acknowledged, even if the answer itself arrives
-much later.
-
-The consequence has to be read with it: on lamp today **every** measured
-acknowledgement is `waiting_audio`, so this metric currently reports how fast
-the device says "I heard you", NOT how fast it answers. `ack_modality` is
-stored on every row precisely so the two can be told apart — split by it
-before quoting a number, and treat a 100 % `waiting_audio` split as a finding
-about the product, not as a good score.
+**Waiting audio still counts as an acknowledgement.** A filler can acknowledge
+before a handoff or answer, but a confirmed handoff no longer needs a filler to
+qualify. Split results by `ack_kind` and `ack_modality`: processing acceptance
+is not proof that the user heard anything. Report audio and answer latency
+alongside KPI-1 to retain that UX distinction.
 
 **Visual feedback is not counted.** The listening LED is a real receipt
 signal, but its actual activation is not instrumented here; counting it
@@ -244,10 +248,12 @@ run in between and would otherwise be charged to the device's response time.
 | `speech_end_method` | How the endpoint was detected |
 | `eligible` | `false` when `exclusion_reason` is set |
 | `outcome` | `acknowledged` \| `no_ack` \| `excluded` |
-| `exclusion_reason` | `rejected_noise`, `rejected_non_user`, `no_transcript`, `not_addressed`, `speaker_muted`, `interrupted_by_user`, `speech_endpoint_unavailable` (KPI-1 only). `speaker_muted` is recorded when the speaker actually **refuses** the speech, not by sampling the mute flag later — otherwise a device unmuted before scoring looks like one that simply never answered |
-| `failure_reason` | `dispatch_failed` — the command was valid and went **unserved** (the POST never landed). This is *not* an exclusion: the row stays eligible and counts against the KPI. A command os-server answered itself (local intent: volume, LED, time) is **not** a failure — its reply carries the interaction id as owner and counts as answered. |
-| `ack_latency_ms` | Raw observation, kept whatever the verdict (`null` when nothing played or the endpoint is unavailable) |
-| `ack_modality`, `ack_kind` | What the user actually heard |
+| `exclusion_reason` | `rejected_noise`, `rejected_non_user`, `no_transcript`, `not_addressed`, `interrupted_by_user`, `speech_endpoint_unavailable` (KPI-1 only). Schema 2 does not exclude speaker mute alone; historical schema 1 also used `speaker_muted`. |
+| `failure_reason` | `dispatch_failed`: failed dispatch stays eligible; without another valid ack it is `no_ack`. A confirmed OS local handled result instead earns `local_accepted`. |
+| `ack_schema_version` | `2`: owned audio or confirmed processing acceptance; missing means legacy audio-only `1`. |
+| `ack_latency_ms` | Endpoint to earliest confirmed acknowledgement; null without ack evidence or a valid endpoint. |
+| `ack_modality`, `ack_kind` | Owned audio classification above, or `processing_accepted` with `delegate_accepted` / `local_accepted`. |
+| `audio_latency_ms`, `audio_kind` | Independent endpoint-to-first-owned-audio timing and kind; null without owned playback or a valid endpoint. |
 | `answer_latency_ms`, `answer_kind` | When the **answer** was heard (`agent_reply` / `native_realtime` / `realtime_tts`), as opposed to the receipt. `null` = endpoint unavailable or no answer observed inside the window — a finding, not missing data |
 | `ack_deadline_ms`, `observe_window_ms` | 3000 / 10000 — the (provisional) thresholds in force when the row was written |
 | `unknown_owner_playbacks` | Playbacks nobody claimed so far — audio excluded from ack decisions |
@@ -336,14 +342,15 @@ something the boundary had to suppress.
 
 **KPI-1 — acknowledged within 3 s**
 
-- Denominator: `voice_metrics_interaction` rows with `eligible = true`, after
-  applying amendments (a row whose `interaction_id` also has a row with
-  `amends_event_id` set is superseded by that correction).
+- Denominator: one latest verdict per `(device, interaction_id, ack_schema_version)`
+  with `eligible = true`, taking highest `task_revision` then amendment/time.
+  Eligible `no_ack` stays in the denominator. Report schema versions separately.
 - Numerator: those with `outcome = 'acknowledged'` and `ack_latency_ms <= 3000`.
 - Excluded (reported, never dropped): noise-rejected turns, turns the realtime
   model explicitly rejected as non-user, empty transcripts, utterances not
-  addressed to the device (no wake word / outside the follow-up window), and a
-  muted speaker.
+  addressed to the device (no wake word / outside the follow-up window), user
+  interruptions and missing real speech endpoints. Mute alone is not excluded
+  in schema 2.
 - **Failures stay in.** A valid command the device never served (the POST to
   os-server did not land — `failure_reason = 'dispatch_failed'`) is *eligible*
   and counts as `no_ack`. Excluding it would inflate the success rate with
@@ -563,6 +570,8 @@ CREATE TEMP FUNCTION param(params ANY TYPE, k STRING) AS (
 -- KPI-1: acknowledged within 3s, with the eligible sample count.
 WITH rows AS (
   SELECT
+    user_pseudo_id AS device_id,
+    COALESCE(SAFE_CAST(param(data.event_params, 'ack_schema_version') AS INT64), 1) AS ack_schema_version,
     param(data.event_params, 'interaction_id')     AS interaction_id,
     param(data.event_params, 'eligible')           AS eligible,
     param(data.event_params, 'outcome')            AS outcome,
@@ -581,13 +590,14 @@ WITH rows AS (
 i AS (
   SELECT * EXCEPT(rn) FROM (
     SELECT *, ROW_NUMBER() OVER (
-      PARTITION BY interaction_id
+      PARTITION BY device_id, interaction_id, ack_schema_version
       ORDER BY COALESCE(revision, 0) DESC, IF(amends != '', 1, 0) DESC, event_timestamp DESC
     ) AS rn
     FROM rows
   ) WHERE rn = 1
 )
 SELECT
+  ack_schema_version,
   COUNT(*) AS observed_interactions,
   COUNTIF(endpoint_known = 'true') AS endpoint_known_interactions,
   COUNTIF(endpoint_known = 'false') AS endpoint_unknown_interactions,
@@ -598,21 +608,38 @@ SELECT
   CASE WHEN COUNTIF(eligible = 'true') = 0 THEN NULL      -- no eligible samples => N/A
        ELSE ROUND(100 * COUNTIF(eligible = 'true' AND outcome = 'acknowledged' AND ack_ms <= 3000) / COUNTIF(eligible = 'true'), 2)
   END AS kpi1_pct
-FROM i;
+FROM i
+GROUP BY ack_schema_version;
 ```
 
 ```sql
--- How long users actually wait for the ANSWER, not for the "one moment".
--- Read next to KPI-1: a fast ack with a null answer means the device was
--- polite, not useful.
+-- Actual answer latency, separate from processing acknowledgement.
+-- NO_REPLY tasks can legitimately have no spoken answer.
+WITH latest AS (
+  SELECT
+    user_pseudo_id AS device_id,
+    COALESCE(SAFE_CAST(param(data.event_params, 'ack_schema_version') AS INT64), 1) AS ack_schema_version,
+    param(data.event_params, 'eligible') AS eligible,
+    SAFE_CAST(param(data.event_params, 'answer_latency_ms') AS INT64) AS answer_ms,
+    ROW_NUMBER() OVER (
+      PARTITION BY user_pseudo_id, param(data.event_params, 'interaction_id'),
+        COALESCE(SAFE_CAST(param(data.event_params, 'ack_schema_version') AS INT64), 1)
+      ORDER BY COALESCE(SAFE_CAST(param(data.event_params, 'task_revision') AS INT64), 0) DESC,
+        IF(param(data.event_params, 'amends_event_id') != '', 1, 0) DESC, event_timestamp DESC
+    ) AS rn
+  FROM event_tracking
+  WHERE event_name = 'voice_metrics_interaction'
+    AND event_timestamp >= UNIX_SECONDS(TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY))
+)
 SELECT
-  COUNT(*)                                                   AS eligible,
-  COUNTIF(param(data.event_params, 'answer_latency_ms') IS NULL) AS acked_but_never_answered,
-  APPROX_QUANTILES(SAFE_CAST(param(data.event_params, 'answer_latency_ms') AS INT64), 100)[OFFSET(50)] AS median_answer_ms,
-  APPROX_QUANTILES(SAFE_CAST(param(data.event_params, 'answer_latency_ms') AS INT64), 100)[OFFSET(90)] AS p90_answer_ms
-FROM event_tracking
-WHERE event_name = 'voice_metrics_interaction'
-  AND param(data.event_params, 'eligible') = 'true';
+  ack_schema_version,
+  COUNT(*) AS eligible,
+  COUNTIF(answer_ms IS NULL) AS no_observed_answer,
+  APPROX_QUANTILES(answer_ms, 100)[OFFSET(50)] AS median_answer_ms,
+  APPROX_QUANTILES(answer_ms, 100)[OFFSET(90)] AS p90_answer_ms
+FROM latest
+WHERE rn = 1 AND eligible = 'true'
+GROUP BY ack_schema_version;
 ```
 
 ```sql
@@ -794,8 +821,9 @@ and `platform` is `device` (see `system/lib/analytics`).
 - **Stale detection is playback-level, not sample-level.** It observes audio
   intervals crossing the grace boundary; it cannot say how many milliseconds
   of PCM were still in the hardware buffer.
-- **Audio handed to the driver, not sound in the room.** The ack point is the
-  first stream write; ALSA/Bluetooth buffering after it is not measured.
+- **Audio handed to the driver, not sound in the room.** Audio-based ack and
+  `audio_latency_ms` use the first write; ALSA/Bluetooth buffering is not measured.
+  Processing acceptance proves neither audio playback nor task completion.
 - **Unclaimed playback is unattributed by design.** It is counted
   (`unknown_owner_playbacks`) and excluded from ack decisions rather than
   guessed at.
