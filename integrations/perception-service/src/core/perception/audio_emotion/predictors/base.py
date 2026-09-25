@@ -24,7 +24,7 @@ from core.perception.audio_emotion.length import fit_length
 from core.perception.base import PredictorBase
 from core.utils.common import get_or_default
 from core.utils.files import ensure_downloaded
-from core.utils.runtime import TrtProfile, prepare_ort_session
+from core.utils.runtime import prepare_ort_session
 
 
 class AudioEmotionRecognizer(PredictorBase[Audio, RawAudioEmotionDetection]):
@@ -122,24 +122,18 @@ class AudioEmotionRecognizer(PredictorBase[Audio, RawAudioEmotionDetection]):
         self._processor = self._processor_factory.create()
         self._processor.start()
         self._logger.info("Loading model from %s", self._model_path)
+        # Warm up at both ends of the input bound. Every request is fit to
+        # [min_samples, max_samples] at batch 1, and both shapes sit inside
+        # the engine's shape range, so no request can trigger a TensorRT
+        # rebuild (#492). With a cached engine (prod: 32000-549120 samples,
+        # batch 1-4) nothing is rebuilt at startup either; on a host without
+        # a cache the builds happen here, before any traffic.
         name = self.ONNX_INPUT_NAME
-        lo, hi = self.min_samples, self.max_samples
-        # opt = max: HAL uploads the most-voiced 8 s span, so most traffic sits
-        # at or near the cap.
-        profile = TrtProfile(
-            min_shapes=f"{name}:1x{lo}",
-            opt_shapes=f"{name}:1x{hi}",
-            max_shapes=f"{name}:1x{hi}",
-        )
         warmup = [
-            {name: np.zeros((1, lo), dtype=np.float32)},
-            {name: np.zeros((1, hi), dtype=np.float32)},
+            {name: np.zeros((1, self.min_samples), dtype=np.float32)},
+            {name: np.zeros((1, self.max_samples), dtype=np.float32)},
         ]
-        self._session = prepare_ort_session(
-            self._model_path,
-            warmup_inputs=warmup,
-            trt_profile=profile,
-        )
+        self._session = prepare_ort_session(self._model_path, warmup_inputs=warmup)
         self._class_names = self._load_classes(self._labels_path)
         self._running = True
         self._logger.info("Ready — %d emotion classes", len(self._class_names))

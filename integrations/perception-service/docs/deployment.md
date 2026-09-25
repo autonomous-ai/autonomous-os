@@ -217,8 +217,8 @@ The wrapper now polls `--probe-url` alongside `wait`:
 it ever served a request, and it would never finish booting.
 
 **A boot that (re)builds a TensorRT engine needs more grace than that.** This
-happens on the first boot after a change to the SER TensorRT profile (shape
-bounds, fp16, optimization level) or after a TensorRT/ORT upgrade — the
+happens when the engine cache under `trt_engines/` is missing or invalidated —
+a new host, a cleared cache, or a TensorRT/ORT upgrade — and the
 emotion2vec-large engine build alone can take 30-70 s on top of the normal
 ~2-3 minute model load. `PROBE_GRACE` is a plain env var read by
 `run-with-restart.sh` (`scripts/run-with-restart.sh`, `PROBE_GRACE=${PROBE_GRACE:-180}`),

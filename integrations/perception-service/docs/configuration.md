@@ -150,9 +150,8 @@ them to the GPU predictor in batches. Two knobs per model:
 
 Both default to `1` / `0.1` when omitted. The predictor's ONNX warmup runs at
 `BATCH_SIZE` so TensorRT pre-allocates the right amount of VRAM. SER is the
-exception: it warms up at batch 1 with two shapes (2 s and 8 s), matching the
-fixed TensorRT profile built at startup (`min`/`opt`/`max` shapes both bound to
-`MIN_AUDIO_S`/`MAX_AUDIO_S`), not `SER__BATCH_SIZE`.
+exception: it warms up at batch 1 with two shapes (2 s and 8 s), the two ends of
+its input bound (`MIN_AUDIO_S`/`MAX_AUDIO_S`), not `SER__BATCH_SIZE`.
 
 Requests with different kwargs (e.g. different `classes` for object detection)
 are automatically grouped into separate sub-batches.
