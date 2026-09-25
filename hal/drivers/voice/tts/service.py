@@ -2439,14 +2439,25 @@ class TTSService:
                  for frequency in frequencies]
         return np.concatenate((notes[0], np.zeros(int(rate * 0.025)), notes[1])).astype(np.float32).reshape(-1, 1)
 
-    def _harness_result_chime_samples(self, rate: int):
-        """Soft 200 ms chord, distinct from capture's rising/falling notes."""
+    def play_harness_result_chime(self) -> bool:
+        """The Harness result cue on its own, for speech that does not come
+        from speak(harness_result=True) — a realtime-rendered announcement."""
+        return self._play_gesture_chime(
+            lambda rate: self._harness_result_chime_samples(rate, boosted=False)
+        )
+
+    def _harness_result_chime_samples(self, rate: int, *, boosted: bool = True):
+        """Soft 200 ms chord, distinct from capture's rising/falling notes.
+
+        boosted=False leaves the software gain to _play_gesture_chime, which
+        applies it itself.
+        """
         np = self._np
         t = np.arange(int(rate * 0.2)) / rate
         envelope = np.sin(np.pi * np.arange(len(t)) / max(1, len(t) - 1)) ** 2
         samples = 0.14 * envelope * (np.sin(2 * np.pi * 659.25 * t)
                                     + np.sin(2 * np.pi * 987.77 * t))
-        gain = self._backend.volume_boost if self._backend is not None else 1.0
+        gain = self._backend.volume_boost if (boosted and self._backend is not None) else 1.0
         return np.clip(samples * gain, -1.0, 1.0).astype(np.float32).reshape(-1, 1)
 
     def _write_harness_result_chime(self, stream, rate: int) -> bool:

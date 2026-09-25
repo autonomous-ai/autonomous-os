@@ -88,6 +88,15 @@ PREWARM_JOIN_TIMEOUT_S: float = 4.0
 # confirmed) without ever calling stream_output, which would otherwise pin the
 # marker True forever and disable parking until the next completed turn.
 TURN_IN_FLIGHT_MAX_S: float = 120.0
+# How long a user turn waits for a preempted announcement to finish draining
+# its response before committing, and how long that drain may take. Past it the
+# user turn goes ahead; flush_output() drops whatever the drain left behind.
+ANNOUNCE_DRAIN_S: float = 3.0
+# Silent-turn watchdog for an announcement. Nobody is waiting on it the way a
+# user waits on a reply, and the pipecat relay was measured at 11.6 s to first
+# token on a cold 12.5 k-token context (lamp-ee17, 2026-09-25) — past the
+# default receive timeout, which then spoke the fallback instead.
+ANNOUNCE_RECV_TIMEOUT_S: float = 20.0
 
 DELEGATE_TOOL_NAME: str = "delegate_to_main"
 DELEGATE_TOOL_DESCRIPTION: str = (
@@ -507,6 +516,12 @@ class RealtimeOrchestrator:
         # than losing its opening frames while Gemini establishes a clean session.
         self._rebuild_done: threading.Event = threading.Event()
         self._rebuild_done.set()
+        # Device-initiated announcements (see announce()). A user capture
+        # preempts one through _announce_stop; its commit waits on
+        # _announce_idle so the two never read the output queue together.
+        self._announce_stop: threading.Event | None = None
+        self._announce_idle: threading.Event = threading.Event()
+        self._announce_idle.set()
         summarizer: RealtimeSummarizer | None = None
         if config.REALTIME_SUMMARIZER_ENABLED:
             try:
@@ -852,8 +867,21 @@ class RealtimeOrchestrator:
         # capture that was dropped before it reached stream_output().
         self._skip_post_idle_recycle = False
         self._last_activity_monotonic = time.monotonic()
-        self._turn_in_flight = True
         self._turn_started_monotonic = time.monotonic()
+        # Mark the turn BEFORE looking for an announcement: announce() registers
+        # its stop event and then checks this flag, so one of the two always
+        # sees the other.
+        self._turn_in_flight = True
+        # The user always wins over a device announcement: stop it now, while
+        # they are still speaking, so it has drained before their commit.
+        stop = getattr(self, "_announce_stop", None)
+        if stop is not None and not stop.is_set():
+            logger.info("[realtime] User capture preempts the running announcement")
+            stop.set()
+        self._prepare_session()
+
+    def _prepare_session(self) -> None:
+        """Resume/replace the provider session so the next input reaches a live one."""
         provider: str = config.REALTIME_PROVIDER.strip().lower()
         agent = getattr(self, "_agent", None)
         if getattr(self, "_idle_parked", False):
@@ -1272,6 +1300,9 @@ class RealtimeOrchestrator:
         Prevents a stale response (from an earlier, possibly noise-triggered turn)
         being read and spoken on the current turn — see VoiceAgentBase.flush_output.
         """
+        idle = getattr(self, "_announce_idle", None)
+        if idle is not None and not idle.wait(timeout=ANNOUNCE_DRAIN_S):
+            logger.warning("[realtime] Announcement still draining — committing anyway")
         if turn is not None:
             self._validate_audio_turn(turn).flush_output()
             return
@@ -1616,6 +1647,125 @@ class RealtimeOrchestrator:
             self._idle_reset_pending = False
             self._turns_since_recycle = 0
             self._force_rebuild()
+
+    # --- Device-initiated announcements ---
+
+    @property
+    def turn_in_flight(self) -> bool:
+        """A user turn is between prepare_turn() and the end of its reply."""
+        return bool(
+            getattr(self, "_turn_in_flight", False)
+            and time.monotonic() - getattr(self, "_turn_started_monotonic", 0.0)
+            < TURN_IN_FLIGHT_MAX_S
+        )
+
+    def finish_capture(self) -> None:
+        """HAL has finished processing a capture; none of its output is still read here.
+
+        A delegated reply arrives later through TTS, which the announcer's own
+        speaking gate covers. A preempting announcement, if any, has already
+        stopped — prepare_turn() ran at the capture's start.
+        """
+        self._turn_in_flight = False
+
+    @property
+    def parked(self) -> bool:
+        """The idle watchdog closed the transport; the next turn reconnects."""
+        return bool(getattr(self, "_idle_parked", False))
+
+    @property
+    def supports_announce(self) -> bool:
+        """Whether the configured provider can speak an announcement at all."""
+        agent = self._agent
+        return bool(self._started.is_set() and agent is not None and agent.supports_announce)
+
+    def prepare_announcement(self, *, allow_resume: bool) -> bool:
+        """Ready the session for announce(); False means render it without us.
+
+        allow_resume=False refuses to reconnect a parked session (a progress
+        line is not worth a handshake). Otherwise this resumes/replaces the
+        session exactly as a user turn would, synchronously.
+        """
+        if not self.supports_announce or self.turn_in_flight:
+            return False
+        if self.parked and not allow_resume:
+            return False
+        if self.rebuilding:
+            self._rebuild_done.wait(timeout=PREWARM_JOIN_TIMEOUT_S)
+            if self.turn_in_flight:
+                return False
+        self._last_activity_monotonic = time.monotonic()
+        self._prepare_session()
+        agent = self._agent
+        if agent is not None and getattr(agent, "_activity_started", False):
+            # Manual-VAD Gemini with an activity no capture owns any more (a
+            # capture that ended without a commit). Text sent into it would
+            # split that activity, so the provider refuses the announcement;
+            # replace the session as discard_open_activity does for noise.
+            logger.info("[realtime] Abandoned activity open — fresh session before announcing")
+            self._rebuild_now("announce-abandoned-activity", discard_old_on_failure=True)
+            agent = self._agent
+        return bool(
+            self.available and agent is not None and agent.available
+            and agent.supports_announce and not agent.requires_fresh_session
+        )
+
+    def announce(
+        self, text: str, *, stop_event: threading.Event,
+    ) -> Generator[OutputBase | DelegateSignal | RejectSignal | LookReplaySignal, None, None]:
+        """Speak a device-initiated update; yields like stream_output().
+
+        Call prepare_announcement() first. A user capture sets stop_event (via
+        prepare_turn); the generator then stops yielding and drains the rest of
+        this response so it cannot leak into the user's turn.
+        """
+        agent = self._agent
+        if agent is None:
+            return
+        self._announce_idle.clear()
+        self._announce_stop = stop_event
+        try:
+            if self.turn_in_flight:
+                # A capture began after prepare_announcement(); it owns the session.
+                logger.info("[realtime] Announcement skipped — a user turn just started")
+                stop_event.set()
+                return
+            agent.flush_output()
+            if not agent.announce(text):
+                return
+            agent.extend_recv_timeout(ANNOUNCE_RECV_TIMEOUT_S)
+            now = time.monotonic()
+            self._last_activity_monotonic = now
+            self._turn_in_flight = True
+            self._turn_started_monotonic = now
+            logger.info("[realtime] Announcement sent (%d chars)", len(text))
+            yield from self.stream_output(stop_event=stop_event)
+            if stop_event.is_set():
+                self._drain_announcement(agent)
+        finally:
+            # A preempted receive() keeps its watchdog override; the user's
+            # turn must start from the default.
+            agent._recv_timeout_override_s = None
+            self._announce_stop = None
+            self._announce_idle.set()
+
+    @staticmethod
+    def _drain_announcement(agent: VoiceAgentBase) -> None:
+        """Read a preempted announcement to its end so none of it is spoken later."""
+        drain_stop = threading.Event()
+        timer = threading.Timer(ANNOUNCE_DRAIN_S, drain_stop.set)
+        timer.daemon = True
+        timer.start()
+        dropped = 0
+        try:
+            for _ in agent.receive(stop_on_done=True, stop_event=drain_stop):
+                dropped += 1
+        except Exception:
+            logger.exception("[realtime] Announcement drain failed")
+        finally:
+            timer.cancel()
+        agent.end_turn()
+        logger.info("[realtime] Preempted announcement drained (%d output(s) dropped)", dropped)
 
     def _handle_web_search_call(self, output: FunctionCallOutput) -> None:
         """Answer the model's `web_search` call with a grounded result.
