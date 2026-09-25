@@ -487,6 +487,10 @@ Cần sensing có camera (InsightFace). Mặc định ảnh người đã đăng
 `POST /api/voice/preview` nhận `speed` tùy chọn (`0.25–4.0`), chuyển tới HAL
 `/voice/speak` cho riêng câu thử không dùng cache. Không lưu tốc độ hoặc thay
 đổi tốc độ chung của service; bỏ qua field thì dùng tốc độ runtime hiện tại.
+`provider` / `voice` (+ `tts_api_key` / `tts_base_url`) trên `/voice/speak` cũng
+vậy: HAL dựng backend preview cho riêng câu đó, service đang chạy giữ nguyên
+provider, backend và voice đã lưu. Chúng chỉ dùng với câu không cache (`400` nếu
+kèm `cached`/`prerender`). Áp dụng cho **Test Voice** trên web và MQTT `tts.preview`.
 
 `GET /api/device/config` trả `tts_speed` hiệu lực; `PUT /api/device/config`
 nhận `{"tts_speed":1.2}`. Field tùy chọn nhận `0.25–4.0`; bỏ qua thì giữ
@@ -511,6 +515,15 @@ voice dựng sẵn đa ngôn ngữ của Gemini nên bộ lọc ngôn ngữ khô
 không có tham số speed: HAL áp dụng tốc độ đã lưu tại chỗ, giống ElevenLabs HTTP
 v3. Audio tag trong ngoặc vuông bị bỏ. Trong Settings → Voice, đây là vendor thứ
 ba dưới `Autonomous (proxy)`.
+
+Khi chọn Gemini TTS và realtime provider là Gemini Live, các câu chit-chat do
+model Live tự trả lời được phát bằng **native audio với đúng voice TTS**, không
+gọi TTS (`native_voice()` trong `hal/drivers/voice/tts/gemini.py`), bất kể
+`HAL_REALTIME_NATIVE_AUDIO`. Session Live mở bằng voice TTS thay vì
+`realtime.gemini.voice`; đổi voice hoặc provider thì session được dựng lại trước
+lượt kế tiếp (`gemini-voice-change`). Câu trả lời delegate vẫn đọc bằng Gemini
+TTS. Native audio phát ở 1.0×; tốc độ TTS đã lưu chỉ áp dụng cho TTS. Provider
+TTS khác thì native audio giữ nguyên như cấu hình.
 
 ### Piper — TTS chạy trên thiết bị
 
