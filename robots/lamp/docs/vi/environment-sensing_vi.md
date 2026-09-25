@@ -348,32 +348,60 @@ Cấu hình này tách biệt thời gian HAL trong JSON từng component. Giá 
     "initial_report": true,
     "evaluate_interval_s": 10,
     "sustain_s": 60,
-    "cooldown_s": 900,
+    "cooldown_s": 1800,
     "retry_interval_s": 60,
     "max_sample_age_s": 10,
     "metrics": {
-      "pm1_0_ug_m3": {"delta": 10, "warmup_s": 60},
-      "pm2_5_ug_m3": {"delta": 10, "warmup_s": 60},
-      "pm4_0_ug_m3": {"delta": 15, "warmup_s": 60},
-      "pm10_ug_m3": {"delta": 15, "warmup_s": 60},
-      "temperature_c": {"delta": 2, "warmup_s": 60},
-      "humidity_pct": {"delta": 10, "warmup_s": 60},
-      "voc_index": {"delta": 50, "warmup_s": 3600},
-      "nox_index": {"delta": 20, "warmup_s": 21600},
-      "co2_ppm": {"delta": 200, "warmup_s": 60}
+      "pm1_0_ug_m3": {"delta": 10, "relative_delta_pct": 20, "warmup_s": 60},
+      "pm2_5_ug_m3": {"delta": 10, "relative_delta_pct": 20, "warmup_s": 60, "comfort": {"above": 35, "hysteresis": 5, "sustain_s": 300}},
+      "pm4_0_ug_m3": {"delta": 25, "relative_delta_pct": 25, "warmup_s": 60},
+      "pm10_ug_m3": {"delta": 25, "relative_delta_pct": 25, "warmup_s": 60},
+      "temperature_c": {"delta": 2, "relative_delta_pct": 0, "warmup_s": 60, "comfort": {"below": 19, "above": 27, "hysteresis": 1, "sustain_s": 300}},
+      "humidity_pct": {"delta": 10, "relative_delta_pct": 0, "warmup_s": 60, "comfort": {"below": 35, "above": 65, "hysteresis": 5, "sustain_s": 300}},
+      "voc_index": {"delta": 50, "relative_delta_pct": 0, "warmup_s": 3600},
+      "nox_index": {"delta": 20, "relative_delta_pct": 0, "warmup_s": 21600},
+      "co2_ppm": {"delta": 200, "relative_delta_pct": 20, "warmup_s": 60, "comfort": {"above": 1000, "hysteresis": 150, "sustain_s": 300}}
     }
   }
 }
 ```
 
-`delta` dùng đơn vị của số đo (độ ẩm dùng điểm phần trăm). Đây là mặc định
-phát hiện thay đổi, **không phải giới hạn y tế hay mức chất lượng không khí
-tuyệt đối**. Bỏ cả object thì dùng mặc định. Trong object được gửi, trường
-cấp cao nhất bị bỏ qua dùng mặc định; gửi `metrics` sẽ thay toàn bộ map chỉ số,
-cho phép chỉ theo dõi một nhóm. Mỗi rule cần `delta` dương hữu hạn;
-trường bị bỏ trong rule dùng mặc định của chỉ số đó. Trường hoặc map có null
-tường minh, map rỗng, trường hoặc chỉ số lạ bị từ chối. Config mới lưu đầy đủ
-object mặc định; config cũ thiếu object dùng mặc định mà không tự ghi lại.
+`EnvironmentMetricRule.delta` là mức sàn tuyệt đối dương, hữu hạn, theo đơn
+vị số đo (độ ẩm dùng điểm phần trăm). `relative_delta_pct` hữu hạn, trong
+khoảng 0–100 kể cả hai đầu. Ngưỡng thay đổi hiệu dụng là
+`max(delta, abs(accepted_baseline) * relative_delta_pct / 100)`; bằng ngưỡng
+vẫn đủ điều kiện. Dùng cùng ngưỡng cho tăng và giảm đến khi event được chấp
+nhận cập nhật baseline của chỉ số đó. PM2.5 baseline 200 có ngưỡng 40: 220
+không đủ, 240 hoặc 160 có thể đủ. CO₂ baseline 2000 có ngưỡng 400: 2200
+không đủ, 2400 hoặc 1600 có thể đủ. Vẫn áp dụng mọi điều kiện readiness,
+duy trì và dispatch khác.
+
+Đây là **heuristic sản phẩm tạm thời, không phải giới hạn y tế hay chất lượng
+không khí tuyệt đối**. Bỏ cả object environment hoặc cả map `metrics` thì
+dùng mặc định mới ở trên. Gửi `metrics` thay toàn bộ map, cho phép chỉ theo
+dõi một nhóm. Trong rule được gửi, thiếu `delta` hoặc `warmup_s` thì dùng mặc
+định của chỉ số; riêng thiếu `relative_delta_pct` cố ý nghĩa là **0**, giữ
+hành vi ngưỡng tuyệt đối cũ. Thiếu `comfort` trong rule được gửi nghĩa là
+không có rule comfort, không kế thừa mặc định mới. Trường environment bị bỏ dùng mặc định. Từ chối
+null tường minh, map rỗng, trường/chỉ số lạ và số không hợp lệ. Config mới lưu
+đầy đủ object mặc định, kể cả `relative_delta_pct: 0` khi áp dụng.
+
+Không tự ghi lại rule đã lưu: `delta: 15` cũ của bụi thô và trường tương đối
+bị thiếu vẫn lần lượt là 15 và 0. Để áp dụng toàn bộ chính sách khuyến nghị,
+cập nhật `os-server` trước (không cần sửa HAL), đọc config hiện tại, rồi ghép
+thiết lập environment khuyến nghị với lựa chọn mong muốn của người dùng.
+Chỉ gửi `{"environment": <object environment mong muốn đầy đủ>}` qua admin
+`PUT /api/device/config`; không gửi lại toàn bộ kết quả GET vì có thể chứa
+credential đã che. Bỏ `metrics` dùng mặc định; gửi `metrics` thay map nên cần
+giữ đủ rule mong muốn trong object. Kiểm tra giá trị đã lưu bằng
+`GET /api/device/config`.
+Lưu bản sao config trước khi nâng cấp: `os-server` cũ từ chối trường mới
+`relative_delta_pct` và `comfort` do giải mã JSON nghiêm ngặt. Trước khi rollback,
+khôi phục config cũ hoặc bỏ cả hai trường mới khỏi mọi chỉ số, kể cả trường
+tương đối có giá trị 0.
+Chỉ upload skill không thay đổi được policy Go này.
+Tài liệu này không triển khai hoặc ghi lại cấu hình thiết bị.
+
 Chu kỳ đánh giá, duy trì, retry và tuổi mẫu tối đa phải từ 1–86400 giây;
 duy trì và retry không nhỏ hơn chu kỳ đánh giá. Cooldown cho phép 0–604800
 giây, warm-up 0–86400 giây. Sửa lúc chạy áp dụng ở tick worker tiếp theo
@@ -391,11 +419,47 @@ mẫu thành công mới nhất trong đợt thu nhận liên tục. Giá trị 
 hợp lệ, stale hoặc lỗi, và reset khi thu nhận bị gián đoạn. OS dùng thông tin
 liên tục này cùng thời gian quan sát hợp lệ local để đáp ứng warm-up khi chỉ
 OS restart; HAL cũ thiếu trường này dùng quan sát local. Vẫn kiểm tra độ mới và
-tính hợp lệ từng chỉ số; chỉ biết component đã chạy lâu là chưa đủ. Chênh lệch phải đạt `delta` cùng chiều trong `sustain_s`;
+tính hợp lệ từng chỉ số; chỉ biết component đã chạy lâu là chưa đủ. Chênh lệch phải đạt ngưỡng hiệu dụng cùng chiều trong `sustain_s`;
 giảm dưới mức chênh lệch hoặc đảo chiều sẽ reset thời gian đang chờ.
 Chỉ số null reset warm-up/baseline riêng; snapshot không khả dụng hay lỗi đọc
 reset số đo của mọi chỉ số. Khoảng gián đoạn lớn cũng reset tính liên tục.
 Warm-up là thời gian chờ của OS, không chứng nhận cảm biến đã hiệu chuẩn.
+
+Mỗi chỉ số có thể thêm `comfort` gồm số `below` và/hoặc `above` tùy chọn,
+cùng `hysteresis` và `sustain_s`. Mặc định khuyến nghị ở trên bật nhiệt độ
+(dưới 19/trên 27, hysteresis 1), độ ẩm (dưới 35/trên 65, hysteresis 5), CO₂
+đo thật (trên 1000, hysteresis 150) và PM2.5 (trên 35, hysteresis 5); tất cả
+yêu cầu 300 giây. Chỉ số khác không có nhánh này. Cần ít nhất một cận hữu
+hạn; có cả hai thì `below < above`. `hysteresis` phải hữu hạn, dương; với hai
+cận không lớn hơn nửa khoảng cách giữa chúng. `sustain_s` trong khoảng từ
+`evaluate_interval_s` đến 86400. `comfort: null` tường minh không hợp lệ;
+bỏ trường này tắt nhánh trong rule được gửi. Nhánh chạy độc lập với điều
+kiện delta sau kiểm tra readiness/warm-up.
+
+Ứng viên cao cần `current > above`; thấp cần `current < below`. Bằng ngưỡng
+kích hoạt không đủ điều kiện. Sau trạng thái cao được chấp nhận, phục hồi cần
+`current <= above - hysteresis`; sau trạng thái thấp được chấp nhận, phục hồi
+cần `current >= below + hysteresis`. Phục hồi cũng phải duy trì cùng 300 giây
+với rule khuyến nghị. Cho phép chuyển kéo dài trực tiếp sang trạng thái đối
+ngược. Dispatch comfort được chấp nhận chốt trạng thái mới; không thông báo
+lặp khi vẫn ở trạng thái đã xác nhận đó. Dispatch bị từ chối giữ chuyển trạng
+thái đang chờ. Event chỉ có delta không reset comfort. Dữ liệu thiếu, không
+hợp lệ hoặc nguồn reset sẽ xóa trạng thái comfort tương ứng.
+
+Event chỉ có comfort có thể có `changes: {}` và thêm map `comfort` theo tên
+chỉ số. Mỗi entry chứa `state` (`high`, `low` hoặc `recovered`),
+`previous_state` (`normal`, `high` hoặc `low`), `current`, `current_at`,
+`threshold`, `sustained_s` và `source` tùy chọn. Các trường delta hiện có và
+`reason: "initial"` không đổi. Bản tin ban đầu không xác nhận trạng thái
+comfort, nên tình trạng kéo dài về sau có thể tạo thông báo. Hai nhánh dùng
+chung cooldown 1800 giây (30 phút) cùng các điều kiện retry, busy, sleep và
+conversation floor. Khoảng nghỉ này ưu tiên ít làm gián đoạn công việc; đây là
+lựa chọn sản phẩm tạm thời, không phải tiêu chuẩn sức khỏe. Người dùng chủ động
+hỏi trạng thái không phải chờ cooldown. Giá trị cooldown đã lưu tường minh
+vẫn được giữ; đặt `cooldown_s: 1800` trong config environment hiện có để áp dụng. Bản tin khởi động được chấp nhận cũng bắt đầu cooldown: tình trạng đủ
+năm phút có thể phải chờ thêm trước dispatch. Không bảo đảm phản hồi kịp thời
+hay xử lý khẩn cấp sức khỏe. Skill diễn giải event comfort bằng lời thông
+thường; payload số không phải kịch bản để đọc thành tiếng.
 
 `environment.initial_report` mặc định `true`. Lời chào hệ thống không chờ sensor
 hay gọi HAL: chỉ có thể đính kèm snapshot còn mới, đủ warm-up đã cache trong
@@ -448,6 +512,88 @@ readiness, độ mới và từng giá trị null. Thiếu capability trả HTTP
 đọc/định dạng HAL trả HTTP 502. Snapshot disabled/error/stale vẫn có thể là
 response chẩn đoán thành công. Browser và MQTT tiếp tục dùng route xác thực
 hiện có.
+
+## Căn cứ và kiểm chứng chính sách tạm thời
+
+Nguồn được xem lại ngày **2026-09-25**.
+[Datasheet SEN6x v0.92, tháng 12/2025, §§1.2, 1.3, 1.5.2](https://sensirion.com/media/documents/FAFC548D/693FBB15/PS_DS_SEN6x.pdf)
+nêu precision PM1/PM2.5 là ±(5 µg/m³ + 5% số đo) đến 100 µg/m³, sau đó
+±10%; PM4/PM10 là ±25 µg/m³, sau đó ±25%. Đây là biến thiên giữa các linh
+kiện, không phải nhiễu theo thời gian; đầu ra bụi thô được tính toán.
+Repeatability nhiệt độ là 0,1°C, độ ẩm ±1 điểm phần trăm trong điều kiện quy
+định. Accuracy CO₂ của SEN63C là ±(100 ppm + 10% số đo) trong 400–5000 ppm,
+đáp ứng τ63 điển hình 60 giây; không dùng repeatability SEN66 thay thế.
+Accuracy yêu cầu chạy ban đầu 12 giờ rồi tiếp xúc không khí tươi, đồng thời
+hoạt động liên tục với ASC và tiếp xúc không khí tươi hàng tuần.
+
+[Hướng dẫn kiểm tra và đánh giá SEN6x v1.0, tháng 7/2026](https://sensirion.com/media/documents/AE5564E4/6A58BFB5/PS_AN_SEN6x_Testing_And_Evaluation_Guide_D1.pdf)
+phân biệt kiểm tra tích hợp với đánh giá trong phòng thí nghiệm; kết quả phụ
+thuộc setup và tích hợp có thể ảnh hưởng nhiệt độ/độ ẩm.
+[Hướng dẫn dùng máy đo CO₂ của HSE](https://www.hse.gov.uk/ventilation/using-co2-monitors.htm)
+ủng hộ quan sát nhiều lần và chú ý vị trí đặt, không coi một số đo là kết luận
+về thông gió. Không nguồn nào quy định chính sách event này.
+
+Cần tách riêng ba quyết định:
+
+| Khái niệm | Điều khiển gì | Căn cứ và giới hạn |
+|---|---|---|
+| Policy delta OS | Thay đổi kéo dài có đáng tạo event không | Heuristic sản phẩm theo baseline ở trên; không phân loại nồng độ hay sức khỏe. |
+| Ngưỡng thoải mái trong phòng | Diễn đạt thân mật và hỗ trợ đồng hành kéo dài | Ngưỡng người dùng chọn trong `skills/environment/reference/room-comfort.md`, cũng dùng cho nhánh comfort tùy chọn; không phải ngưỡng WHO. |
+| Hướng dẫn phơi nhiễm | Diễn giải theo kỳ lấy trung bình xác định | Cần lịch sử, độ bao phủ và kiểm chứng phù hợp; bộ phát hiện snapshot/thay đổi này chưa triển khai. |
+
+[Hướng dẫn chất lượng không khí WHO 2021](https://www.who.int/news-room/questions-and-answers/item/who-global-air-quality-guidelines)
+đưa mức PM2.5 trung bình năm/24 giờ là 5/15 µg/m³ và PM10 là 15/45 µg/m³;
+khuyến nghị 24 giờ dùng phân vị 99. Đây không phải ngưỡng snapshot tức thời
+hay delta.
+[AQI hiện tại của AirNow](https://www.airnow.gov/aqi/aqi-basics/using-air-quality-index/)
+dùng quan sát theo giờ và NowCast, không dùng một giá trị sensor đơn lẻ.
+[EPA về máy đo không khí trong nhà giá thấp](https://www.epa.gov/indoor-air-quality-iaq/low-cost-air-pollution-monitors-and-indoor-air-quality)
+nêu chưa có giới hạn nồng độ trong nhà được chấp nhận rộng rãi cho đa số
+chất ô nhiễm, và nhà sản xuất đặt mức cảnh báo của máy đo.
+
+[Quan điểm ASHRAE 2025 về CO₂ trong nhà](https://www.ashrae.org/file%20library/about/position%20documents/pd-on-indoor-carbon-dioxide-english.pdf)
+không coi Standard 62.1 là giới hạn 1000 ppm chung hay CO₂ là đại diện cho
+toàn bộ chất lượng không khí trong nhà. Hướng dẫn HSE về mức liên tục trên
+1500 ppm trong phòng có người nhằm cải thiện thông gió, không phải ranh giới
+an toàn.
+[Khoảng độ ẩm ưu tiên 30–50% của EPA](https://www.epa.gov/indoor-air-quality-iaq/care-your-air-guide-indoor-air-quality)
+là khuyến nghị điều kiện phòng, không phải delta thay đổi độ ẩm.
+
+Thay đổi này triển khai thông báo thay đổi và tình trạng thoải mái kéo dài
+có giới hạn, không phải bộ theo dõi phơi nhiễm. Chưa có lịch sử 24 giờ ở đây để xác lập vượt ngưỡng WHO hay
+phơi nhiễm đạt hướng dẫn từ snapshot. Theo dõi phơi nhiễm sau này cần lịch sử
+có timestamp, quy tắc độ bao phủ, lấy trung bình và kiểm chứng; chưa tuyên bố
+đã hoàn tất. Không đổi nhãn ngưỡng diễn đạt do người dùng chọn thành khuyến
+nghị WHO.
+
+Mức sàn tuyệt đối, tỷ lệ phần trăm, đánh giá mỗi 10 giây, duy trì 60 giây,
+cooldown 1800 giây, retry 60 giây và tuổi mẫu tối đa 10 giây đều là **heuristic
+sản phẩm**, không phải thiết lập do hãng quy định hay bảo đảm loại hết nhiễu.
+Warm-up không phải hiệu chuẩn. Mức sàn bụi thô lớn hơn và biên tương đối là
+ứng xử tạm thời trước giới hạn đo, không phải bảo đảm đã hiệu chỉnh ngoài
+thực tế. Ngưỡng lâm sàng không điều khiển bộ phát hiện này. Nhánh comfort bên trên
+dùng ngưỡng diễn đạt người dùng đã chấp thuận để hỗ trợ liên tục về phòng,
+không dùng giới hạn phơi nhiễm; thời gian năm phút và hysteresis là lựa chọn
+sản phẩm tường minh, chưa kiểm chứng thực tế hay được nguồn trích dẫn chứng nhận.
+
+Chỉ số bật comfort có thể thông báo tình trạng cao/thấp kéo dài dù không có
+delta. Rule cũ không có `comfort` vẫn không thông báo mức đứng yên sau bản tin
+ban đầu. Đây là tính năng đồng hành về sự thoải mái, không phải báo động sức
+khỏe hay chứng nhận an toàn liên tục; khởi động và câu hỏi trực tiếp vẫn là
+luồng riêng.
+
+Trước khi tuyên bố đã kiểm chứng thực tế, ghi log thụ động hoạt động bình
+thường trên nhiều thiết bị, phòng và ngày: giữ timestamp, trạng thái component,
+độ mới từng chỉ số, config thực tế, baseline được chấp nhận, chiều thay đổi
+đang chờ, ngưỡng, kết quả dispatch và thay đổi tự nhiên trong phòng. Replay
+cùng log qua policy cũ và mới; so số event ứng viên/được nhận, thông báo lặp,
+độ trễ và thay đổi đã chú thích bị bỏ sót. Replay offline gồm comfort cao/thấp
+đứng yên, phục hồi kéo dài, chuyển thẳng sang trạng thái đối ngược, hành vi
+chốt trạng thái, bằng ngưỡng, hai chiều, baseline cao, khoảng stale, restart, dispatch queued/bị từ
+chối và cooldown. Xem kết quả theo từng chỉ số/thiết bị, rồi điều chỉnh có
+chủ đích dựa trên bằng chứng đã ghi. Không tạo khói, aerosol hay thử bằng hơi
+thở trong kế hoạch này; replay thụ động đánh giá hành vi thông báo, không
+chứng minh accuracy sensor hoặc an toàn y tế.
 
 ## Skill environment và use case well-being
 

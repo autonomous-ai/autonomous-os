@@ -220,8 +220,9 @@ export function TTSSection({
       : "elevenlabs");
 
   const speedMin = ttsProvider === "elevenlabs" ? 0.7 : 0.25;
-  const speedMax = ttsProvider === "elevenlabs" ? 1.2 : 4.0;
-  // Show the backend's effective rate without changing a saved legacy value
+  const speedMax = ttsProvider === "elevenlabs" ? 1.5 : 4.0;
+  // HTTP v3 applies tempo locally, so its slider can exceed the provider cap.
+  // Show the selectable rate without changing a saved legacy value
   // when the user edits another setting. Only a slider action changes it.
   const effectiveSpeed = Math.max(speedMin, Math.min(speedMax, ttsSpeed));
 
@@ -519,7 +520,7 @@ export function TTSSection({
           style={{ width: "100%", accentColor: C.green }}
         />
         <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 4 }}>
-          {speedMin}×–{speedMax}× · 1.0× normal. Save changes before testing speed.
+          {speedMin}×–{speedMax}× · 1.0× normal. Test Voice uses this speed immediately.
         </div>
         <TestVoiceButton
           voice={ttsVoice}
@@ -527,6 +528,7 @@ export function TTSSection({
           provider={ttsProvider}
           baseUrl={ttsBaseUrl}
           apiKey={ttsApiKey}
+          speed={effectiveSpeed}
           blockedReason={
             // Read from what the device has, not from what is selected. The
             // selection can still hold the previous provider's voice ("Rachel"),
@@ -549,7 +551,7 @@ export function TTSSection({
 // ("Playing on device") for ~2.5s → back to idle. Errors flip to a red
 // "Failed" state for the same window. Prior version fired-and-forgot with no
 // visual change — the operator saw nothing happen and clicked again.
-function TestVoiceButton({ voice, lang, provider, baseUrl, apiKey, blockedReason = "" }: {
+function TestVoiceButton({ voice, lang, provider, baseUrl, apiKey, speed, blockedReason = "" }: {
   voice: string;
   lang: string;
   provider: string;
@@ -563,6 +565,7 @@ function TestVoiceButton({ voice, lang, provider, baseUrl, apiKey, blockedReason
   // Empty strings fall back to saved config server-side.
   baseUrl: string;
   apiKey: string;
+  speed: number;
 }) {
   type Phase = "idle" | "loading" | "ok" | "error";
   const [phase, setPhase] = useState<Phase>("idle");
@@ -574,7 +577,7 @@ function TestVoiceButton({ voice, lang, provider, baseUrl, apiKey, blockedReason
     setPhase("loading");
     setErrorMsg("");
     try {
-      await testTTSVoice(voice, { lang, provider, baseUrl, apiKey });
+      await testTTSVoice(voice, { lang, provider, baseUrl, apiKey, speed });
       setPhase("ok");
       window.setTimeout(() => setPhase("idle"), 2500);
     } catch (err) {

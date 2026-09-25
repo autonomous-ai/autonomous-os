@@ -4,10 +4,12 @@ package hal
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -246,6 +248,12 @@ func SpeakReply(text string) error {
 	return postSpeak("/voice/speak", body)
 }
 
+// SpeakHarnessReply uses the normal voice with a turn-owned result earcon.
+func SpeakHarnessReply(text string) error {
+	body, _ := json.Marshal(map[string]any{"text": text, "realtime_feedback": true, "harness_result": true})
+	return postSpeak("/voice/speak", body)
+}
+
 // FeedRealtimeHistory records an agent reply with the realtime voice agent
 // WITHOUT speaking it. Needed for a reply the speaker never gets: a turn muted
 // by the physical cancel gesture keeps running and its text is still the
@@ -337,8 +345,12 @@ func SpeakCachedInterruptibleForTurn(text, turnID string) error {
 // the os-server reads the key server-side from config and passes it here. Each arg
 // can be empty: HAL falls back to its own config-loaded defaults when a
 // field is missing, so partial overrides (e.g. just voice) work.
-func SpeakPreview(text, voice, provider, apiKey, baseURL string) error {
+// An optional speed overrides the saved rate for this preview only.
+func SpeakPreview(text, voice, provider, apiKey, baseURL string, speed ...*float64) error {
 	payload := map[string]any{"text": text}
+	if len(speed) > 0 && speed[0] != nil {
+		payload["speed"] = *speed[0]
+	}
 	if voice != "" {
 		payload["voice"] = voice
 	}
@@ -719,7 +731,22 @@ func post(path string, body []byte) error {
 // response body and returns ErrSpeakerMuted when HAL reports the request was
 // suppressed (speaker muted). A malformed/unexpected body is NOT an error —
 // the speak itself succeeded, so decode failures are ignored.
-func postSpeak(path string, body []byte) error {
+func postSpeak(path string, body []byte) (err error) {
+	// Observe the final runtime-sanitized payload without adding wire fields.
+	var timing struct {
+		Text   string `json:"text"`
+		TurnID string `json:"turn_id"`
+	}
+	if json.Unmarshal(body, &timing) == nil && timing.Text != "" {
+		started := time.Now()
+		digest := sha256.Sum256([]byte(timing.Text))
+		textKey := fmt.Sprintf("%x", digest[:6])
+		slog.Info("[tts-timing] hal_post_start", "path", path, "run_id", timing.TurnID, "text_key", textKey)
+		defer func() {
+			slog.Info("[tts-timing] hal_post_complete", "path", path, "run_id", timing.TurnID,
+				"text_key", textKey, "http_ms", time.Since(started).Milliseconds(), "success", err == nil)
+		}()
+	}
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)

@@ -106,8 +106,12 @@ DELEGATE_TOOL_DESCRIPTION: str = (
     "Digital work also requires main even without naming Harness or an agent: "
     "building or editing software, models or CAD parts, engineering simulations, "
     "media or music creation, slides, spreadsheets and data analysis. When DEVICE "
-    "IDENTITY identifies Lamp, main defaults to harness-use for digital work and "
-    "selects an available suitable agent. Do not choose agents, invent Store "
+    "IDENTITY identifies Lamp, main prefers connected Harness for digital work. "
+    "For fresh tasks before dispatch with confirmed offline/unpaired Harness, main "
+    "uses its other available tools unless Harness or a remote target was explicitly "
+    "required. Existing remote tasks and uncertain delivery keep their recovery "
+    "rules; do not duplicate them. Always delegate digital work to main even when "
+    "Harness is unavailable; main decides fallback. Do not choose agents, invent Store "
     "operations or claim app readiness yourself. Music playback and physical "
     "device actions keep their existing skill routes; general knowledge questions "
     "remain direct answers. "
@@ -1293,6 +1297,7 @@ class RealtimeOrchestrator:
 
         self._looked_this_turn = False  # reset the per-turn `look` image-send guard
         produced = False  # did this turn yield any real output (vs stay silent)?
+        rejected = False
         replay_pending = False  # look-replay signalled — the turn continues
         receive_kwargs: dict[str, Any] = {"stop_on_done": True}
         if stop_event is not None:
@@ -1404,10 +1409,10 @@ class RealtimeOrchestrator:
                 isinstance(output, FunctionCallOutput)
                 and output.name == REJECT_TURN_TOOL_NAME
             ):
-                # A rejection is only safe before any user-visible output. The
-                # prompt requires this tool to be the whole turn; this guard
-                # prevents a malformed late call from hiding a real response.
-                if produced:
+                # LIVE output can be queued before the routing tool arrives.
+                # Honor explicit rejection so the consumer can cancel that turn
+                # before playback. Preserve the manual-turn late-call policy.
+                if produced and not config.LIVE_MODE:
                     logger.warning(
                         "[realtime] Ignoring reject_turn after output already began"
                     )
@@ -1423,6 +1428,7 @@ class RealtimeOrchestrator:
                     # second response after the model has already spoken.
                     self._agent.end_turn()
                     break
+                rejected = True
                 logger.info("[realtime] Model explicitly rejected this turn")
                 # Acknowledge like delegation so Gemini does not leave a pending
                 # tool call that poisons the next manual-VAD activity.
@@ -1509,6 +1515,7 @@ class RealtimeOrchestrator:
         self.execution_completed = (
             getattr(execution_agent, "execution_completed", False) is True
             and not replay_pending
+            and not rejected
         )
         self.execution_turn_id = getattr(execution_agent, "execution_turn_id", "")
 
@@ -1880,10 +1887,22 @@ class RealtimeOrchestrator:
             res: Any = None
             if config.LOOK_AIM_ENABLED:
                 try:
-                    from hal.drivers.tracking.aim import aim_for_look
+                    from hal.drivers.tracking.aim import aim_for_look, filler_ownership
+                    from hal.telemetry import voice_metrics
+
+                    # LIVE uses the tool's exact input key. Never charge a
+                    # delayed filler to whichever interaction is newest now.
+                    try:
+                        filler_owner = (
+                            voice_metrics.provider_interaction(output.user_turn_id)
+                            if config.LIVE_MODE else voice_metrics.current_interaction()
+                        )
+                    except Exception:
+                        logger.exception("[voice-metrics] look filler ownership unavailable")
+                        filler_owner = ""
 
                     t_aim = time.monotonic()
-                    with look_debug.stage("aim.total"):
+                    with look_debug.stage("aim.total"), filler_ownership(filler_owner):
                         res = aim_for_look(config.LOOK_AIM_DEADLINE_S)
                     logger.info(
                         "[realtime] look: aim %s (%s) iters=%d yaw=%+.1f in %.0fms",

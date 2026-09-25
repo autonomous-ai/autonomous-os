@@ -129,6 +129,8 @@ prompt không bảo đảm transcript đúng hay chặn hết history bị hallu
 
 Gemini còn phân biệt từ xưng hô đứng riêng (ví dụ “anh”, “chị”, “em”) với lời gọi rõ hướng tới thiết bị. Khi không có yêu cầu, lời gọi rõ hoặc liên hệ với câu hỏi đang chờ, model phải reject im lặng thay vì tự nói “em nghe đây”, gọi emotion hay completion. Lệnh ngắn và câu trả lời theo ngữ cảnh vẫn hợp lệ, kể cả cùng từ đó khi trả lời câu hỏi của thiết bị. Routing reminder riêng Gemini nhắc lại quy tắc sau memory context. Đây là quy tắc prompt, không phải blacklist xác định hay bảo đảm model luôn tuân thủ.
 
+Quy tắc xưng hô còn cấm suy diễn một từ danh xưng thành yêu cầu sửa danh xưng/danh tính hoặc ghi nhớ sở thích chỉ vì câu trước của assistant hay một lần ngắt lời. Vẫn giữ lời sửa rõ ràng và câu trả lời cho câu hỏi xưng hô đang chờ. Thay đổi nhắm vào case “Chị” → xin lỗi/“em nhớ rồi”; kiểm tra prompt local không chứng minh model tuân thủ, vẫn cần đánh giá trong phiên thực tế.
+
 `robots/lamp/SOUL.md` áp dụng cùng điều kiện lời nói hướng đến thiết bị cho voice
 và `[ambient]` của main agent. Lời nghe lỏm hoặc chưa rõ đang nói với ai phải trả
 đúng `NO_REPLY`, không gọi tool hay phản ứng bằng cử động/cảm xúc. Quy tắc này
@@ -176,7 +178,7 @@ nên phải triển khai OS và HAL cùng nhau. Luồng bình thường bên dư
 mode tắt. Xem [tích hợp Harness](harness_vi.md) về API quản lý, trả lời câu hỏi
 có cấu trúc và xử lý delivery chưa rõ kết quả.
 
-Với persona Lamp mặc định, yêu cầu thực hiện công việc số cũng đi theo route này mà không cần nêu Harness hay agent. Realtime gọi im lặng `delegate_to_main` với yêu cầu hiện tại được giữ trung thực; main agent chọn agent Harness hiện có hoặc chuẩn bị agent Store qua `harness-use`. Phạm vi gồm coding, research tạo báo cáo, tài liệu, bảng tính, slide, CAD/thiết kế, tạo media/nhạc và phân tích khoa học/mô phỏng, không giới hạn trong danh sách app cố định. Hội thoại, câu hỏi kiến thức, điều khiển vật lý, phát nhạc, nhắc việc, memory và connector thiết bị giữ route hiện có. Lựa chọn rõ về workflow khác, gồm Buddy, vẫn được tôn trọng. Task mới cần chọn agent riêng ngay cả khi đang trong cửa sổ follow-up.
+Với persona Lamp mặc định, yêu cầu thực hiện công việc số cũng đi theo route này mà không cần nêu Harness hay agent. Realtime gọi im lặng `delegate_to_main` với yêu cầu hiện tại được giữ trung thực; main agent ưu tiên agent Harness hiện có hoặc chuẩn bị agent Store qua `harness-use` khi đang kết nối. Nếu Harness offline/chưa pair trước khi gửi task mới, main dùng tool khác đang có. Không âm thầm chuyển đích từ xa được chỉ định hay làm trùng task từ xa đang có/delivery chưa rõ. Realtime vẫn delegate main, không tự thực hiện fallback. Phạm vi gồm coding, research tạo báo cáo, tài liệu, bảng tính, slide, CAD/thiết kế, tạo media/nhạc và phân tích khoa học/mô phỏng, không giới hạn trong danh sách app cố định. Hội thoại, câu hỏi kiến thức, điều khiển vật lý, phát nhạc, nhắc việc, memory và connector thiết bị giữ route hiện có. Lựa chọn rõ về workflow khác, gồm Buddy, vẫn được tôn trọng. Task mới cần chọn agent riêng ngay cả khi đang trong cửa sổ follow-up.
 
 Main skill dùng bằng chứng hiện có về tên/project/recap và chỉ khi cần mới đọc cặp `{recap,text}` mới nhất của tối đa hai ứng viên. Chưa rõ năng lực chuyên biệt không có nghĩa là đã sẵn sàng. Tìm package Store và chuẩn bị agent nay thuộc main skill qua [workflow Store v1](harness-store_vi.md) được thương lượng; realtime không tự setup hoặc gửi task đầu tiên. Thay đổi nằm ở chỉ dẫn model, không đổi API hay bảo đảm định tuyến bằng cơ chế xác định; persona Lamp, skill và prompt realtime đang chạy phải được cập nhật để áp dụng. Chính sách robot khác/SOUL tùy chỉnh không tự bị thay đổi, và kiểm tra local không triển khai lên thiết bị. Xem [chính sách công việc số của Lamp](harness_vi.md#chính-sách-công-việc-số-của-lamp).
 
@@ -870,12 +872,32 @@ từ `tts-1`), HAL gửi `speed=1.0` tới provider và áp dụng `tts_speed` t
 `config.json` ở máy cục bộ qua đường `get_tts_speed` sẵn có. Bộ lọc ffmpeg
 `atempo` dạng streaming thay đổi thời lượng nhưng giữ cao độ, trước khi
 resample, phát loa và lấy tham chiếu AEC. Tốc độ `1.0` bỏ qua bộ lọc.
-ffmpeg đã có trong quy trình chuẩn bị thiết bị.
+ffmpeg đã có trong quy trình chuẩn bị thiết bị. Process bộ lọc khởi động
+trước HTTP để chồng thời gian khởi động với thời gian chờ mạng/provider,
+và dùng một filter thread cho giọng mono.
+
+Trong lúc chờ đầu ra bộ lọc, HAL kiểm tra hủy để HTTP đang chờ không giữ
+ffmpeg sống sau khi hủy. Producer đầu/đuôi giữ thế hệ hủy và ghi queue có
+timeout; xóa stop event cho turn mới không làm producer cũ chạy lại. HTTP
+đồng bộ đang chờ vẫn có thể tồn tại tới khi nhận dữ liệu hoặc hết timeout
+đã cấu hình; audio về muộn bị bỏ và nguồn được đóng.
+
 
 Khóa WAV cache của v3 có dấu phân biệt để không dùng lại audio v3 đã tổng hợp
 theo chính sách tốc độ cũ. Thay đổi này điều chỉnh thời lượng phát, không giảm
 thời gian chờ byte đầu tiên (TTFB) từ provider. Các backend TTS khác giữ nguyên
 hành vi tốc độ hiện có.
+
+Phát text realtime (cả turn mode và LIVE, không phụ thuộc provider) gửi câu hoàn chỉnh ngay cả khi cùng delta đã chứa đầu câu tiếp theo chưa xong. Phần đuôi được giữ nguyên để ghép tiếp; tag chưa đóng, dấu chấm trong số và viết tắt phổ biến vẫn được giữ thận trọng. Luồng phát buffer hoàn chỉnh, native audio, điều kiện hoàn tất/delegate và cancel không đổi. `[tts-timing] stage=realtime_first_text` đánh dấu text đầu tiên tới đường playback; đối chiếu owner với `speak_requested`/`queue_requested` và timing HTTP để tách thời gian giữ text khỏi tổng hợp giọng.
+
+Log TTS `[tts-timing]` ghi lúc nhận yêu cầu/queue, worker phát, bắt đầu HTTP,
+headers/byte giải mã đầu tiên, buffer 4096 byte đầu, đầu ra tempo đầu tiên và
+lần ghi loa đầu hoàn tất. `request` riêng cho từng HTTP phân biệt các lần tải
+song song; `text_key` (tiền tố SHA-256) nối log tổng hợp và playback. Câu giống
+nhau có cùng key nên cần đối chiếu thêm timestamp và owner. Timing HTTP gồm
+proxy/mạng/provider, chưa tách được thời gian tính toán provider. Ghi loa chưa
+phải lúc âm thanh thực sự tới tai. Log giữ nguyên ranh giới chunk PCM, KPI và
+chính sách phát/cancel.
 
 ### Vì sao không có cắt lời bằng giọng nói trên mic đã khử vọng
 
@@ -2146,13 +2168,17 @@ phải bằng chứng completed. Không có terminal thành công thì task vẫ
 incomplete. Ngắt lời từ server ghi biên `server_barge_in` đúng interaction
 để theo dõi audio cũ.
 
-Snapshot ghi `mode=live` và có biết endpoint tiếng nói hay không. Endpoint thật
-từ server dùng thời điểm HAL nhận (`server_vad`), không phải lúc âm học kết thúc.
-Lượt Gemini chỉ có transcript vẫn hợp lệ cho metric execution nhưng bị loại
+Snapshot ghi `mode=live` và có biết endpoint tiếng nói hay không. Timestamp nhận
+activity Gemini vẫn phục vụ voice cue (`server_vad_receive`), nhưng không được
+dùng làm speech end âm học cho KPI-1. Trace bộ đếm/offset trước và sau SDK không
+đổi cấu hình VAD. Lượt Gemini chỉ có transcript hoặc thời điểm nhận event vẫn
+hợp lệ cho metric execution nhưng bị loại
 khỏi KPI-1 latency với `speech_endpoint_unavailable` và latency null. Trên
 GPT-Live mọi lượt đều thuộc loại này: adapter không bao giờ có `endpoint_at`
 (không có event VAD), nên KPI-1 không đo được trên provider đó. Output
-không có owner không được gán cho câu nói mới nhất. Bộ đếm
+không có owner không được gán cho câu nói mới nhất. Endpoint hợp lệ trước playback
+tới muộn có thể amendment latency. Filler look LIVE giữ owner đúng provider turn
+suốt thao tác aim. Bộ đếm
 `voice_metrics_live_coverage` lúc đóng phiên thể hiện phần mất độ phủ này; hook
 không đổi lọc tiếng ồn, uplink hay cờ routing. Xem
 [voice metrics](voice-metrics_vi.md#độ-phủ-của-phiên-live) để biết hợp đồng event.
@@ -2995,7 +3021,11 @@ Thứ tự delegation của Gemini: với việc cần main (gồm nhạc, truy 
 
 Ở Live ON, `reject_turn` được chấp nhận còn đặt trạng thái chặn bền vững trước khi đưa tool tới consumer. Trạng thái này giữ qua các vòng nhận và ACK tool: audio/text của lượt đã bị loại không được biến thành câu trả lời mới không có chủ sở hữu hay kích hoạt fallback sang main. Sự kiện bắt đầu nói mới từ provider hoặc transcript đầu vào không rỗng mới mở lại; terminal và metadata kết thúc transcript rỗng không mở. Reconnect đặt lại trạng thái. Cách này bảo vệ quyền sở hữu lượt độc lập ngôn ngữ câu trả lời; không ngăn backend từ xa tự sinh câu lỗi sau ACK.
 
-Cả luồng theo lượt và Live ON text-to-TTS chặn các mẫu lỗi provider “I’m sorry, there was a system error.”, “Rất tiếc, đã xảy ra lỗi hệ thống.”, “Rất tiếc, đã xảy ra lỗi hệ thống, vui lòng thử lại sau nhé.”, “Rất tiếc, đã có lỗi hệ thống xảy ra.” và “Rất tiếc, đã xảy ra lỗi hệ thống trong quá trình xử lý yêu cầu của bạn.” trước khi đưa sang ElevenLabs. Prefix nhận từng mảnh được giữ tới khi lọc được hoặc chuyển thành câu bình thường; hỗ trợ cả thiếu dấu kết câu. Marker `<no speech>` ở đầu được bỏ trước khi lọc kể cả khi dính liền câu; prefix marker chưa đủ không được đọc ra. Marker nằm trong trích dẫn hoặc giữa lời giải thích được giữ nguyên. Prefix lỗi có chủ sở hữu được giữ qua timeout nhận cho đến khi đủ để phân loại; không ghép sang lượt khác và bị bỏ khi hủy. Cùng bộ lọc được áp dụng lên câu Live đã ghép đủ trước khi đồng bộ history sang OS/Main. Câu trả lời chỉ có lỗi không gửi `voice_agent_handled` hay cặp `[HANDLED]/[REPLY]`; nếu có nội dung hợp lệ đi kèm thì chỉ đồng bộ phần còn lại. Không xóa history đã lưu trước đó. Log provider gốc vẫn giữ để debug. Lời xin lỗi thông thường, thông báo lỗi được trích dẫn, routing và native audio không đổi. Đây là tập mẫu tiếng Anh/Việt cụ thể, không phải bộ phân loại mọi ngôn ngữ.
+HAL xử lý rejection theo quyết định protocol của lượt, không theo danh sách câu lỗi từng ngôn ngữ. LIVE ON chấp nhận `reject_turn` kể cả sau khi đã sinh text: pump bỏ output đang giữ/output tới muộn và history của lượt đó, chỉ hủy TTS realtime đang chạy/chờ đúng owner, không ghi execution thành công. Giữ speech Main và các lượt realtime mới. Barrier rejection Gemini chặn cả speech phát sinh từ ACK cho tới input người dùng mới; LIVE OFF giữ chính sách routing với late rejection hiện hữu. Đã bỏ bảng phrase lỗi provider và phép so prefix ở cả hai đường text-to-TTS; không quyết định rejection bằng cách diễn đạt.
+
+Bằng chứng device (lamp-0c4e, 25/09/2026): `generation_complete` chưa có speech lúc 07:37:17.193, tiếp theo `IN_PROGRESS`, text lỗi lúc 18.281/18.955, rồi `reject_turn` lúc 19.165. HAL đã queue TTS lúc 19.004 và bỏ qua rejection vì output đã bắt đầu. Với LIVE Extended Thinking, output sau terminal rỗng trước interaction status đầu tiên được giữ trong buffer continuation hiện có (2 MB audio / 16k ký tự text). Riêng `IN_PROGRESS` không được mở buffer; chỉ `IDLE` hợp lệ, không reject/delegate/interruption/tool pending/overflow mới được phát. Nhánh cụ thể này chờ IDLE nên tăng thời gian chờ; initial response thông thường vẫn stream. Không thêm classifier, sleep, cấu hình VAD hoặc heuristic ngôn ngữ. Không thể thu hồi âm thanh đã nghe ở nhánh streaming thông thường; reject dừng phần còn lại. Patch không phân loại ngữ nghĩa một câu xin lỗi được sinh ra mà không có rejection/error signal.
+
+Vẫn bỏ marker `<no speech>` và `{pause}` ở đầu trước TTS/history, kể cả prefix chia chunk qua timeout cùng lượt. Reply chỉ có marker không tạo `voice_agent_handled`/Main exchange; giữ phần trích dẫn hoặc giải thích marker. Không xóa history cũ. Test replay đúng protocol đã ghi bằng text nhiều ngôn ngữ, kiểm tra hủy đúng owner trước khi PCM sẵn sàng, output IDLE hợp lệ, initial streaming, lượt mới, interruption và LIVE OFF. Deploy/đối chiếu playback device là bước riêng, không thay bằng kết quả unit test.
 
 ACK tool Gemini lưu tên hàm gốc cùng call ID và trả cả hai trong `FunctionResponse`. Thiếu `name` vi phạm contract provider và đã tái hiện câu báo lỗi hệ thống sau khi `look` chụp ảnh thành công trên Gemini 3.8. Tên được giữ đến khi gửi ACK thành công và xoá khi reset session. Không thay đổi cách gửi ảnh hay replay audio.
 

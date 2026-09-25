@@ -8,20 +8,6 @@ from hal.test.test_live_voice_metrics import _pump
 from hal.test.test_voice_metrics import kpi  # noqa: F401
 
 
-@pytest.mark.parametrize('chunks', [
-    ['Rất tiếc, đã có ', 'lỗi hệ thống xảy', ' ra.'],
-    ['Rất tiếc, ', 'đã xảy ra lỗi hệ thống trong quá trình xử lý yêu cầu của bạn.'],
-    ["I'm sorry, ", 'there was a system error.'],
-    ['Rất tiếc, đã có lỗi hệ thống xảy ra'],
-])
-def test_live_provider_error_fragments_never_reach_elevenlabs(monkeypatch, kpi, chunks):
-    spoken = _pump(monkeypatch, kpi, [
-        ([TextOutput(text=text) for text in chunks], '', True),
-        ([TextOutput(text='Mình nghe rõ.', user_turn_id='new')], 'new', True),
-    ])
-    assert [text for text, _ in spoken] == ['Mình nghe rõ.']
-
-
 def test_live_regular_apology_is_preserved(monkeypatch, kpi):
     spoken = _pump(monkeypatch, kpi, [
         ([TextOutput(text='Rất tiếc, ', user_turn_id='u'),
@@ -114,41 +100,36 @@ def test_unkeyed_reply_after_cancel_gets_new_fallback_identity(monkeypatch, kpi)
     assert 'Fresh.' in words
 
 
-@pytest.mark.parametrize('chunks', [
-    ['<no ', 'speech>', 'Rất tiếc, đã ', 'xảy ra lỗi', ' hệ thống, vui lòng thử', ' lại sau nhé.'],
-    ['<no speech>Rất tiếc, đã xảy ra lỗi hệ thống, vui lòng thử lại sau nhé.'],
-    ['<no speech>Rất tiếc, đã xảy ra lỗi hệ thống, vui lòng thử lại sau nhé'],
-])
-def test_silence_marker_prefixed_error_never_reaches_tts(monkeypatch, kpi, chunks):
-    spoken = _pump(monkeypatch, kpi, [
-        ([TextOutput(text=text, user_turn_id='u') for text in chunks], 'u', True),
-        ([TextOutput(text='Mình nghe rõ.', user_turn_id='next')], 'next', True),
-    ], strip_markers=VoiceService.strip_rt_markers)
-    assert [text for text, _ in spoken] == ['Mình nghe rõ.']
-
-
 @pytest.mark.parametrize('text, expected', [
     ('<no speech>Xin chào.', 'Xin chào.'),
     ('<no speech><no speech>Xin chào.', 'Xin chào.'),
     ('<no spe', ''),
     ('<no speech>', ''),
+    ('{pause}', ''),
+    ('{ PAUSE }', ''),
+    ('{pau', ''),
+    ('{ pause', ''),
+    ('<no speech>{pause}<no speech>Xin chào.', 'Xin chào.'),
+    ('{pause}Xin chào.', 'Xin chào.'),
+    ('Ký hiệu "{pause}" là gì?', 'Ký hiệu "{pause}" là gì?'),
+    ('{"pause": 1}', '{"pause": 1}'),
     ('Ký hiệu "<no speech>" là gì?', 'Ký hiệu "<no speech>" là gì?'),
 ])
 def test_leading_silence_marker_cleanup_preserves_real_text(text, expected):
     assert VoiceService.strip_rt_markers(text) == expected
 
 
-def test_held_error_prefix_releases_normal_apology_after_receive_timeout(monkeypatch, kpi):
+def test_held_marker_prefix_releases_text_after_receive_timeout(monkeypatch, kpi):
     spoken = _pump(monkeypatch, kpi, [
-        ([TextOutput(text='Rất tiếc, ', user_turn_id='u')], '', False),
-        ([TextOutput(text='hôm nay trời mưa.', user_turn_id='u')], 'u', True),
+        ([TextOutput(text='{pau', user_turn_id='u')], '', False),
+        ([TextOutput(text='se}hôm nay trời mưa.', user_turn_id='u')], 'u', True),
     ], strip_markers=VoiceService.strip_rt_markers)
-    assert ' '.join(text for text, _ in spoken) == 'Rất tiếc, hôm nay trời mưa.'
+    assert ' '.join(text for text, _ in spoken) == 'hôm nay trời mưa.'
 
 
-def test_held_error_prefix_cannot_attach_to_new_turn(monkeypatch, kpi):
+def test_held_marker_prefix_cannot_attach_to_new_turn(monkeypatch, kpi):
     spoken = _pump(monkeypatch, kpi, [
-        ([TextOutput(text='Rất tiếc, đã ', user_turn_id='old')], '', False),
+        ([TextOutput(text='{pau', user_turn_id='old')], '', False),
         ([TextOutput(text='Mình nghe rõ.', user_turn_id='new')], 'new', True),
     ], strip_markers=VoiceService.strip_rt_markers)
     assert [text for text, _ in spoken] == ['Mình nghe rõ.']

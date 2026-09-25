@@ -128,6 +128,8 @@ transcription accuracy or prevent all hallucinated history entries.
 
 Gemini also distinguishes an isolated form of address (for example Vietnamese “anh”, “chị”, “em”) from a clear call to the device. Without a request, a clear summons or relevance to a pending question, it should reject silently instead of inventing an “I’m listening” greeting, emotion or completion call. Short commands and contextual answers remain valid, including the same word when it answers the device’s question. The final Gemini routing reminder repeats this rule after memory context. This is a prompt policy, not a deterministic blacklist or a guarantee of model compliance.
 
+The address rule also prohibits inferring an identity/address correction or remembered preference from an isolated title solely because of earlier assistant wording or an interruption. Explicit corrections and answers to an immediately pending address question remain valid. This targets the observed “Chị” → apology/“I remember” misinterpretation; local prompt inspection does not establish model compliance, which still requires real-session evaluation.
+
 Lamp's `robots/lamp/SOUL.md` applies the same addressed-speech prerequisite to
 main-agent voice and `[ambient]` messages. Overheard speech or an unclear
 addressee requires exactly `NO_REPLY`, without tool calls or physical/emotional
@@ -173,7 +175,7 @@ The normal path below applies when the mode is off. See
 [Harness integration](harness.md#harness-only-voice-mode) for management APIs,
 structured question handling and uncertain-delivery recovery.
 
-For the default Lamp persona, digital execution requests also take this route without naming Harness or an agent. Realtime silently calls `delegate_to_main` with the faithful current request; the main agent chooses an existing Harness agent or prepares a Store agent through `harness-use`. This covers work across coding, research deliverables, documents, spreadsheets, slides, CAD/design, media/music creation and scientific analysis/simulation, rather than a fixed list of apps. Conversation, knowledge questions, physical controls, music playback, reminders, memory and device connectors retain their existing routes. Explicit alternative workflows, including Buddy, remain honored. A new task requires its own agent selection even during a follow-up window.
+For the default Lamp persona, digital execution requests also take this route without naming Harness or an agent. Realtime silently calls `delegate_to_main` with the faithful current request; the main agent prefers an existing Harness agent or prepares a Store agent through `harness-use` when connected. If Harness is offline/unpaired before any dispatch of a new task, main uses its other available tools. Explicit remote targets and existing/uncertain remote tasks cannot be silently moved or duplicated. Realtime still delegates to main; it does not execute the fallback itself. This covers work across coding, research deliverables, documents, spreadsheets, slides, CAD/design, media/music creation and scientific analysis/simulation, rather than a fixed list of apps. Conversation, knowledge questions, physical controls, music playback, reminders, memory and device connectors retain their existing routes. Explicit alternative workflows, including Buddy, remain honored. A new task requires its own agent selection even during a follow-up window.
 
 The main skill uses available name/project/recap evidence and, only if needed, the newest `{recap,text}` pair from at most two candidates. Unknown specialist capability is not proof of readiness. Store discovery and agent preparation now belong to the main skill through the negotiated [Store v1 workflow](harness-store.md); realtime never performs setup or sends the first task itself. It changes model instructions, not the API or a deterministic routing guarantee; the running Lamp persona, skills and realtime prompts must be updated for it to apply. Other robots/custom SOUL policies are not implicitly changed, and local verification does not deploy to a device. See [Lamp digital-work policy](harness.md#lamp-digital-work-policy).
 
@@ -902,11 +904,32 @@ the `tts-1` fallback), HAL requests provider `speed=1.0` and applies
 A streaming ffmpeg `atempo` filter changes duration while preserving pitch,
 before resampling, speaker output, and AEC reference capture. Speed `1.0`
 bypasses the filter. ffmpeg is already included in device provisioning.
+The filter process starts before the HTTP fetch, overlapping startup with
+network/provider wait, and uses one filter thread for mono speech.
+
+Cancellation is polled while waiting for filter output, so a pending HTTP fetch
+does not keep ffmpeg alive after cancellation. Head/tail producers retain a
+cancellation generation and use bounded queue writes; clearing the shared stop
+event for a new turn cannot revive an old producer. A synchronous HTTP read
+already in flight may remain until data arrives or its configured timeout;
+its late audio is discarded and its source is closed.
+
 
 The v3 WAV cache key includes a discriminator so previously synthesized v3
 audio is not reused under this speed policy. This changes playback duration;
 it does not reduce provider time to first byte (TTFB). Other TTS backends keep
 their existing speed behavior.
+
+Realtime text playback (turn mode and LIVE, regardless of provider) releases a complete sentence even when the same text delta also starts an unfinished next sentence. The exact unfinished tail stays buffered; partial tags, numeric periods and common abbreviations are held conservatively. Existing complete-buffer playback, native audio, provider completion/delegation and cancellation gates remain unchanged. `[tts-timing] stage=realtime_first_text` marks the first text received by the playback path; compare its owner with `speak_requested`/`queue_requested` and HTTP timing to isolate text buffering from synthesis latency.
+
+TTS diagnostics use `[tts-timing]`: request/queue admission, playback worker,
+HTTP start/headers/first decoded bytes, first 4096-byte buffer, first tempo
+output, and first completed speaker write. A per-HTTP `request` ID separates
+parallel fetches; `text_key` (SHA-256 prefix) links synthesis and playback logs.
+Repeated identical text shares a key, so also use timestamps and playback owner.
+HTTP durations include proxy/network/provider time; they cannot isolate provider
+compute. First write is not acoustic onset. Logging preserves PCM chunk boundaries
+and does not change KPI definitions or playback/cancellation policy.
 
 ### Why there is no voice-driven interrupt on the cancelled mic
 
@@ -2210,11 +2233,15 @@ execution; timeout, synthetic done and interruption alone are not completion
 proof. Without a successful terminal the task remains incomplete. Server
 interruption records a targeted `server_barge_in` boundary for stale-playback tracking.
 
-Snapshots identify `mode=live` and whether a speech endpoint is known. A real
-server endpoint is timed when HAL receives it (`server_vad`), not at acoustic
-speech end. Gemini transcript-only turns remain eligible for execution metrics
+Snapshots identify `mode=live` and whether a speech endpoint is known. Gemini's
+activity receive timestamp remains available to voice cues (`server_vad_receive`)
+but is not accepted as acoustic speech end for KPI-1. Raw/SDK endpoint counts
+and offsets are traced without changing VAD configuration. Gemini transcript-only
+or receive-only turns remain eligible for execution metrics
 but are excluded from latency KPI-1 with `speech_endpoint_unavailable` and null
-latencies. Unowned output is not assigned to the newest utterance. Session-close
+latencies. Valid earlier endpoints delivered late can amend playback latency.
+Unowned output is not assigned to the newest utterance; LIVE look fillers pin
+the exact provider-turn owner for the aim operation. Session-close
 `voice_metrics_live_coverage` counters expose this missing coverage; these hooks
 do not alter noise filtering, uplink or routing settings. See
 [voice metrics](voice-metrics.md#live-session-coverage) for the event contract.
@@ -3085,7 +3112,11 @@ Gemini delegation ordering: for work requiring main (including music, specific m
 
 In Live ON, an accepted `reject_turn` also installs a persistent rejection barrier before publishing the tool to its consumer. The barrier survives receive-loop boundaries and the tool ACK: provider audio/text from that rejected turn cannot become a new unowned reply or trigger main fallback. A fresh provider speech-start event or nonempty input transcript releases it; protocol terminals and empty transcription-finished metadata do not. Reconnect resets the barrier. This protects turn ownership independently of response language; it does not prevent the remote backend from generating an error after an ACK.
 
-Both turn-based and Live ON text-to-TTS paths suppress the known provider apologies “I’m sorry, there was a system error.”, “Rất tiếc, đã xảy ra lỗi hệ thống.”, “Rất tiếc, đã xảy ra lỗi hệ thống, vui lòng thử lại sau nhé.”, “Rất tiếc, đã có lỗi hệ thống xảy ra.” and “Rất tiếc, đã xảy ra lỗi hệ thống trong quá trình xử lý yêu cầu của bạn.” before ElevenLabs enqueue. Matching streamed prefixes are held until they can be filtered or diverge into a normal sentence; missing final punctuation is supported. Leading `<no speech>` markers are removed before filtering even when attached to a sentence; incomplete marker prefixes are withheld from TTS. Quoted or embedded mentions remain intact. An attributed error prefix remains buffered across receive timeouts until it resolves; it is never attached to another turn and is discarded on cancellation. The same filter cleans the assembled Live reply before OS/Main history sync. An error-only reply sends no `voice_agent_handled` notification or `[HANDLED]/[REPLY]` exchange; a mixed reply syncs only the remaining valid text. Existing history entries are not deleted. Raw provider logs remain available for diagnosis. Ordinary apologies, quoted error messages, routing and native audio playback are unchanged. This is an explicit English/Vietnamese template filter, not a universal multilingual classifier.
+Provider rejection is enforced using the turn's protocol decision, not a language-specific list of error sentences. LIVE ON honors `reject_turn` even after text was generated: the pump drops that turn's buffered/future output and history, cancels only its active/pending realtime TTS, and does not report successful execution. Main speech and newer realtime turns retain their owners. Gemini's rejection barrier also suppresses speech caused by the tool ACK until fresh user input; LIVE OFF retains its existing late-rejection routing policy. The former provider-error phrase table and prefix matching are removed from both text-to-TTS paths; wording alone no longer decides whether a reply is rejected.
+
+Device evidence (lamp-0c4e, 2026-09-25): a silent `generation_complete` at 07:37:17.193 was followed by `IN_PROGRESS`, error text at 18.281/18.955, and `reject_turn` at 19.165. HAL had queued TTS at 19.004 and ignored the rejection because output had begun. For LIVE Extended Thinking, output after a silent terminal preceding the first interaction status is now held in the existing bounded continuation buffer (2 MB audio / 16k text characters). `IN_PROGRESS` alone cannot release it; an accepted `IDLE` without rejection, delegation, interruption, pending tools or overflow can. This delays speech on that specific path until IDLE; ordinary initial responses still stream. No new classifier, sleep, VAD setting or language heuristic is added. A rejection cannot retract audio already heard on the ordinary streaming path; it stops remaining output. A generated apology without a rejection/error signal is not semantically classified by this fix.
+
+Leading `<no speech>` and `{pause}` markers are still removed before TTS and history sync, including split prefixes across receive timeouts of the same turn. Marker-only replies create no `voice_agent_handled`/Main exchange; quoted or embedded mentions remain intact. Existing history is not deleted. Validation replays the captured protocol order with arbitrary-language text, verifies matching-turn cancellation before PCM readiness, and checks valid IDLE output, initial streaming, new-turn recovery, interruption and LIVE OFF. Device deployment/real playback verification remains separate from local tests.
 
 Gemini tool acknowledgements retain the original function name alongside the call ID and return both in `FunctionResponse`. Missing `name` violates the provider contract and reproduced a spoken system-error response after a successful `look` capture on Gemini 3.8. The name is retained until the acknowledgement succeeds and cleared on session reset. Image transport and audio replay remain unchanged.
 

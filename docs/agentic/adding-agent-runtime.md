@@ -293,8 +293,13 @@ in its backend doc (e.g. `docs/agentic/hermes.md`), not a blanket guarantee here
   (so a normal switch is a no-op — no churn). See §3.
 - **Skill watcher** (auto-update from CDN, capability-gated): the generic
   fetch/extract/hash plumbing is shared in `system/skills/skillzip.go`
-  (`FetchSkillVersions`/`DownloadToTempFile`/`FolderHash`/`ExtractSkillZip`). Add a
-  thin `runtimes/<name>/skill_watcher.go` parallel to `runtimes/openclaw/skill_watcher.go`
+  (`FetchSkillVersions`/`DownloadToTempFile`/`FolderHash`/`ExtractSkillZip`).
+  Build the reload message with `skills.SkillUpdatePrompt(agentVisibleSkillsDir, changedSkills)`
+  from `system/skills/skill_update_prompt.go`; all six runtimes share its wording and
+  list formatting. Keep the runtime-specific directory, empty-change guard,
+  logging and `SendSystemChatMessage` delivery in the runtime.
+  After re-reading, the agent must return exactly `NO_REPLY`; maintenance updates
+  do not need a spoken acknowledgment. Add a thin `runtimes/<name>/skill_watcher.go` parallel to `runtimes/openclaw/skill_watcher.go`
   — only the **target dir** and the **notify path** differ. Gate with
   `skills.Supported(device.Capabilities(...))`. Advance a watched version only after
   download and extraction succeed, so a transient failure retries on the next poll.

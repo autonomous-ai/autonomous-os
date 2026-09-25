@@ -691,7 +691,9 @@ class GeminiLiveAgent(VoiceAgentBase):
                 transcript_finished=transcript_finished,
                 user_turn_id=self._live_user_turn_id,
                 endpoint_at=endpoint_at,
-                method="server_vad" if endpoint_at is not None else "provider_transcript",
+                # This stamp drives existing voice cues, but is only the
+                # RECEIVE time, not speech end on the input audio timeline.
+                method="server_vad_receive" if endpoint_at is not None else "provider_transcript",
             ),
         ))
 
@@ -737,6 +739,7 @@ class GeminiLiveAgent(VoiceAgentBase):
         _turn_transcript = ""
         _spoken_response = ""
         _initial_speech = False
+        _empty_terminal_pending = False
         _initial_active_until = 0.0
         _continuation_active_until = 0.0
         _last_continuation_output_until = 0.0
@@ -1018,6 +1021,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                 _last_continuation_output_until = _progress_until = 0.0
                 _outcome_received = _routing_received = False
                 _direct_answer_confirmed = _initial_speech = False
+                _empty_terminal_pending = False
                 _spoken_response = _continuation_text = ""
                 _continuation.clear()
                 _continuation_bytes = 0
@@ -1124,6 +1128,11 @@ class GeminiLiveAgent(VoiceAgentBase):
                     self._user_transcript = ""
                     response_user_turn_id = None
                     _routing_received = _outcome_received = False
+                    _empty_terminal_pending = False
+                    _continuation.clear()
+                    _continuation_text = ""
+                    _continuation_bytes = 0
+                    _continuation_overflow = False
                     self._awaiting_playback_turn_complete = False
                 else:
                     # ACK-triggered speech has no new user owner. Keep the
@@ -1207,6 +1216,10 @@ class GeminiLiveAgent(VoiceAgentBase):
                     um.total_token_count or 0, cost, cost_cached,
                 )
 
+            reject_in_message = app_config.LIVE_MODE and any(
+                call.name == "reject_turn"
+                for call in (message.tool_call.function_calls if message.tool_call else [])
+            )
             if message.server_content:
                 content = message.server_content
 
@@ -1311,6 +1324,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                             fc.name in {"delegate_to_main", "reject_turn", "end_conversation"}
                             for fc in (message.tool_call.function_calls if message.tool_call else []))
                         if (_continuation and not _continuation_overflow
+                                and not _empty_terminal_pending
                                 and not _routing_received and not routing_in_message
                                 and not execution_interrupted and not content.interrupted):
                             for event in _continuation:
@@ -1353,15 +1367,20 @@ class GeminiLiveAgent(VoiceAgentBase):
                 # stays off-speaker until an incomplete initial reply and a valid
                 # continuation are confirmed without a trailing routing tool.
                 accept_speech = (not execution_interrupted and not _routing_received
+                                 and not _empty_terminal_pending and not reject_in_message
                                  and (interaction_status is not None or (
                                      not _direct_answer_confirmed and not (
                                          _requires_outcome and _deferred_finalize is not None))))
                 if (not accept_speech and not _direct_answer_confirmed
                         and not _routing_received and not execution_interrupted
-                        and not content.interrupted and not _continuation_overflow):
+                        and not content.interrupted and not _continuation_overflow
+                        and not reject_in_message):
                     # Hold post-terminal speech until the routing grace ends.
                     # It can be the real answer after a filler, or unwanted ACK
                     # chatter. Never let it reach the speaker before deciding.
+                    if (_empty_terminal_pending and response_user_turn_id is None
+                            and (content.model_turn or content.output_transcription)):
+                        response_user_turn_id = getattr(self, "_live_user_turn_id", "")
                     held_outputs = []
                     for part in (content.model_turn.parts if content.model_turn else []):
                         if not getattr(part, "thought", False) and part.inline_data and part.inline_data.data:
@@ -1572,11 +1591,26 @@ class GeminiLiveAgent(VoiceAgentBase):
                     self._first_audio_received = False
                     self._turn_done.set()
 
+                if content.interrupted and _empty_terminal_pending:
+                    _empty_terminal_pending = False
+                    _continuation.clear()
+                    _continuation_text = ""
+                    _continuation_bytes = 0
+
+                # A silent terminal is not an accepted answer. Extended Thinking
+                # may report IN_PROGRESS next, then speech followed by rejection.
+                # Keep only this post-empty-terminal path off-speaker until IDLE.
+                if (app_config.LIVE_MODE and _requires_outcome
+                        and interaction_status is None and not _initial_speech
+                        and not content.interrupted and (content.turn_complete
+                            or getattr(content, "generation_complete", False))):
+                    _empty_terminal_pending = True
+
                 if interaction_status is not None and content.interrupted:
                     await _finalize_turn_complete(False)
                     return
 
-                if interaction_status is None and content.turn_complete:
+                if interaction_status is None and content.turn_complete and not reject_in_message:
                     _continuation_active_until = 0.0
                     delayed_playback_ack = app_config.LIVE_MODE and getattr(
                         self, "_awaiting_playback_turn_complete", False
@@ -1597,7 +1631,8 @@ class GeminiLiveAgent(VoiceAgentBase):
                     await _finalize_turn_complete(delayed_playback_ack)
                     return
 
-                if interaction_status is None and getattr(content, "generation_complete", False):
+                if (interaction_status is None and not reject_in_message
+                        and getattr(content, "generation_complete", False)):
                     _continuation_active_until = 0.0
                     # Gemini Live can defer turn_complete until its assumed
                     # real-time audio playback ends. HAL plays the received
@@ -1681,8 +1716,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                         # Keep the grace open: a delegate can follow this call in
                         # another frame (device-observed 2026-09-21, +39ms).
                         continue
-                    if (app_config.LIVE_MODE and fc.name == "reject_turn"
-                            and not _initial_speech):
+                    if app_config.LIVE_MODE and fc.name == "reject_turn":
                         # Publish before the consumer can ACK. A plain ACK can
                         # cause provider speech in a later receive iteration.
                         self._reject_followup_barrier = True
@@ -1711,6 +1745,11 @@ class GeminiLiveAgent(VoiceAgentBase):
                             ),
                         )
                     )
+                if (reject_in_message and message.server_content is not None
+                        and (message.server_content.turn_complete
+                             or getattr(message.server_content, "generation_complete", False))):
+                    await _finalize_turn_complete(False)
+                    return
                 if interaction_status is not None and _routing_received:
                     await _finalize_turn_complete(False)
                     return
@@ -1734,6 +1773,15 @@ class GeminiLiveAgent(VoiceAgentBase):
                 # ends execution, not proof of semantic correctness. The
                 # legacy classifier is only for sessions without this signal.
                 _progress_until = 0.0
+                if (_empty_terminal_pending and not _routing_received
+                        and not execution_interrupted and not _continuation_overflow
+                        and not self._pending_tool_calls):
+                    for event in _continuation:
+                        self._recv_queue.put(event)
+                    _spoken_response += _continuation_text
+                    _continuation.clear()
+                    _continuation_text = ""
+                    _continuation_bytes = 0
                 await _finalize_turn_complete(False)
                 return
 

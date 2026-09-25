@@ -115,29 +115,35 @@ def test_history_reset_and_discard_keep_concurrent_turns_separate():
     assert sender.calls[0][1]["interaction_id"] == "new-iid"
 
 
-@pytest.mark.parametrize("with_answer", [False, True])
-def test_suppressed_provider_error_is_not_synced_to_main(monkeypatch, kpi, with_answer):
+@pytest.mark.parametrize("chunks", [["{pause}"], ["{", "pa", "use", "}"], ["{ PAUSE }"]])
+@pytest.mark.parametrize("answer", ["", "Mình nghe rõ."])
+def test_pause_marker_does_not_become_tts_or_main_context(monkeypatch, kpi, chunks, answer):
     from hal.drivers.voice.voice_service import VoiceService
 
     sender = Sender()
-    chunks = ['<no ', 'speech>', 'Rất tiếc, đã ', 'xảy ra lỗi',
-              ' hệ thống, vui lòng thử', ' lại sau nhé.']
-    batches = [([
-        UserSpeechOutput(turn_id="u1", transcript="Ừm."),
-        *[TextOutput(text=text, user_turn_id="u1") for text in chunks[:3]],
-    ], "", False), ([
-        *[TextOutput(text=text, user_turn_id="u1") for text in chunks[3:]],
-        *([TextOutput(text=" Mình nghe rõ.", user_turn_id="u1")] if with_answer else []),
-    ], "u1", True)]
-    spoken = _pump(monkeypatch, kpi, batches, sender=sender,
+    outputs = [UserSpeechOutput(turn_id="pause-turn", transcript="với")]
+    outputs.extend(TextOutput(text=text, user_turn_id="pause-turn") for text in chunks)
+    if answer:
+        outputs.append(TextOutput(text=answer, user_turn_id="pause-turn"))
+    spoken = _pump(monkeypatch, kpi, [(outputs, "pause-turn", True)], sender=sender,
                    strip_markers=VoiceService.strip_rt_markers)
-    if with_answer:
+    assert [text for text, _ in spoken] == ([answer] if answer else [])
+    if answer:
         assert sender.sent.wait(2)
         assert len(sender.calls) == 1
-        assert sender.calls[0][0].endswith("[REPLY] Mình nghe rõ.")
-        assert "lỗi hệ thống" not in sender.calls[0][0]
-        assert "no speech" not in sender.calls[0][0]
+        assert sender.calls[0][0].endswith("[REPLY] " + answer)
     else:
-        assert spoken == []
-        # No completed reply remains: no worker or HTTP notification starts.
         assert sender.calls == []
+
+
+def test_pause_marker_split_across_receive_timeout_stays_silent(monkeypatch, kpi):
+    from hal.drivers.voice.voice_service import VoiceService
+
+    sender = Sender()
+    spoken = _pump(monkeypatch, kpi, [([
+        UserSpeechOutput(turn_id="u", transcript="với"),
+        TextOutput(text="{pau", user_turn_id="u"),
+    ], "", False), ([TextOutput(text="se}", user_turn_id="u")], "u", True)],
+        sender=sender, strip_markers=VoiceService.strip_rt_markers)
+    assert spoken == []
+    assert sender.calls == []

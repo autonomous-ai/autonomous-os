@@ -317,9 +317,11 @@ class SpeakRequest(BaseModel):
     text: str = Field(
         ..., min_length=1, max_length=2000, description="Text to speak via TTS"
     )
+    speed: Optional[float] = Field(None, ge=0.25, le=4.0, description="Speed override for this uncached utterance only")
     voice: str = Field("", description="Override TTS voice for this request (e.g. 'Rachel', 'Brian')")
     # When True, this speech can be interrupted by the next speak() call (e.g. dead air filler).
     interruptible: bool = Field(False, description="If True, can be interrupted by next speech")
+    harness_result: bool = Field(False, description="Play a short source cue before a Harness reply")
     # Optional provider override for one-off tests (e.g. web TTS preview before saving config).
     # When set and differs from the running service, the backend is hot-swapped using the
     # supplied credentials so the test does not require restarting /voice/start.
