@@ -1489,16 +1489,18 @@ run ID và/hoặc key (`payload.idempotencyKey` hoặc `payload.receipt.idempote
 không fallback khi tương quan tường minh không khớp. Event legacy chỉ có agent ID
 cần đúng một route pending trên agent chưa từng overlap. Dấu overlap giữ theo agent
 suốt vòng đời tiến trình OS-server, kể cả route tương lai sau khi các lượt cũ xong,
-để duplicate mơ hồ đến muộn không hoàn tất nhầm lượt. Ưu tiên `fullText` của summary;
-agent đã overlap không dùng latest-recap fallback hay recovery qua `turn.done`.
+để duplicate mơ hồ đến muộn không hoàn tất nhầm lượt. Ưu tiên `fullText` của summary, vẫn hỗ trợ `text` legacy. Receipt và `turn.done`
+không gọi recap hay phát kết quả cuối. Summary cuối có membership dùng đường lưu
+kết quả gộp bền vững; metadata sai không fallback sang bộ đối chiếu legacy.
 
 Voice Harness-only đồng thời chờ có thể hủy đến khi RPC dispatch/receipt trước trả
 về, không chờ task từ xa hoàn tất. Tối đa 64 delivery chưa rõ được giữ RAM; `Pending`
 hiện có hiển thị request cũ nhất, kiểm receipt/resolve chuyển sang request tiếp.
 Input mới không ghi đè delivery chưa rõ hay gửi lại mù quáng. Progress receipt phân
 biệt queued với delivered/started. App cần mang key hiện có hoặc run ID khớp trên
-event summary/tool/question khi overlap; thiếu tương quan thì bỏ qua. Không thêm
-field wire mới. Test local/mock bao phủ OS, chưa chứng minh steering app thật hay
+event summary/tool/question khi overlap; thiếu tương quan thì bỏ qua. Membership
+nhóm nằm trong payload `turn.summary` cuối theo contract đã thống nhất, không thêm
+event riêng, flag, capability hay phiên bản. Test local/mock bao phủ OS, chưa chứng minh steering app thật hay
 end-to-end overlap. Không tự deploy thiết bị.
 
 ### Âm báo kết quả Harness
@@ -1510,3 +1512,18 @@ riêng hay thêm lượt model. Reply muted/bị từ chối hoặc hủy trư�
 phát âm báo; Web Chat và thông báo OS cục bộ không yêu cầu âm này. Âm báo không
 được tính là PCM lời nói đầu tiên trong timing. Cần cập nhật cả OS lẫn HAL; vẫn
 cần nghe thử trên thiết bị thật.
+
+### Truy xuất kết quả Harness
+
+Tích hợp cung cấp `GET /api/harness/results/:id` chỉ cho loopback, mặc định lưu
+reservation cho input dispatch có theo dõi vào `config/harness/results.json`.
+ID là tham chiếu result chung local, không phải bộ chọn agent hay input. Kết quả
+giới hạn theo cặp xác thực đã lưu, vẫn truy xuất khi offline, chứa các input thành
+viên và trạng thái tiếp nhận TTS. HTTP 200 dùng envelope API chuẩn; thiếu result
+hoặc store trả 404. API không gửi task hoặc thử phát lại âm thanh. Xem
+[tích hợp Harness](harness_vi.md) về inbox/outbox bền vững và giới
+hạn triển khai.
+
+Command `question.answer` được lưu riêng với input task. Receipt completed/rejected
+chỉ đóng UI của command answer, không TTS. Liên kết task gốc tường minh giữ quyền
+nhận summary sau đó; đối chiếu receipt dùng key answer gốc, không gửi lại command.

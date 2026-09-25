@@ -288,8 +288,8 @@ func TestHarnessOverlappingRepliesRejectUncorrelatedAndLateEvents(t *testing.T) 
 	if !s.hasHarnessReply("agent", "first") {
 		t.Fatal("late ambiguous event consumed remaining route")
 	}
-	if s.harnessReplyAllowsRecap("agent", "first") {
-		t.Fatal("latest recap allowed for overlapped route")
+	if !s.harnessReplies["first"].overlapped {
+		t.Fatal("remaining route lost overlap evidence")
 	}
 }
 
@@ -310,7 +310,7 @@ func TestHarnessLocalNoticeDoesNotPoisonPendingRemoteReply(t *testing.T) {
 	s := &Server{agentHandler: &agenthttp.AgentHandler{}}
 	s.registerHarnessDispatch("agent", "remote", true, false, harness.Frame{"idempotencyKey": "key-a"})
 	s.deliverHarnessVoiceMessage("agent", "local-failure", "Harness focus changed")
-	if !s.harnessReplyAllowsRecap("agent", "remote") || s.harnessOverlapAgents["agent"] {
+	if !s.hasHarnessReply("agent", "remote") || s.harnessReplies["remote"].overlapped || s.harnessOverlapAgents["agent"] {
 		t.Fatal("local failure was mistaken for overlapping remote execution")
 	}
 	s.forwardHarnessEvent(harness.Frame{"agentId": "agent", "kind": "turn.summary", "payload": map[string]any{"fullText": "remote result"}})

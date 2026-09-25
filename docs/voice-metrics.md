@@ -422,7 +422,7 @@ these independent task fields:
 | `task_exclusion_reason` | Noise, non-user, empty transcript, or not-addressed rejection; dispatch failure stays eligible |
 
 `voice_metrics_task_execution` carries `schema_version=1`, `run_id`,
-`interaction_id`, `outcome` (`completed`, `failed`, `unknown`), `evidence`,
+`interaction_id`, `outcome` (`completed`, `failed`, `unknown`, or Harness `cancelled`), `evidence`,
 `execution_at_ms` (Unix milliseconds), and a boolean `error`. It carries no
 error text, transcript or tool output. Evidence is:
 
@@ -436,10 +436,21 @@ error text, transcript or tool output. Evidence is:
 | `chat_final_no_lifecycle` | `completed`: a nonempty final reply consumes the pending trace without a lifecycle (for example OpenClaw `/status` or `/new`); empty finals are not completion evidence |
 | `execution_observation_lost` | `unknown`: a runtime lost observation of an unfinished sent task on transport loss or timeout; this does not establish execution failure |
 | `harness_delegated` | `unknown`: execution moved to Harness; local runtime lifecycle ends no longer establish remote completion |
-| `harness_turn_done`, `harness_turn_summary` | `completed`: correlated Harness completion; summary requires nonempty content, done does not require recap or TTS |
+| `harness_turn_summary` | `completed`: safely matched legacy final summary with nonempty content; `turn.done` alone does not complete a task |
+| `harness_correlated_summary` | `completed`, `failed` or `cancelled`: verified summary membership atomically applied once; the exact result outcome is preserved, independent of TTS |
 | `harness_turn_error` | `failed`: correlated Harness `turn.error` or `agent.error`, even without display text |
 | `harness_question_open` | `unknown`: waiting for a structured answer, including local partial-answer collection |
 | `realtime_turn_done` | `completed`: a correlated successful provider terminal completed the handled turn; Gemini Extended Thinking uses `IDLE` with accepted answer text and no unresolved local work; status-less sessions retain outcome confirmation/check, and fallback is not completion |
+
+The correlated `turn.summary` path reports `harness_correlated_summary` only for
+newly persisted results and exactly their member runs; replay does not emit it
+again. `cancelled` stays distinct and has `error=true`, never success. Receipt admission and
+`turn.done` are lifecycle evidence, not result completion. Metadata-free single
+summaries still use the safe legacy matcher; ambiguous summaries do not score. The reporter accepts this evidence in the Harness cohort and counts `cancelled`
+separately as `cancelled_turns`, retaining it in the eligible denominator without
+counting it as completed or failed. Cancellation is terminal: transport observation
+loss and later cleanup completion do not erase it. Existing failure precedence is
+preserved if conflicting failed evidence is also present.
 
 Join execution evidence to the cohort by **device + run_id** or **device +
 interaction_id**. OS observations also include non-voice runs: never put those
