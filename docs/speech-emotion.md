@@ -42,7 +42,7 @@ SpeechEmotionService.submit(user, wav_bytes, duration_s)   ← non-blocking
     ▼
 worker thread (daemon)
     │  Emotion2VecRecognizer.recognize(wav_bytes)
-    │     ├─ prefilter — RMS trim + voiced gate, then Silero VAD   ← LOCAL, drops non-speech
+    │     ├─ prefilter — RMS trim + voiced gate, then Silero VAD, then ≤8 s most-voiced span   ← LOCAL, drops non-speech
     │     ├─ POST {DL_BACKEND_URL}/hal/api/dl/ser/recognize
     │     │     ← { "label": "happy", "confidence": 0.78 }
     │     ├─ per-label confidence gate
@@ -117,17 +117,19 @@ Module-level config is read **at import time** (`service.py:85-99`), so tests th
 
 ## Local Prefilter (the only edge model on this path)
 
-Before any network I/O, `Emotion2VecRecognizer.prefilter()` (`emotion2vec.py:213`) gates the clip. Its purpose is to reject **long-but-sparse** audio — a 20-second clip containing two seconds of TV chatter — which emotion2vec would otherwise label confidently and wrongly. It returns the **trimmed, re-encoded** WAV, so the cloud sees the cleaner buffer too.
+Before any network I/O, `Emotion2VecRecognizer.prefilter()` (`emotion2vec.py:215`) gates the clip. Its purpose is to reject **long-but-sparse** audio — a 20-second clip containing two seconds of TV chatter — which emotion2vec would otherwise label confidently and wrongly. It returns the **trimmed, re-encoded** WAV, so the cloud sees the cleaner buffer too.
 
 Decode requires 16-bit PCM at exactly 16 kHz; multi-channel is averaged to mono.
 
 **Stage 1 — RMS** (single pass, `utils.compute_trim_and_voiced`). One 20 ms RMS envelope serves two jobs with two thresholds by design: `PREFILTER_TRIM_RMS = 3500` (strict) anchors the head/tail trim boundary, `PREFILTER_VOICED_RMS = 2500` (lenient) counts voiced frames inside it so whisper/breathy speech still registers. 100 ms of padding is kept around the cut. Drops when the trimmed clip is `< 2.0 s`, total voiced is `< 1.0 s`, or the voiced ratio is `< 0.30` (denominator is the padded-trim span, so a long silent prefix cannot deflate it).
 
-**Stage 2 — Silero VAD** on the trimmed buffer (`emotion2vec.py:399`). Silero v5 contract: 512-sample chunks at 16 kHz with a 64-sample context prepended; LSTM `state` and `context` are rebuilt from zeros every call, so independent invocations never bleed into each other. Drops when Silero-voiced duration is `< 1.0 s`. When Silero is unavailable (missing model, broken ORT) the RMS bar **tightens** from 1.0 s to 3.0 s rather than passing everything through.
+**Stage 2 — Silero VAD** on the trimmed buffer (`emotion2vec.py:417`). Silero v5 contract: 512-sample chunks at 16 kHz with a 64-sample context prepended; LSTM `state` and `context` are rebuilt from zeros every call, so independent invocations never bleed into each other. Drops when Silero-voiced duration is `< 1.0 s`. When Silero is unavailable (missing model, broken ORT) the RMS bar **tightens** from 1.0 s to 3.0 s rather than passing everything through.
+
+**Upload clip** — after both gates pass, `utils.select_voiced_span` keeps only the contiguous **8 s** (`SER_MAX_CLIP_S`) span with the most voiced 20 ms frames (`PREFILTER_VOICED_RMS`). Ties go to the latest span. Clips of 8 s or less are unchanged. The span is a plain slice, never stitched from voiced pieces. perception-service also bounds SER input to 2–8 s, so anything longer would be cropped server-side anyway (#492).
 
 Re-encode failure is fail-open: the original WAV is sent.
 
-All thresholds are compile-time constants in `constants.py:87-111` — **not** env-overridable. Full tables in [docs/speech/speech-emotion-pipeline.md](speech/speech-emotion-pipeline.md#stage-5-6--the-prefilter-the-only-local-model).
+All thresholds are compile-time constants in `constants.py:87-135` — **not** env-overridable. Full tables in [docs/speech/speech-emotion-pipeline.md](speech/speech-emotion-pipeline.md#stage-5-6--the-prefilter-the-only-local-model).
 
 > This is the **fourth** Silero session in the HAL process (`voice_service._silero_vad`, `_rt_noise_vad` and `_silence_vad` all load the same file). See [known-issues #5](speech/speech-emotion-known-issues.md#5--a-fourth-redundant-silero-onnx-session).
 
@@ -435,7 +437,7 @@ This is why the ordering is: finalize → wake-word classification → speaker-I
 | perception-service returns non-200 / non-JSON / no `label` | Worker logs warning, sample dropped | Same as above |
 | Encryption required but no public key | `RuntimeError` at construction → caught in `_init_speech_emotion` → service is `None` | Fix `DL_PUBLIC_KEY_URL`/`DL_PUBLIC_KEY_FILE`, or unset `HAL_DL_ENCRYPTION_REQUIRED` |
 | Silero model missing / ORT broken | Prefilter falls back to a **stricter** RMS bar (3.0 s voiced) | Restore `resources/silero_vad.onnx`; check the one-time load warning |
-| Prefilter rejects the clip | Sample dropped before the cloud call, with the driving metrics logged | Expected for TV/music/sparse audio; tune `constants.py:87-111` if legitimate speech is being cut |
+| Prefilter rejects the clip | Sample dropped before the cloud call, with the driving metrics logged | Expected for TV/music/sparse audio; tune `constants.py:87-135` if legitimate speech is being cut |
 | Worker queue full | `submit()` logs warning, drops the **new** job | Indicates backend overload; see [known-issues #4](speech/speech-emotion-known-issues.md#4--queue-drops-the-newest-job-and-never-ages-out-stale-ones) |
 | OS server sensing endpoint down | 3 retries with 2 s back-off, then sample dropped | Buffer continues filling for next flush |
 | `duration_s < MIN_AUDIO_S` | Dropped in `submit()` with a log line | Expected — short utterances aren't worth classifying |

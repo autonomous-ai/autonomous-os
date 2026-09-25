@@ -44,7 +44,7 @@ SpeechEmotionService.submit(user, wav_bytes, duration_s)   ← non-blocking
     ▼
 worker thread (daemon)
     │  Emotion2VecRecognizer.recognize(wav_bytes)
-    │     ├─ prefilter — RMS trim + cổng voiced, rồi Silero VAD   ← CỤC BỘ, loại phi-tiếng-nói
+    │     ├─ prefilter — RMS trim + cổng voiced, rồi Silero VAD, sau đó cắt đoạn ≤8 giây nhiều giọng nói nhất   ← CỤC BỘ, loại phi-tiếng-nói
     │     ├─ POST {DL_BACKEND_URL}/hal/api/dl/ser/recognize
     │     │     ← { "label": "happy", "confidence": 0.78 }
     │     ├─ cổng confidence theo nhãn
@@ -124,17 +124,19 @@ Config mức module được đọc **lúc import** (`service.py:85-99`), nên t
 
 ## Prefilter Cục Bộ (model duy nhất ở edge trên đường này)
 
-Trước mọi I/O mạng, `Emotion2VecRecognizer.prefilter()` (`emotion2vec.py:213`) chặn clip. Mục đích là loại **audio dài-nhưng-thưa** — một clip 20 giây chứa hai giây tiếng TV — thứ mà emotion2vec sẽ gán nhãn tự tin và sai. Nó trả về WAV **đã trim và mã hóa lại**, nên cloud cũng nhận buffer sạch hơn.
+Trước mọi I/O mạng, `Emotion2VecRecognizer.prefilter()` (`emotion2vec.py:215`) chặn clip. Mục đích là loại **audio dài-nhưng-thưa** — một clip 20 giây chứa hai giây tiếng TV — thứ mà emotion2vec sẽ gán nhãn tự tin và sai. Nó trả về WAV **đã trim và mã hóa lại**, nên cloud cũng nhận buffer sạch hơn.
 
 Giải mã yêu cầu PCM 16-bit đúng 16 kHz; đa kênh được lấy trung bình về mono.
 
 **Chặng 1 — RMS** (một lượt, `utils.compute_trim_and_voiced`). Một envelope RMS 20 ms phục vụ hai việc với hai ngưỡng có chủ đích: `PREFILTER_TRIM_RMS = 3500` (nghiêm) neo biên cắt đầu/đuôi, `PREFILTER_VOICED_RMS = 2500` (rộng rãi) đếm frame có tiếng bên trong vùng đó để giọng thì thầm/hơi vẫn được ghi nhận. Giữ 100 ms đệm quanh vết cắt. Drop khi clip sau trim `< 2.0 s`, tổng thời lượng có tiếng `< 1.0 s`, hoặc tỉ lệ voiced `< 0.30` (mẫu số là vùng trim đã đệm, nên đoạn im lặng dài ở đầu không làm giảm tỉ lệ).
 
-**Chặng 2 — Silero VAD** trên buffer đã trim (`emotion2vec.py:399`). Hợp đồng Silero v5: chunk 512 mẫu ở 16 kHz với context 64 mẫu đặt phía trước; `state` LSTM và `context` được dựng lại từ zero mỗi lần gọi, nên các lần gọi độc lập không lẫn trạng thái vào nhau. Drop khi thời lượng Silero-voiced `< 1.0 s`. Khi Silero không khả dụng (thiếu model, ORT hỏng), ngưỡng RMS **siết** từ 1.0 s lên 3.0 s thay vì cho qua tất cả.
+**Chặng 2 — Silero VAD** trên buffer đã trim (`emotion2vec.py:417`). Hợp đồng Silero v5: chunk 512 mẫu ở 16 kHz với context 64 mẫu đặt phía trước; `state` LSTM và `context` được dựng lại từ zero mỗi lần gọi, nên các lần gọi độc lập không lẫn trạng thái vào nhau. Drop khi thời lượng Silero-voiced `< 1.0 s`. Khi Silero không khả dụng (thiếu model, ORT hỏng), ngưỡng RMS **siết** từ 1.0 s lên 3.0 s thay vì cho qua tất cả.
+
+**Cắt clip gửi lên** — sau khi qua cả hai cổng lọc, `utils.select_voiced_span` chỉ giữ đoạn liên tục **8 giây** (`SER_MAX_CLIP_S`) có nhiều frame 20 ms có giọng nói nhất (`PREFILTER_VOICED_RMS`). Khi bằng nhau thì chọn đoạn muộn nhất. Clip ≤8 giây giữ nguyên. Đoạn được cắt nguyên khối, không ghép các mảnh có giọng nói lại với nhau. perception-service cũng giới hạn đầu vào SER ở 2–8 giây, nên phần dài hơn cũng sẽ bị cắt phía server (#492).
 
 Lỗi mã hóa lại thì fail-open: WAV gốc được gửi đi.
 
-Mọi ngưỡng là hằng số biên dịch trong `constants.py:87-111` — **không** override được bằng env. Bảng đầy đủ ở [docs/vi/speech/speech-emotion-pipeline_vi.md](speech/speech-emotion-pipeline_vi.md#chặng-5-6--prefilter-mô-hình-cục-bộ-duy-nhất).
+Mọi ngưỡng là hằng số biên dịch trong `constants.py:87-135` — **không** override được bằng env. Bảng đầy đủ ở [docs/vi/speech/speech-emotion-pipeline_vi.md](speech/speech-emotion-pipeline_vi.md#chặng-5-6--prefilter-mô-hình-cục-bộ-duy-nhất).
 
 > Đây là session Silero **thứ tư** trong tiến trình HAL (`voice_service._silero_vad`, `_rt_noise_vad` và `_silence_vad` đều nạp cùng file). Xem [known-issues #5](speech/speech-emotion-known-issues_vi.md#5--một-session-silero-onnx-thứ-tư-thừa).
 
@@ -431,7 +433,7 @@ Cũng không cấu hình được: `DEFAULT_QUEUE_MAXSIZE = 32`, các chuỗi r�
 | perception-service trả non-200 / không phải JSON / thiếu `label` | Worker log cảnh báo, bỏ mẫu | Như trên |
 | Bắt buộc mã hóa nhưng thiếu public key | `RuntimeError` lúc khởi tạo → bị bắt trong `_init_speech_emotion` → service là `None` | Sửa `DL_PUBLIC_KEY_URL`/`DL_PUBLIC_KEY_FILE`, hoặc bỏ `HAL_DL_ENCRYPTION_REQUIRED` |
 | Thiếu model Silero / ORT hỏng | Prefilter rơi về ngưỡng RMS **nghiêm hơn** (3.0 s voiced) | Khôi phục `resources/silero_vad.onnx`; xem cảnh báo nạp model một lần |
-| Prefilter từ chối clip | Bỏ mẫu trước lời gọi cloud, kèm log các chỉ số dẫn tới quyết định | Bình thường với TV/nhạc/audio thưa; chỉnh `constants.py:87-111` nếu tiếng nói thật đang bị cắt |
+| Prefilter từ chối clip | Bỏ mẫu trước lời gọi cloud, kèm log các chỉ số dẫn tới quyết định | Bình thường với TV/nhạc/audio thưa; chỉnh `constants.py:87-135` nếu tiếng nói thật đang bị cắt |
 | Hàng đợi worker đầy | `submit()` log cảnh báo, bỏ job **mới** | Dấu hiệu backend quá tải; xem [known-issues #4](speech/speech-emotion-known-issues_vi.md#4--hàng-đợi-bỏ-job-mới-nhất-và-không-bao-giờ-loại-job-cũ) |
 | Endpoint sensing của OS server chết | 3 lần thử với back-off 2 s, rồi bỏ mẫu | Buffer tiếp tục đầy cho lần flush sau |
 | `duration_s < MIN_AUDIO_S` | Bỏ trong `submit()` kèm một dòng log | Bình thường — câu quá ngắn không đáng phân loại |

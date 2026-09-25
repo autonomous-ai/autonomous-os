@@ -125,3 +125,11 @@ PREFILTER_VAD_MIN_VOICED_S: float = 1.0  # min Silero voiced duration
 PREFILTER_VAD_FALLBACK_MIN_VOICED_S: float = 3.0  # stricter RMS bar when Silero unavailable
 PREFILTER_SILERO_CHUNK_SAMPLES: int = 512  # Silero v5 requires 512 @ 16kHz
 PREFILTER_SILERO_CONTEXT_SAMPLES: int = 64  # Silero v5 context prepend
+
+# --- Upload length -----------------------------------------------------------
+# emotion2vec was trained on short utterances (acted corpora: 2.4 s median,
+# 7.1 s max) and grows confidently wrong on longer input. The server also
+# bounds SER input to 2-8 s (perception-service #492). Only the most-voiced
+# contiguous span of this length is uploaded; audio past it would be dropped
+# server-side anyway.
+SER_MAX_CLIP_S: float = 8.0
