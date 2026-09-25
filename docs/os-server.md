@@ -1531,3 +1531,13 @@ reports queued separately from delivered/started. The app must carry the existin
 key or matching run ID on overlapping summary/tool/question events; missing
 correlation is ignored. No new wire field is introduced. Local/mock tests cover OS
 behavior, not live app steering or end-to-end overlap. No device deployment is implied.
+
+### Harness result sound
+
+Harness final voice delivery calls `/voice/speak` with `harness_result:true` and
+`realtime_feedback:true`, retaining the configured voice and original result text.
+HAL generates a 200 ms cue immediately before the first speech PCM in that same
+utterance. It is not a separate gesture sound or model call. Muted/rejected or
+cancelled-before-playback replies have no cue; Web Chat and local OS notices do
+not request one. The cue does not count as the first speech PCM for timing. Both
+OS and HAL need the update; physical listening tests remain required.

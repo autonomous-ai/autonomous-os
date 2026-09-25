@@ -1500,3 +1500,13 @@ biệt queued với delivered/started. App cần mang key hiện có hoặc run 
 event summary/tool/question khi overlap; thiếu tương quan thì bỏ qua. Không thêm
 field wire mới. Test local/mock bao phủ OS, chưa chứng minh steering app thật hay
 end-to-end overlap. Không tự deploy thiết bị.
+
+### Âm báo kết quả Harness
+
+Kết quả voice Harness gọi `/voice/speak` với `harness_result:true` và
+`realtime_feedback:true`, giữ giọng cấu hình và nguyên văn kết quả. HAL tạo âm
+200 ms ngay trước PCM lời nói đầu tiên trong cùng utterance; không gọi âm gesture
+riêng hay thêm lượt model. Reply muted/bị từ chối hoặc hủy trước playback không
+phát âm báo; Web Chat và thông báo OS cục bộ không yêu cầu âm này. Âm báo không
+được tính là PCM lời nói đầu tiên trong timing. Cần cập nhật cả OS lẫn HAL; vẫn
+cần nghe thử trên thiết bị thật.

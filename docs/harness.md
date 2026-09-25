@@ -2,7 +2,7 @@
 
 `system/harness` connects one Autonomous device directly to one explicitly paired Harness computer. Harness Desktop/CLI discovers devices through the existing `_autonomous._tcp` mDNS service, also used by Autonomous Buddy. Harness uses its own identity pins and the original Harness `E2eeManager` pairing/session protocol. Buddy's implementation and keys remain independent.
 
-For turns delegated by the main agent through the skill, OS prefixes the final UI/TTS response with a localized attribution (for example, “Harness says:” or “Harness trả lời:”). The response route records this origin at dispatch, so later voice-mode changes do not affect attribution. Direct Harness-only voice results remain unchanged. Original result text in external history and follow-up context stays verbatim; no additional model turn is used.
+Harness voice results use the existing TTS voice with a short 200 ms result chime before speech, instead of a spoken attribution prefix. This applies to both skill-delegated and Harness-only results. Web results remain silent and carry `source:harness` metadata; displayed text, external history and follow-up context retain the original answer. Duplicate final events cannot schedule another playback. Local OS connection/error notices do not use the remote-result chime. The cue belongs to the accepted utterance, respects mute/cancellation, and is distinct from capture start/end sounds; no additional model call or separate TTS voice is used. Deploy OS and HAL together for the new optional `harness_result` speak flag. Local audio tests do not establish perceived loudness on physical speakers.
 
 Get Harness and follow its installation instructions at [OpenHarness](https://github.com/autonomous-ai/openharness).
 

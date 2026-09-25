@@ -281,7 +281,11 @@ func (s *Server) registerHarnessRoute(agentID, runID string, webChat, delegated 
 	s.harnessReplies[runID] = route
 	s.harnessRepliesMu.Unlock()
 	s.harnessFollowup.Store(time.Now().Add(2 * time.Minute).UnixMilli())
-	s.agentHandler.MarkHarnessResponseRun(runID, webChat, delegated)
+	if localOnly {
+		s.agentHandler.MarkHarnessLocalResponseRun(runID, webChat)
+	} else {
+		s.agentHandler.MarkHarnessResponseRun(runID, webChat, delegated)
+	}
 	telemetry.ReportTaskExecution(runID, "", "unknown", "harness_delegated")
 }
 

@@ -207,5 +207,8 @@ func (s *Server) deliverHarnessVoiceMessage(agentID, runID, text string) {
 		// A preflight failure is a local notice, not another remote task.
 		s.registerHarnessRoute(agentID, runID, false, false, "", true)
 	}
+	if s.agentHandler != nil {
+		s.agentHandler.MarkHarnessLocalResponseRun(runID, false)
+	}
 	s.deliverHarnessFinal(agentID, runID, text)
 }

@@ -1058,7 +1058,7 @@ class TTSService:
 
     def speak(self, text: str, interruptible: bool = False, realtime_feedback: bool = False,
               turn_id: str = "", realtime_reply: bool = False,
-              speed: Optional[float] = None) -> bool:
+              speed: Optional[float] = None, harness_result: bool = False) -> bool:
         """Synthesize and play text. Returns True if started, False if busy or unavailable.
         If interruptible=True, a subsequent speak() call can stop this one.
         realtime_feedback=True feeds this text to the realtime agent on completion
@@ -1086,7 +1086,7 @@ class TTSService:
         # agent replies never match — the cache only ever holds warm-listed
         # fixed phrases. speak_cached mirrors this method's lock semantics.
         # Preview speed belongs to this utterance, never the shared service or cache.
-        if speed is None and self._tts_cache_path(text).exists():
+        if not harness_result and speed is None and self._tts_cache_path(text).exists():
             logger.info("TTS cache-first hit: %s", text[:50])
             return self.speak_cached(
                 text, interruptible=interruptible, realtime_feedback=realtime_feedback,
@@ -1112,7 +1112,8 @@ class TTSService:
         thread = threading.Thread(
             target=self._speak_sync,
             args=(text,),
-            kwargs={"speed": speed} if speed is not None else {},
+            kwargs={**({"speed": speed} if speed is not None else {}),
+                    **({"harness_result": True} if harness_result else {})},
             daemon=True,
             name="tts-speak",
         )
@@ -1945,7 +1946,8 @@ class TTSService:
             except Exception:
                 pass
 
-    def _speak_sync(self, text: str, speed: Optional[float] = None):
+    def _speak_sync(self, text: str, speed: Optional[float] = None,
+                    harness_result: bool = False):
         """Head chunk direct playback + parallel tail producer queue."""
         logger.info("[tts-timing] stage=worker_start text_key=%s",
                     hashlib.sha256(text.encode()).hexdigest()[:12])
@@ -1995,6 +1997,7 @@ class TTSService:
         )
         head_thread.start()
 
+        result_cue_pending = harness_result
         for _play_attempt in range(2):
             try:
                 # Acquire the stream lock for the entire playback so the silence
@@ -2030,6 +2033,11 @@ class TTSService:
                             continue
                         if item is None:
                             break
+                        if result_cue_pending:
+                            # Mark before playback so a stream retry never repeats the cue.
+                            result_cue_pending = False
+                            if not self._write_harness_result_chime(stream, dst_rate):
+                                break
                         if not self._speak_start_fired and self._on_speak_start:
                             self._speak_start_fired = True
                             try:
@@ -2054,6 +2062,10 @@ class TTSService:
                                 continue
                             if item is None:
                                 break
+                            if result_cue_pending:
+                                result_cue_pending = False
+                                if not self._write_harness_result_chime(stream, dst_rate):
+                                    break
                             stream.write(item)
                             total_samples += len(item)
                     # speak_queue() may have parked pre-synth'd PCM behind us
@@ -2404,6 +2416,31 @@ class TTSService:
         notes = [0.28 * envelope * np.sin(2 * np.pi * frequency * t)
                  for frequency in frequencies]
         return np.concatenate((notes[0], np.zeros(int(rate * 0.025)), notes[1])).astype(np.float32).reshape(-1, 1)
+
+    def _harness_result_chime_samples(self, rate: int):
+        """Soft 200 ms chord, distinct from capture's rising/falling notes."""
+        np = self._np
+        t = np.arange(int(rate * 0.2)) / rate
+        envelope = np.sin(np.pi * np.arange(len(t)) / max(1, len(t) - 1)) ** 2
+        samples = 0.14 * envelope * (np.sin(2 * np.pi * 659.25 * t)
+                                    + np.sin(2 * np.pi * 987.77 * t))
+        gain = self._backend.volume_boost if self._backend is not None else 1.0
+        return np.clip(samples * gain, -1.0, 1.0).astype(np.float32).reshape(-1, 1)
+
+    def _write_harness_result_chime(self, stream, rate: int) -> bool:
+        """Write inside the admitted utterance, preserving its cancellation/metrics."""
+        samples = self._harness_result_chime_samples(rate)
+        block = max(1, int(rate * 0.01))
+        for offset in range(0, len(samples), block):
+            if self._stop_event.is_set() or self._speaker_muted():
+                self._stop_event.set()
+                return False
+            # Untracked writes preserve AEC but bypass the stream's speech stop
+            # check, so check cancellation explicitly for every 10 ms slice.
+            stream.write(samples[offset:offset + block], track_playback=False)
+        if self._speaker_muted():
+            self._stop_event.set()
+        return not self._stop_event.is_set()
 
     def _play_gesture_chime(self, samples_for_rate) -> bool:
         """Use existing volume, mute, AEC and untracked playback for gesture tones."""
