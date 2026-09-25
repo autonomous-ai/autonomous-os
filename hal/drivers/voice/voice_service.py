@@ -51,6 +51,8 @@ from hal.drivers.voice._internal.realtime_turn import (
     ROUTE_DELEGATED,
     ROUTE_NOISE_DROPPED,
     split_first_chunk,
+    split_completed_prefix,
+    SENTENCE_ENDS,
     ROUTE_NOT_STARTED,
     RealtimeTurnResult,
     build_speaker_correction,
@@ -1730,6 +1732,9 @@ class VoiceService:
                             deferred_error_tail = None
                         if out.user_turn_id:
                             response_inputs.add(out.user_turn_id)
+                        if not transcript and out.text:
+                            logger.info("[tts-timing] stage=realtime_first_text mode=live owner=%s reply=%s",
+                                        metrics.interaction(out.user_turn_id), out.user_turn_id)
                         history.output(out.user_turn_id, out.text)
                         self._live_last_model_output = time.time()
                         transcript += out.text
@@ -1776,7 +1781,11 @@ class VoiceService:
                         # Check the spoken text; a trailing tag must not hold a
                         # complete sentence until the provider's routing grace ends.
                         sentence = self.strip_rt_markers(sentence_buf)
-                        if sentence.rstrip().endswith((".", "!", "?", "…")):
+                        complete = sentence.rstrip().endswith(SENTENCE_ENDS + ("…",))
+                        ready, tail = ("", "") if complete else split_completed_prefix(sentence_buf)
+                        if ready:
+                            sentence = self.strip_rt_markers(ready)
+                        if sentence.rstrip().endswith(SENTENCE_ENDS + ("…",)):
                             if sentence:
                                 if cues is not None:
                                     cues.finish(out.user_turn_id)
@@ -1786,7 +1795,7 @@ class VoiceService:
                                 if opener is not None:
                                     if iid == opener["interaction_id"]:
                                         opener["replied"] = True
-                            sentence_buf = ""
+                            sentence_buf = tail if ready else ""
                         continue
                 if stop_event is not None and stop_event.is_set():
                     break

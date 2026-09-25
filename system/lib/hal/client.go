@@ -4,10 +4,12 @@ package hal
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -723,7 +725,22 @@ func post(path string, body []byte) error {
 // response body and returns ErrSpeakerMuted when HAL reports the request was
 // suppressed (speaker muted). A malformed/unexpected body is NOT an error —
 // the speak itself succeeded, so decode failures are ignored.
-func postSpeak(path string, body []byte) error {
+func postSpeak(path string, body []byte) (err error) {
+	// Observe the final runtime-sanitized payload without adding wire fields.
+	var timing struct {
+		Text   string `json:"text"`
+		TurnID string `json:"turn_id"`
+	}
+	if json.Unmarshal(body, &timing) == nil && timing.Text != "" {
+		started := time.Now()
+		digest := sha256.Sum256([]byte(timing.Text))
+		textKey := fmt.Sprintf("%x", digest[:6])
+		slog.Info("[tts-timing] hal_post_start", "path", path, "run_id", timing.TurnID, "text_key", textKey)
+		defer func() {
+			slog.Info("[tts-timing] hal_post_complete", "path", path, "run_id", timing.TurnID,
+				"text_key", textKey, "http_ms", time.Since(started).Milliseconds(), "success", err == nil)
+		}()
+	}
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)

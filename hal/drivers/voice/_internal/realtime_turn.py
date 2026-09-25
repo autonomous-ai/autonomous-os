@@ -116,6 +116,34 @@ def split_first_chunk(buf: str) -> tuple[str, str]:
     return (head, buf[cut + 1:]) if head else ("", buf)
 
 
+def split_completed_prefix(buf: str) -> tuple[str, str]:
+    """Release completed sentences bundled with the next unfinished sentence.
+
+    Keep raw tags and the exact tail for the next chunk. Incomplete tags,
+    numbers, initials and common abbreviations remain buffered conservatively.
+    The existing end-of-buffer sentence path handles terminal punctuation.
+    """
+    depth = 0
+    cut = 0
+    abbreviations = {"mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc", "e.g", "i.e"}
+    for i, char in enumerate(buf):
+        if char == "[":
+            depth += 1
+        elif char == "]" and depth:
+            depth -= 1
+        elif not depth and char in SENTENCE_ENDS:
+            if i + 1 >= len(buf) or not buf[i + 1].isspace():
+                continue
+            if char == ".":
+                token = buf[:i].rsplit(maxsplit=1)[-1].lower() if buf[:i].strip() else ""
+                if (i and buf[i - 1].isdigit()) or token in abbreviations or len(token) == 1:
+                    continue
+            cut = i + 1
+    if depth or not cut or not buf[cut:].strip():
+        return "", buf
+    return buf[:cut], buf[cut:]
+
+
 # How a turn resolved, for the single routing log line in dispatch_turn. Every
 # value except HANDLED or AI_REJECTED means the main agent answers this turn.
 ROUTE_HANDLED = "realtime_handled"          # realtime spoke; main agent stays silent
@@ -735,6 +763,8 @@ def run_realtime_turn(
                             text_parts.append(output.transcript)
                         continue
                     if isinstance(output, RTTextOutput):
+                        if not text_parts and output.text:
+                            logger.info("[tts-timing] stage=realtime_first_text mode=turn owner=%s", interaction_id)
                         text_parts.append(output.text)
                         if native:
                             # Audio already carries the reply — keep text only for
@@ -787,6 +817,10 @@ def run_realtime_turn(
                         # Trailing voice/HW tags are not spoken punctuation.
                         # Keep the raw buffer until ready so split tags reassemble.
                         sentence = strip_markers(sentence_buf)
+                        complete = sentence.rstrip().endswith(SENTENCE_ENDS)
+                        ready, tail = ("", "") if complete else split_completed_prefix(sentence_buf)
+                        if ready:
+                            sentence = strip_markers(ready)
                         if tts is not None and sentence.rstrip().endswith(SENTENCE_ENDS):
                             sentence = leak_filter.filter_text(sentence)
                             if sentence:
@@ -816,7 +850,7 @@ def run_realtime_turn(
                                         sentence[:80],
                                     )
                                     tts.speak_queue(sentence, turn_id=interaction_id, realtime_reply=True)
-                            sentence_buf = ""
+                            sentence_buf = tail if ready else ""
 
                 execution_completed = (
                     getattr(realtime, "execution_completed", False) is True

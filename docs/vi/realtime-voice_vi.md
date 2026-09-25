@@ -176,7 +176,7 @@ nên phải triển khai OS và HAL cùng nhau. Luồng bình thường bên dư
 mode tắt. Xem [tích hợp Harness](harness_vi.md) về API quản lý, trả lời câu hỏi
 có cấu trúc và xử lý delivery chưa rõ kết quả.
 
-Với persona Lamp mặc định, yêu cầu thực hiện công việc số cũng đi theo route này mà không cần nêu Harness hay agent. Realtime gọi im lặng `delegate_to_main` với yêu cầu hiện tại được giữ trung thực; main agent chọn agent Harness hiện có hoặc chuẩn bị agent Store qua `harness-use`. Phạm vi gồm coding, research tạo báo cáo, tài liệu, bảng tính, slide, CAD/thiết kế, tạo media/nhạc và phân tích khoa học/mô phỏng, không giới hạn trong danh sách app cố định. Hội thoại, câu hỏi kiến thức, điều khiển vật lý, phát nhạc, nhắc việc, memory và connector thiết bị giữ route hiện có. Lựa chọn rõ về workflow khác, gồm Buddy, vẫn được tôn trọng. Task mới cần chọn agent riêng ngay cả khi đang trong cửa sổ follow-up.
+Với persona Lamp mặc định, yêu cầu thực hiện công việc số cũng đi theo route này mà không cần nêu Harness hay agent. Realtime gọi im lặng `delegate_to_main` với yêu cầu hiện tại được giữ trung thực; main agent ưu tiên agent Harness hiện có hoặc chuẩn bị agent Store qua `harness-use` khi đang kết nối. Nếu Harness offline/chưa pair trước khi gửi task mới, main dùng tool khác đang có. Không âm thầm chuyển đích từ xa được chỉ định hay làm trùng task từ xa đang có/delivery chưa rõ. Realtime vẫn delegate main, không tự thực hiện fallback. Phạm vi gồm coding, research tạo báo cáo, tài liệu, bảng tính, slide, CAD/thiết kế, tạo media/nhạc và phân tích khoa học/mô phỏng, không giới hạn trong danh sách app cố định. Hội thoại, câu hỏi kiến thức, điều khiển vật lý, phát nhạc, nhắc việc, memory và connector thiết bị giữ route hiện có. Lựa chọn rõ về workflow khác, gồm Buddy, vẫn được tôn trọng. Task mới cần chọn agent riêng ngay cả khi đang trong cửa sổ follow-up.
 
 Main skill dùng bằng chứng hiện có về tên/project/recap và chỉ khi cần mới đọc cặp `{recap,text}` mới nhất của tối đa hai ứng viên. Chưa rõ năng lực chuyên biệt không có nghĩa là đã sẵn sàng. Tìm package Store và chuẩn bị agent nay thuộc main skill qua [workflow Store v1](harness-store_vi.md) được thương lượng; realtime không tự setup hoặc gửi task đầu tiên. Thay đổi nằm ở chỉ dẫn model, không đổi API hay bảo đảm định tuyến bằng cơ chế xác định; persona Lamp, skill và prompt realtime đang chạy phải được cập nhật để áp dụng. Chính sách robot khác/SOUL tùy chỉnh không tự bị thay đổi, và kiểm tra local không triển khai lên thiết bị. Xem [chính sách công việc số của Lamp](harness_vi.md#chính-sách-công-việc-số-của-lamp).
 
@@ -870,12 +870,32 @@ từ `tts-1`), HAL gửi `speed=1.0` tới provider và áp dụng `tts_speed` t
 `config.json` ở máy cục bộ qua đường `get_tts_speed` sẵn có. Bộ lọc ffmpeg
 `atempo` dạng streaming thay đổi thời lượng nhưng giữ cao độ, trước khi
 resample, phát loa và lấy tham chiếu AEC. Tốc độ `1.0` bỏ qua bộ lọc.
-ffmpeg đã có trong quy trình chuẩn bị thiết bị.
+ffmpeg đã có trong quy trình chuẩn bị thiết bị. Process bộ lọc khởi động
+trước HTTP để chồng thời gian khởi động với thời gian chờ mạng/provider,
+và dùng một filter thread cho giọng mono.
+
+Trong lúc chờ đầu ra bộ lọc, HAL kiểm tra hủy để HTTP đang chờ không giữ
+ffmpeg sống sau khi hủy. Producer đầu/đuôi giữ thế hệ hủy và ghi queue có
+timeout; xóa stop event cho turn mới không làm producer cũ chạy lại. HTTP
+đồng bộ đang chờ vẫn có thể tồn tại tới khi nhận dữ liệu hoặc hết timeout
+đã cấu hình; audio về muộn bị bỏ và nguồn được đóng.
+
 
 Khóa WAV cache của v3 có dấu phân biệt để không dùng lại audio v3 đã tổng hợp
 theo chính sách tốc độ cũ. Thay đổi này điều chỉnh thời lượng phát, không giảm
 thời gian chờ byte đầu tiên (TTFB) từ provider. Các backend TTS khác giữ nguyên
 hành vi tốc độ hiện có.
+
+Phát text realtime (cả turn mode và LIVE, không phụ thuộc provider) gửi câu hoàn chỉnh ngay cả khi cùng delta đã chứa đầu câu tiếp theo chưa xong. Phần đuôi được giữ nguyên để ghép tiếp; tag chưa đóng, dấu chấm trong số và viết tắt phổ biến vẫn được giữ thận trọng. Luồng phát buffer hoàn chỉnh, native audio, điều kiện hoàn tất/delegate và cancel không đổi. `[tts-timing] stage=realtime_first_text` đánh dấu text đầu tiên tới đường playback; đối chiếu owner với `speak_requested`/`queue_requested` và timing HTTP để tách thời gian giữ text khỏi tổng hợp giọng.
+
+Log TTS `[tts-timing]` ghi lúc nhận yêu cầu/queue, worker phát, bắt đầu HTTP,
+headers/byte giải mã đầu tiên, buffer 4096 byte đầu, đầu ra tempo đầu tiên và
+lần ghi loa đầu hoàn tất. `request` riêng cho từng HTTP phân biệt các lần tải
+song song; `text_key` (tiền tố SHA-256) nối log tổng hợp và playback. Câu giống
+nhau có cùng key nên cần đối chiếu thêm timestamp và owner. Timing HTTP gồm
+proxy/mạng/provider, chưa tách được thời gian tính toán provider. Ghi loa chưa
+phải lúc âm thanh thực sự tới tai. Log giữ nguyên ranh giới chunk PCM, KPI và
+chính sách phát/cancel.
 
 ### Vì sao không có cắt lời bằng giọng nói trên mic đã khử vọng
 

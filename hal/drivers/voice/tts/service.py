@@ -788,6 +788,7 @@ class TTSService:
         discarded so a stop during sentence-streaming actually silences
         everything the agent had queued ahead, not just the current sentence.
         """
+        self._synthesis_generation = getattr(self, "_synthesis_generation", 0) + 1
         if not hal_config.LIVE_MODE:
             # Preserve the regular turn path's stop/wake/clear ordering.
             if self._speaking:
@@ -846,6 +847,7 @@ class TTSService:
             self._pending_queue[:] = retained
             active_realtime = self.realtime_speaking
             if active_realtime:
+                self._synthesis_generation = getattr(self, "_synthesis_generation", 0) + 1
                 active = getattr(self, '_active_pending_speech', None)
                 if active is not None and active.realtime_reply:
                     active.cancelled.set()
@@ -1057,6 +1059,8 @@ class TTSService:
         If interruptible=True, a subsequent speak() call can stop this one.
         realtime_feedback=True feeds this text to the realtime agent on completion
         (agent replies only — see _realtime_feedback)."""
+        logger.info("[tts-timing] stage=speak_requested text_key=%s owner=%s",
+                    hashlib.sha256(text.encode()).hexdigest()[:12], turn_id or "unowned")
         if not self.available:
             logger.warning("TTS not available")
             return False
@@ -1171,6 +1175,8 @@ class TTSService:
         Returns True if the request was accepted (playing or queued); False
         if TTS is unavailable.
         """
+        logger.info("[tts-timing] stage=queue_requested text_key=%s owner=%s",
+                    hashlib.sha256(text.encode()).hexdigest()[:12], turn_id or "unowned")
         if not self.available:
             logger.warning("TTS not available")
             return False
@@ -1433,6 +1439,8 @@ class TTSService:
             )
             self._pending_playback_owner = ""
             stream.write(first)
+            logger.info("[tts-timing] stage=queued_first_write_done text_key=%s owner=%s",
+                        hashlib.sha256(item.text.encode()).hexdigest()[:12], item.owner)
             total += len(first)
             while not self._stop_event.is_set():
                 try:
@@ -1721,7 +1729,11 @@ class TTSService:
                           cancelled: Optional[Callable[[], bool]] = None,
                           speed: Optional[float] = None):
         """Yield float32 sample frames from the TTS backend's PCM stream."""
-        stopped = cancelled if cancelled is not None else self._stop_event.is_set
+        generation = getattr(self, "_synthesis_generation", 0)
+        stopped = cancelled if cancelled is not None else lambda: (
+            self._stop_event.is_set()
+            or generation != getattr(self, "_synthesis_generation", 0)
+        )
         np = self._np
         src_rate = self._backend.sample_rate
         # Head, tail and queued pre-synthesis run concurrently. Each iterator
@@ -1737,6 +1749,7 @@ class TTSService:
             model=self._model,
             speed=self._speed if speed is None else speed,
             instructions=self._instructions,
+            **({"cancelled": stopped} if getattr(self._backend, "supports_synthesis_cancellation", False) else {}),
         ):
             if stopped():
                 return
@@ -1832,18 +1845,25 @@ class TTSService:
         """Produce head chunk frames into a queue. Runs in parallel with the
         ALSA OutputStream open call so HTTP TTFB overlaps codec warmup."""
         idx, total = idx_total
+        generation = getattr(self, "_synthesis_generation", 0)
+        stopped = lambda: self._stop_event.is_set() or generation != getattr(self, "_synthesis_generation", 0)
         attempt = 0
         try:
-            while attempt <= self._max_retries:
+            while attempt <= self._max_retries and not stopped():
                 try:
                     logger.info(
                         "TTS chunk %d/%d: len=%d (attempt=%d, speed=%.2f)",
                         idx, total, len(text), attempt + 1, self._speed if speed is None else speed,
                     )
-                    for frame in self._iter_tts_samples(text, dst_rate, ttfb_tag="c0", speed=speed):
-                        if self._stop_event.is_set():
+                    for frame in self._iter_tts_samples(text, dst_rate, ttfb_tag="c0", speed=speed, cancelled=stopped):
+                        if stopped():
                             return
-                        out_q.put(frame)
+                        while not stopped():
+                            try:
+                                out_q.put(frame, timeout=0.05)
+                                break
+                            except queue.Full:
+                                continue
                     return
                 except Exception as e:
                     logger.exception(
@@ -1873,18 +1893,25 @@ class TTSService:
     ) -> None:
         """Produce tail frames sequentially into one shared queue."""
         total = len(tail_chunks) + 1
+        generation = getattr(self, "_synthesis_generation", 0)
+        stopped = lambda: self._stop_event.is_set() or generation != getattr(self, "_synthesis_generation", 0)
         try:
             for i, chunk_text in enumerate(tail_chunks, start=2):
-                if self._stop_event.is_set():
+                if stopped():
                     break
                 attempt = 0
-                while attempt <= self._max_retries:
+                while attempt <= self._max_retries and not stopped():
                     try:
                         logger.info("Tail producer start c%d/%d len=%d", i, total, len(chunk_text))
-                        for frame in self._iter_tts_samples(chunk_text, dst_rate, speed=speed):
-                            if self._stop_event.is_set():
+                        for frame in self._iter_tts_samples(chunk_text, dst_rate, speed=speed, cancelled=stopped):
+                            if stopped():
                                 return
-                            out_q.put(frame)
+                            while not stopped():
+                                try:
+                                    out_q.put(frame, timeout=0.05)
+                                    break
+                                except queue.Full:
+                                    continue
                         logger.info("Tail producer done  c%d/%d", i, total)
                         break
                     except Exception as e:
@@ -1916,6 +1943,8 @@ class TTSService:
 
     def _speak_sync(self, text: str, speed: Optional[float] = None):
         """Head chunk direct playback + parallel tail producer queue."""
+        logger.info("[tts-timing] stage=worker_start text_key=%s",
+                    hashlib.sha256(text.encode()).hexdigest()[:12])
         sd = self._sd
         dst_rate = self._device_rate or TTS_SAMPLE_RATE
         chunks = self._split_text_into_growing_sentence_chunks(text)
@@ -1968,6 +1997,8 @@ class TTSService:
                 # keepalive thread doesn't interleave zeros with TTS frames.
                 with self._stream_lock:
                     stream = self._ensure_stream(dst_rate)
+                    logger.info("[tts-timing] stage=stream_ready text_key=%s rate=%d",
+                                hashlib.sha256(head_text.encode()).hexdigest()[:12], dst_rate)
                     # Tail producer kicks off the moment stream is ready so its HTTP
                     # TTFB overlaps with head playback.
                     tail_q: Optional["queue.Queue[Optional[np.ndarray]]"] = None
@@ -2002,6 +2033,10 @@ class TTSService:
                             except Exception:
                                 logger.exception("on_speak_start callback failed")
                         stream.write(item)
+                        if total_samples == 0:
+                            logger.info("[tts-timing] stage=first_write_done text_key=%s owner=%s",
+                                        hashlib.sha256(head_text.encode()).hexdigest()[:12],
+                                        getattr(self, "_playback_owner", ""))
                         total_samples += len(item)
 
                     # Drain tail queue.

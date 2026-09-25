@@ -173,7 +173,7 @@ The normal path below applies when the mode is off. See
 [Harness integration](harness.md#harness-only-voice-mode) for management APIs,
 structured question handling and uncertain-delivery recovery.
 
-For the default Lamp persona, digital execution requests also take this route without naming Harness or an agent. Realtime silently calls `delegate_to_main` with the faithful current request; the main agent chooses an existing Harness agent or prepares a Store agent through `harness-use`. This covers work across coding, research deliverables, documents, spreadsheets, slides, CAD/design, media/music creation and scientific analysis/simulation, rather than a fixed list of apps. Conversation, knowledge questions, physical controls, music playback, reminders, memory and device connectors retain their existing routes. Explicit alternative workflows, including Buddy, remain honored. A new task requires its own agent selection even during a follow-up window.
+For the default Lamp persona, digital execution requests also take this route without naming Harness or an agent. Realtime silently calls `delegate_to_main` with the faithful current request; the main agent prefers an existing Harness agent or prepares a Store agent through `harness-use` when connected. If Harness is offline/unpaired before any dispatch of a new task, main uses its other available tools. Explicit remote targets and existing/uncertain remote tasks cannot be silently moved or duplicated. Realtime still delegates to main; it does not execute the fallback itself. This covers work across coding, research deliverables, documents, spreadsheets, slides, CAD/design, media/music creation and scientific analysis/simulation, rather than a fixed list of apps. Conversation, knowledge questions, physical controls, music playback, reminders, memory and device connectors retain their existing routes. Explicit alternative workflows, including Buddy, remain honored. A new task requires its own agent selection even during a follow-up window.
 
 The main skill uses available name/project/recap evidence and, only if needed, the newest `{recap,text}` pair from at most two candidates. Unknown specialist capability is not proof of readiness. Store discovery and agent preparation now belong to the main skill through the negotiated [Store v1 workflow](harness-store.md); realtime never performs setup or sends the first task itself. It changes model instructions, not the API or a deterministic routing guarantee; the running Lamp persona, skills and realtime prompts must be updated for it to apply. Other robots/custom SOUL policies are not implicitly changed, and local verification does not deploy to a device. See [Lamp digital-work policy](harness.md#lamp-digital-work-policy).
 
@@ -902,11 +902,32 @@ the `tts-1` fallback), HAL requests provider `speed=1.0` and applies
 A streaming ffmpeg `atempo` filter changes duration while preserving pitch,
 before resampling, speaker output, and AEC reference capture. Speed `1.0`
 bypasses the filter. ffmpeg is already included in device provisioning.
+The filter process starts before the HTTP fetch, overlapping startup with
+network/provider wait, and uses one filter thread for mono speech.
+
+Cancellation is polled while waiting for filter output, so a pending HTTP fetch
+does not keep ffmpeg alive after cancellation. Head/tail producers retain a
+cancellation generation and use bounded queue writes; clearing the shared stop
+event for a new turn cannot revive an old producer. A synchronous HTTP read
+already in flight may remain until data arrives or its configured timeout;
+its late audio is discarded and its source is closed.
+
 
 The v3 WAV cache key includes a discriminator so previously synthesized v3
 audio is not reused under this speed policy. This changes playback duration;
 it does not reduce provider time to first byte (TTFB). Other TTS backends keep
 their existing speed behavior.
+
+Realtime text playback (turn mode and LIVE, regardless of provider) releases a complete sentence even when the same text delta also starts an unfinished next sentence. The exact unfinished tail stays buffered; partial tags, numeric periods and common abbreviations are held conservatively. Existing complete-buffer playback, native audio, provider completion/delegation and cancellation gates remain unchanged. `[tts-timing] stage=realtime_first_text` marks the first text received by the playback path; compare its owner with `speak_requested`/`queue_requested` and HTTP timing to isolate text buffering from synthesis latency.
+
+TTS diagnostics use `[tts-timing]`: request/queue admission, playback worker,
+HTTP start/headers/first decoded bytes, first 4096-byte buffer, first tempo
+output, and first completed speaker write. A per-HTTP `request` ID separates
+parallel fetches; `text_key` (SHA-256 prefix) links synthesis and playback logs.
+Repeated identical text shares a key, so also use timestamps and playback owner.
+HTTP durations include proxy/network/provider time; they cannot isolate provider
+compute. First write is not acoustic onset. Logging preserves PCM chunk boundaries
+and does not change KPI definitions or playback/cancellation policy.
 
 ### Why there is no voice-driven interrupt on the cancelled mic
 
