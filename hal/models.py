@@ -325,7 +325,7 @@ class SpeakRequest(BaseModel):
     # Optional provider override for one-off tests (e.g. web TTS preview before saving config).
     # When set and differs from the running service, the backend is hot-swapped using the
     # supplied credentials so the test does not require restarting /voice/start.
-    provider: Optional[str] = Field(None, description="Override TTS provider: 'openai' or 'elevenlabs'")
+    provider: Optional[str] = Field(None, description="Override TTS provider: 'openai', 'elevenlabs', 'gemini' or 'piper'")
     tts_api_key: Optional[str] = Field(None, description="API key for provider override")
     tts_base_url: Optional[str] = Field(None, description="Base URL for provider override")
     # Cache controls — see tts_service.speak_cached(). Cache key includes
@@ -786,7 +786,7 @@ class VoiceStartRequest(BaseModel):
         "", description="TTS style/vibe instructions (optional, e.g. 'Speak warmly')"
     )
     tts_provider: str = Field(
-        PROVIDER_OPENAI, description=f"TTS provider: '{PROVIDER_OPENAI}' (default) or '{PROVIDER_ELEVENLABS}'"
+        PROVIDER_OPENAI, description=f"TTS provider: '{PROVIDER_OPENAI}' (default), '{PROVIDER_ELEVENLABS}', 'gemini' or 'piper'"
     )
 
 

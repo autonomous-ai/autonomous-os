@@ -497,6 +497,21 @@ ElevenLabs HTTP v3 gửi speed `1.0` và áp dụng tốc độ đã lưu ở HA
 streaming giữ cao độ. Các model ElevenLabs khác vẫn giới hạn giá trị gửi đi
 trong `0.7–1.2`.
 
+### Gemini — TTS qua proxy autonomous
+
+`tts_provider: "gemini"` tổng hợp bằng model Gemini TTS
+(`hal/drivers/voice/tts/gemini.py`). Dùng lại relay Gemini REST của proxy — cùng
+route `…/ai/v1/google-search/v1beta` mà web search của pipecat gọi — dưới dạng
+`<tts_base_url>/google-search/v1beta/models/<model>:streamGenerateContent?alt=sse`
+với header `x-goog-api-key`, nên BFF không cần sửa. Model mặc định
+`gemini-3.8-flash-tts` (đổi bằng `HAL_TTS_GEMINI_MODEL`; model TTS 3.8/3.1 stream
+PCM 24 kHz, model 2.5 trả nguyên clip trong một event). Voice mặc định `Kore`;
+voice lạ (ví dụ lưu từ provider khác) tự rơi về `Kore`. Danh sách voice là 30
+voice dựng sẵn đa ngôn ngữ của Gemini nên bộ lọc ngôn ngữ không áp dụng. Gemini
+không có tham số speed: HAL áp dụng tốc độ đã lưu tại chỗ, giống ElevenLabs HTTP
+v3. Audio tag trong ngoặc vuông bị bỏ. Trong Settings → Voice, đây là vendor thứ
+ba dưới `Autonomous (proxy)`.
+
 ### Piper — TTS chạy trên thiết bị
 
 Provider TTS thứ ba bên cạnh `openai` và `elevenlabs`, chọn bằng
@@ -723,7 +738,7 @@ HAL (Python): FastAPI standard JSON responses.
 1. OS Server khởi động Gin trên :5000
 2. Đọc `config/config.json`
    - Seed `device_type` từ device class đã resolve (env `DEVICE_TYPE`, không có thì lấy key sẵn có) để config.json mang giá trị này cho các bên đọc không có env — wake word của HAL và `software-update`. Provisioning chỉ ghi env, nên không có seed này thì key không bao giờ tồn tại trên máy đã provision. Chỉ ghi khi giá trị đang lưu khác giá trị resolve
-   - Seed `tts_provider` + `tts_voice` từ block `voice:` trong ROBOT.md khi user chưa chọn (ghi một lần; lựa chọn đã lưu của user luôn thắng; provider vắng/không hợp lệ → `openai`). Khi provider seed là `elevenlabs` mà không khai báo voice, chọn default theo ngôn ngữ (`vi`→Ngan, `zh`→Amy, còn lại Rachel)
+   - Seed `tts_provider` + `tts_voice` từ block `voice:` trong ROBOT.md khi user chưa chọn (ghi một lần; lựa chọn đã lưu của user luôn thắng; provider vắng/không hợp lệ → `openai`). Khi provider seed là `elevenlabs` mà không khai báo voice, chọn default theo ngôn ngữ (`vi`→Ngan, `zh`→Amy, còn lại Rachel); khi là `gemini` thì chọn `Kore`
 3. Nếu `SetUpCompleted`:
    - Kết nối OpenClaw WebSocket
    - Kết nối MQTT

@@ -309,6 +309,8 @@ func (s *Server) Serve(closeFn func()) error {
 			seedVoice = v
 		} else if effectiveProvider == domain.TTSProviderElevenLabs {
 			seedVoice = domain.DefaultElevenLabsVoiceForLang(s.config.STTLanguage)
+		} else if effectiveProvider == domain.TTSProviderGemini {
+			seedVoice = domain.DefaultGeminiVoice
 		}
 	}
 	if seedProvider != "" || seedVoice != "" {

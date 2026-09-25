@@ -289,6 +289,10 @@ def get_voices(provider: Optional[str] = None, lang: Optional[str] = None):
             for p in glob.glob(os.path.join(voices_dir, "*.onnx"))
         )
         return {"provider": provider, "voices": names}
+    if provider == "gemini":
+        # Gemini prebuilt voices are multilingual, so `lang` does not filter.
+        from hal.drivers.voice.tts.gemini import GeminiTTSBackend
+        return {"provider": provider, "voices": GeminiTTSBackend.VOICES}
     if provider == PROVIDER_ELEVENLABS:
         return {
             "provider": provider,
