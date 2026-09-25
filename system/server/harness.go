@@ -18,13 +18,16 @@ import (
 )
 
 type harnessReply struct {
-	idempotencyKey string
-	overlapped     bool
-	localOnly      bool
-	agentID        string
-	runID          string
-	webChat        bool
-	created        time.Time
+	answer          bool
+	idempotencyKey  string
+	overlapped      bool
+	localOnly       bool
+	restored        bool
+	completedResult bool
+	agentID         string
+	runID           string
+	webChat         bool
+	created         time.Time
 }
 
 type harnessReplyRequest struct {
@@ -54,6 +57,7 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 	group.GET("voice-followup", localOnlyMiddleware(), func(c *gin.Context) {
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(gin.H{"active": s.HarnessVoiceFollowup()}))
 	})
+	s.registerHarnessResultRoutes(group)
 	s.registerHarnessVoiceRoutes(group)
 	// Pairing codes and pinned E2EE identities authenticate the direct socket.
 	group.GET("ws", func(c *gin.Context) {
@@ -260,6 +264,10 @@ func (s *Server) registerHarnessReply(agentID, runID string, webChat, delegated 
 }
 
 func (s *Server) registerHarnessRoute(agentID, runID string, webChat, delegated bool, key string, localOnly bool) {
+	s.registerHarnessRouteWithAnswer(agentID, runID, webChat, delegated, key, localOnly, false)
+}
+
+func (s *Server) registerHarnessRouteWithAnswer(agentID, runID string, webChat, delegated bool, key string, localOnly, answer bool) {
 	if agentID == "" || runID == "" || s.agentHandler == nil {
 		return
 	}
@@ -270,9 +278,9 @@ func (s *Server) registerHarnessRoute(agentID, runID string, webChat, delegated 
 	if s.harnessOverlapAgents == nil {
 		s.harnessOverlapAgents = make(map[string]bool)
 	}
-	route := harnessReply{agentID: agentID, runID: runID, webChat: webChat, created: time.Now(), overlapped: s.harnessOverlapAgents[agentID], idempotencyKey: key, localOnly: localOnly}
+	route := harnessReply{agentID: agentID, runID: runID, webChat: webChat, created: time.Now(), overlapped: s.harnessOverlapAgents[agentID], idempotencyKey: key, localOnly: localOnly, answer: answer}
 	for id, other := range s.harnessReplies {
-		if !localOnly && !other.localOnly && id != runID && other.agentID == agentID && time.Since(other.created) <= 15*time.Minute {
+		if !answer && !other.answer && !localOnly && !other.localOnly && !other.completedResult && id != runID && other.agentID == agentID && time.Since(other.created) <= 15*time.Minute {
 			other.overlapped, route.overlapped = true, true
 			s.harnessOverlapAgents[agentID] = true
 			s.harnessReplies[id] = other
@@ -294,8 +302,8 @@ func (s *Server) forgetHarnessReply(agentID, runID string) {
 }
 
 // takeHarnessReply removes one exact route and reports whether this caller won
-// the route. A turn.summary and the turn.done recap fallback may race; only one
-// of them may publish a final result for the original device turn.
+// the route. Replayed summaries may race; only one may publish the final
+// result for the original device turn.
 func (s *Server) takeHarnessReply(agentID, runID string) bool {
 	s.harnessRepliesMu.Lock()
 	defer s.harnessRepliesMu.Unlock()
@@ -350,6 +358,18 @@ func (s *Server) rememberHarnessResult(agentID, runID, text string) {
 // device interaction. The terminal recap is not passed through the device
 // agent, which would otherwise add a slower, altered second answer.
 func (s *Server) forwardHarnessEvent(frame harness.Frame) {
+	if hasHarnessSummaryResult(frame) {
+		// The same summary event is already in the durable result inbox.
+		// Never route its group through the one-input compatibility path.
+		return
+	}
+	if frame["kind"] == "receipt.updated" {
+		if provenance, ok := frame["_osResultContext"].(harness.ResultContext); ok {
+			if payload, ok := frame["payload"].(map[string]any); ok {
+				s.bindHarnessResultReceipt(harness.Frame(payload), provenance)
+			}
+		}
+	}
 	if kind, _ := frame["kind"].(string); kind == "focus.changed" {
 		if s.harnessVoice != nil {
 			s.harnessVoice.NotifyFocusChanged()
@@ -409,6 +429,11 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 		return
 	}
 	text := harnessEventText(kind, frame)
+	if provenance, ok := frame["_osResultContext"].(harness.ResultContext); ok && s.acceptsHarnessResults(provenance) {
+		if progress := harnessInputProgress(frame); progress != "" {
+			text = progress
+		}
+	}
 	if text == "" && kind != "turn.summary" {
 		return
 	}
@@ -419,79 +444,25 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 	if !ok || time.Since(reply.created) > 15*time.Minute {
 		return
 	}
-	if !terminal {
-		s.agentHandler.DeliverHarnessProgress(reply.runID, text)
-		if kind == "turn.done" {
-			// Current Harness clients normally send turn.summary immediately after
-			// turn.done. Some long-running Codex turns persist the recap but omit
-			// that callback. Give the normal callback a short head start, then read
-			// the completed turn's recap only while this exact device route remains
-			// pending. This is never a poll after send: turn.done is the terminal
-			// lifecycle signal from Harness.
-			s.recoverHarnessDoneRecap(agentID, reply)
-		}
+	if kind == "question.open" {
+		payload, _ := frame["payload"].(map[string]any)
+		questionID, _ := payload["questionRequestId"].(string)
+		s.agentHandler.DeliverHarnessQuestion(reply.runID, questionID, text)
 		return
 	}
-	if kind == "turn.summary" {
-		// Prefer the event's own complete result. An agent's latest recap
-		// cannot identify a particular result once turns have overlapped.
-		payload, _ := frame["payload"].(map[string]any)
-		full, _ := payload["fullText"].(string)
-		if strings.TrimSpace(full) != "" {
-			text = full
-		} else if !reply.overlapped {
-			fallback := text
-			text = s.harnessRecapText(agentID, text)
-			if !s.harnessReplyAllowsRecap(agentID, reply.runID) {
-				text = fallback
-			}
-		}
+	if !terminal {
+		s.agentHandler.DeliverHarnessProgress(reply.runID, text)
+		return
 	}
+	// A legacy single-input summary uses only the event's own text. Neither
+	// turn.done nor latest recap can establish a result's original membership.
+
 	if strings.TrimSpace(text) == "" {
 		slog.Warn("Harness summary has no result yet", "component", "harness", "run_id", reply.runID, "agent_id", agentID)
 		return
 	}
-	// Recap is fetched outside the lock. Do not delete a newer response route
-	// registered while that request was in flight.
+	// Consume only the exact original response route.
 	s.deliverHarnessFinal(agentID, reply.runID, text)
-}
-
-const (
-	harnessDoneRecapDelay = 1500 * time.Millisecond
-	harnessDoneRecapTries = 2
-)
-
-// recoverHarnessDoneRecap closes the compatibility gap for Harness clients
-// which have committed a finished turn but do not emit its turn.summary event.
-func (s *Server) recoverHarnessDoneRecap(agentID string, reply harnessReply) {
-	if s.harnessService == nil || agentID == "" || reply.runID == "" || reply.overlapped {
-		return
-	}
-	ctx := s.harnessVoiceCtx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	go func() {
-		for attempt := 0; attempt < harnessDoneRecapTries; attempt++ {
-			timer := time.NewTimer(harnessDoneRecapDelay)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return
-			case <-timer.C:
-			}
-			if !s.harnessReplyAllowsRecap(agentID, reply.runID) {
-				return
-			}
-			if text := s.harnessRecapText(agentID, ""); text != "" {
-				if s.harnessReplyAllowsRecap(agentID, reply.runID) {
-					s.deliverHarnessFinal(agentID, reply.runID, text)
-				}
-				return
-			}
-		}
-		slog.Warn("Harness done without summary or recap", "component", "harness", "run_id", reply.runID, "agent_id", agentID)
-	}()
 }
 
 func (s *Server) hasHarnessReply(agentID, runID string) bool {
@@ -525,14 +496,7 @@ func (s *Server) deliverHarnessFinal(agentID, runID, text string) {
 // registerHarnessDispatch installs correlation before the transport can emit events.
 func (s *Server) registerHarnessDispatch(agentID, runID string, webChat, delegated bool, frame harness.Frame) {
 	key, _ := frame["idempotencyKey"].(string)
-	s.registerHarnessRoute(agentID, runID, webChat, delegated, key, false)
-}
-
-func (s *Server) harnessReplyAllowsRecap(agentID, runID string) bool {
-	s.harnessRepliesMu.Lock()
-	defer s.harnessRepliesMu.Unlock()
-	reply, ok := s.harnessReplies[runID]
-	return ok && reply.agentID == agentID && !reply.overlapped
+	s.registerHarnessRouteWithAnswer(agentID, runID, webChat, delegated, key, false, frame["type"] == "question.answer")
 }
 
 // Explicit but unknown IDs never fall back. Legacy agent-only events are safe
@@ -552,7 +516,7 @@ func (s *Server) harnessReplyForFrameLocked(agentID string, frame harness.Frame)
 	var selected harnessReply
 	count := 0
 	for _, reply := range s.harnessReplies {
-		if reply.localOnly || reply.agentID != agentID || time.Since(reply.created) > 15*time.Minute {
+		if reply.answer || reply.localOnly || reply.completedResult || reply.agentID != agentID || time.Since(reply.created) > 15*time.Minute {
 			continue
 		}
 		if runID != "" && reply.runID != runID {

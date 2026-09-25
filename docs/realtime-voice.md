@@ -571,6 +571,16 @@ labelled `[TTS HISTORY, not spoken]`, because that line exists to stop the
 model repeating what the user ALREADY HEARD, and on a cancelled turn they heard
 none of it.
 
+HAL completion also checks the actual speech-write observation before feeding
+history. If cancellation or a synthesis failure produces no speech frames, it
+feeds `spoken=False` (`[TTS HISTORY, not spoken]`). The Harness result chime
+never counts as speech. If speech started and was then cancelled, the marker
+is `[TTS HISTORY, interrupted; only part may have been heard]`; the full result
+is retained without claiming the user heard all of it. The snapshot is taken
+before end callbacks can change playback ownership. This measures writes to
+the audio device, not acoustic delivery, and does not automatically replay a
+cancelled result.
+
 The second way a reply goes unheard is inside HAL, and os-server cannot see it:
 `speak_queue` drops a superseded turn (an older `turn_seq` arriving after a
 newer turn already owns the queue) and **returns success**, so the caller

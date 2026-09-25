@@ -16,7 +16,7 @@ App Harness và phần tích hợp thiết bị của Harness do team Harness ph
 | Team Harness | [OpenHarness](https://github.com/autonomous-ai/openharness): `cli/src/lib/autonomous-device`, `cli/src/lib/e2ee`, `cli/src/backendSocket.ts` | Discovery/reconnect phía máy tính, pairing/E2EE gốc, thao tác agent, thương lượng capability, receipt/event và API quản lý CLI. |
 | Team Harness | [OpenHarness](https://github.com/autonomous-ai/openharness): `desktop/lib/autonomous_device`, `desktop/lib/settings/sections/devices_section.dart`, `desktop/lib/state/app_state.dart` | UI ghép đôi/quản lý qua Harness CLI nội bộ. Desktop không giữ trust của thiết bị hay thực thi skill. |
 
-Đường thực thi: người dùng/voice → `harness-use` → API loopback OS → kết nối trực tiếp đã xác thực → Harness CLI → agent được chọn trên máy tính. Khi người dùng gọi rõ một agent theo tên, OS thêm routing context nội bộ để chọn `harness-use` và loại các skill Buddy, kể cả khi phiên model còn mang chỉ dẫn skill cũ. Yêu cầu rõ “Autonomous Buddy” sẽ ghi đè route Harness và giữ nguyên cho skill Buddy. Agent Harness được nêu tên là đích thực thi: OS yêu cầu skill gửi thẳng nội dung công việc, không gửi yêu cầu hỏi hay liên hệ chính agent đó. Cửa sổ follow-up chỉ là gợi ý; câu nói mơ hồ, không liên quan hoặc không chắc chắn vẫn để main agent xử lý, trừ khi rõ ràng tiếp tục task Harness, trả lời câu hỏi đang mở, hoặc hỏi task đã xong/chưa hay yêu cầu kết quả. Quy tắc này áp dụng cho voice, Web Chat và MQTT Chat. Receipt `send` hoặc `answer` ở `queued`, `delivered`, `started`, `completed` hoặc `rejected` là kết quả đã xác định và kết thúc skill ngay: model không gọi thêm Harness hay shell, gồm `receipt`, `status`, `recap`, `list` hoặc mutation lần hai, mà trả `NO_REPLY`. Chỉ được xem receipt khi `DeliveryUnknown`/không có receipt dùng được hoặc người dùng yêu cầu rõ trạng thái giao; tuyệt đối không tự gửi lại. OS nhận lifecycle event và chuyển kết quả cuối trực tiếp. Với mỗi turn người dùng, skill lưu đích phản hồi cục bộ khi gửi rồi không tạo lời văn từ device agent. Các lifecycle event thật của Harness hiển thị việc đã nhận và đang xử lý trong phản hồi Web Chat đang chờ. Khi nhận `turn.summary` cuối, OS ưu tiên `fullText` của chính event. Chỉ route thuộc agent chưa từng có lượt pending chồng nhau mới được fallback qua RPC `recap` mới nhất. Chỉ các route đó được đợi ngắn callback sau `turn.done` rồi đọc recap tối đa hai lần khi vẫn pending. Agent đã overlap không dùng recap mới nhất để xác định kết quả của lượt. `fullText` là nội dung hoàn chỉnh hướng tới người dùng trong giới hạn đã định; `text` chỉ là bản preview ngắn cho CLI cũ và device card. Voice ghi kết quả trực tiếp này vào realtime history trước các follow-up, và follow-up ngắn sau đó nhận được nó dưới dạng context không đáng tin cậy cho main runtime. Nếu agent mở một câu hỏi có cấu trúc, OS chuyển câu hỏi đó về đúng turn gốc; turn trả lời đã định tuyến sau đó gọi `status`, dùng đúng request ID và các answer key đang mở để trả lời, rồi chuyển kết quả sau cùng về turn tiếp theo. Voice đọc nội dung trực tiếp từ Harness, còn Web Chat hiển thị nó mà không phát TTS. Callback Harness không được đưa thành JSON sensing event nên không thể tạo turn thứ hai hoặc một câu trả lời đã bị device agent sửa lại. Khi người dùng yêu cầu một agent làm việc, kể cả research bằng browser, `harness-use` được ưu tiên; Lamp áp dụng chính sách công việc số bên dưới trước định tuyến `computer-use` chung, còn Buddy chỉ dùng khi người dùng gọi rõ.
+Đường thực thi: người dùng/voice → `harness-use` → API loopback OS → kết nối trực tiếp đã xác thực → Harness CLI → agent được chọn trên máy tính. Khi người dùng gọi rõ một agent theo tên, OS thêm routing context nội bộ để chọn `harness-use` và loại các skill Buddy, kể cả khi phiên model còn mang chỉ dẫn skill cũ. Yêu cầu rõ “Autonomous Buddy” sẽ ghi đè route Harness và giữ nguyên cho skill Buddy. Agent Harness được nêu tên là đích thực thi: OS yêu cầu skill gửi thẳng nội dung công việc, không gửi yêu cầu hỏi hay liên hệ chính agent đó. Cửa sổ follow-up chỉ là gợi ý; câu nói mơ hồ, không liên quan hoặc không chắc chắn vẫn để main agent xử lý, trừ khi rõ ràng tiếp tục task Harness, trả lời câu hỏi đang mở, hoặc hỏi task đã xong/chưa hay yêu cầu kết quả. Quy tắc này áp dụng cho voice, Web Chat và MQTT Chat. Receipt `send` hoặc `answer` ở `queued`, `delivered`, `started`, `completed` hoặc `rejected` là kết quả đã xác định và kết thúc skill ngay: model không gọi thêm Harness hay shell, gồm `receipt`, `status`, `recap`, `list` hoặc mutation lần hai, mà trả `NO_REPLY`. Chỉ được xem receipt khi `DeliveryUnknown`/không có receipt dùng được hoặc người dùng yêu cầu rõ trạng thái giao; tuyệt đối không tự gửi lại. OS nhận lifecycle event và chuyển kết quả cuối trực tiếp. Với mỗi turn người dùng, skill lưu đích phản hồi cục bộ khi gửi rồi không tạo lời văn từ device agent. Các lifecycle event thật của Harness hiển thị việc đã nhận và đang xử lý trong phản hồi Web Chat đang chờ. Khi nhận `turn.summary` cuối, OS ưu tiên `fullText` của chính event. Receipt và `turn.done` chỉ là lifecycle, không gọi recap mới nhất hoặc phát TTS cuối. Kết quả cuối đi qua `turn.summary`, có membership tường minh khi gộp nhiều input như mô tả bên dưới. `fullText` là nội dung hoàn chỉnh hướng tới người dùng trong giới hạn đã định; `text` chỉ là bản preview ngắn cho CLI cũ và device card. Voice ghi kết quả trực tiếp này vào realtime history trước các follow-up, và follow-up ngắn sau đó nhận được nó dưới dạng context không đáng tin cậy cho main runtime. Nếu agent mở một câu hỏi có cấu trúc, OS chuyển câu hỏi đó về đúng turn gốc; turn trả lời đã định tuyến sau đó gọi `status`, dùng đúng request ID và các answer key đang mở để trả lời, rồi xác nhận command answer riêng, còn task gốc giữ quyền nhận kết quả cuối. Voice đọc nội dung trực tiếp từ Harness, còn Web Chat hiển thị nó mà không phát TTS. Callback Harness không được đưa thành JSON sensing event nên không thể tạo turn thứ hai hoặc một câu trả lời đã bị device agent sửa lại. Khi người dùng yêu cầu một agent làm việc, kể cả research bằng browser, `harness-use` được ưu tiên; Lamp áp dụng chính sách công việc số bên dưới trước định tuyến `computer-use` chung, còn Buddy chỉ dùng khi người dùng gọi rõ.
 
 Autonomous Buddy được giữ riêng. Tính năng này không gọi Buddy, không dùng chung khóa pairing hay yêu cầu kết nối Buddy. Tái sử dụng quảng bá mDNS đã có trên thiết bị không đồng nghĩa gộp hai trust store. Giữ tích hợp dùng chung cho thiết bị Autonomous: namespace CLI là `autonomous-device`, không phải `lamp`.
 
@@ -104,13 +104,13 @@ Harness ON dùng thu giọng thủ công bằng tap, không tự nghe môi trư�
 
 HAL lấy snapshot mode chính thức trước capture và bỏ qua Realtime khi bật. OFF khôi phục wake gate thường; capture Harness thủ công không kéo dài timer đó. OS vẫn dispatch trước local intent và gate readiness/busy của runtime chính. Generation và revision focus phía CLI từ chối capture cũ thay vì đổi đích câu nói. Web/MQTT chat, sensing nền và route output không đổi.
 
-Text thông thường dùng operation `turn.send` hiện có. Route phản hồi đã đăng ký, lifecycle callback, lấy recap và TTS trên thiết bị vẫn là đường output. Tắt mode không hủy task đã gửi; kết quả của task đó vẫn có thể đến. Máy Harness offline gây lỗi delivery, không chuyển ngầm sang agent chính trên thiết bị; cờ bật vẫn được giữ, nhưng focus không khả dụng đến khi máy tính kết nối lại và cung cấp focus mới. Đổi focus không đổi đích phản hồi của task đã gửi.
+Text thông thường dùng operation `turn.send` hiện có. Route phản hồi đã đăng ký, callback summary cuối và TTS trên thiết bị vẫn là đường output. Tắt mode không hủy task đã gửi; kết quả của task đó vẫn có thể đến. Máy Harness offline gây lỗi delivery, không chuyển ngầm sang agent chính trên thiết bị; cờ bật vẫn được giữ, nhưng focus không khả dụng đến khi máy tính kết nối lại và cung cấp focus mới. Đổi focus không đổi đích phản hồi của task đã gửi.
 
 HAL bắt buộc đọc được mode trước dispatch: timeout, response sai định dạng hoặc lỗi HTTP đều chặn dispatch thay vì đoán agent nào nhận microphone. Cần triển khai OS và HAL tương thích cùng nhau: OS cũ chưa có `/api/harness/voice-mode` cũng khiến HAL này từ chối dispatch giọng nói. Đây là yêu cầu rollout, không phải thao tác deploy tự động.
 
 ### Telemetry hoàn tất tác vụ
 
-Lượt voice chuyển sang Harness giữ interaction ID từ HAL và run ID OS `device-harness-*`. Request gõ qua `/voice-mode/answer` tạo tác vụ `web_chat` riêng trước dispatch, gồm lỗi validation/dispatch sau khi JSON hợp lệ. Đăng ký route phản hồi Harness ghi `harness_delegated`; reporter KPI bỏ completion lifecycle của agent thiết bị (`NO_REPLY` chỉ là bàn giao). `turn.done` xác nhận thực thi xong, không chờ phát âm thanh hay recap; `turn.summary` có nội dung cũng là bằng chứng completion. `turn.error` và `agent.error` ghi failed kể cả không có text hiển thị. `question.open` và câu trả lời từng phần được lưu cục bộ là `unknown`, không phải completed; lượt trả lời là turn mới. `DeliveryUnknown` giữ unknown; lỗi dispatch xác định là failed. Receipt hoặc dispatch trả nil không tự chứng minh execution hoàn tất.
+Lượt voice chuyển sang Harness giữ interaction ID từ HAL và run ID OS `device-harness-*`. Request gõ qua `/voice-mode/answer` tạo tác vụ `web_chat` riêng trước dispatch, gồm lỗi validation/dispatch sau khi JSON hợp lệ. Đăng ký route phản hồi Harness ghi `harness_delegated`; reporter KPI bỏ completion lifecycle của agent thiết bị (`NO_REPLY` chỉ là bàn giao). `turn.done` chỉ là lifecycle; `turn.summary` cuối có nội dung được ghép an toàn là bằng chứng completion. Summary có membership input tường minh giữ outcome completed/failed/cancelled cho đúng các thành viên đó. `turn.error` và `agent.error` ghi failed kể cả không có text hiển thị. `question.open` và câu trả lời từng phần được lưu cục bộ là `unknown`, không phải completed; lượt trả lời là turn mới. `DeliveryUnknown` giữ unknown; lỗi dispatch xác định là failed. Receipt hoặc dispatch trả nil không tự chứng minh execution hoàn tất.
 
 Telemetry quan sát route hiện có, không đổi TTS, dispatch, busy hay protocol Harness. Run ID tường minh phải khớp; event legacy chỉ có agent được ghép khi agent có đúng một route chưa hết hạn. Event mơ hồ/sai ID không được tính completion; fallback định tuyến phản hồi cũ giữ nguyên. Route hiện có hết hạn sau 15 phút. Thay đổi không khôi phục event mất trước deploy.
 
@@ -178,7 +178,7 @@ Các lệnh MQTT data đã xác thực của thiết bị gồm `harness.pair.st
 
 Khi phát lại hàng đợi ở mọi runtime, Web/MQTT chat và voice follow-up chỉ được bổ sung lại địa chỉ `harness-reply` gốc nếu Harness vẫn paired và connected tại thời điểm phát lại. Yêu cầu qua hàng đợi giữ cùng run ID cục bộ và channel như khi gửi ngay.
 
-Không poll recap mới nhất ngay sau khi gửi: dữ liệu có thể vẫn thuộc lượt trước và đánh dấu đã giao trước khi kết quả mới tới. Chuyển kết quả khi nhận `turn.summary` có tương quan đúng; recovery qua recap mới nhất chỉ áp dụng cho agent chưa từng có lượt chồng nhau như mô tả trên.
+Không poll recap mới nhất ngay sau khi gửi: dữ liệu có thể vẫn thuộc lượt trước và đánh dấu đã giao trước khi kết quả mới tới. Chuyển kết quả khi nhận `turn.summary` có tương quan đúng; không dùng recap mới nhất để recovery kết quả cuối.
 
 Khi Harness phụ trách phản hồi của một run, các sự kiện chat assistant thông thường của đúng run đó được chặn để lời báo đã giao việc hoặc `NO_REPLY` không đóng Web/MQTT chat trước khi kết quả Harness tới. Tin nhắn người dùng và sự kiện lỗi vẫn được chuyển tiếp.
 
@@ -190,7 +190,7 @@ Lượt Harness đã hoàn tất giữ trạng thái chống lặp để dọn s
 
 Kết quả cuối Harness được ghi vào flow JSONL bằng `harness_response`, giữ run ID thiết bị gốc và `text` đầy đủ. Web Chat dùng sự kiện này khôi phục kết quả đang chờ sau khi SSE ngắt hoặc tải lại trang. Luồng trực tiếp vẫn phát `chat_response` với state `final`.
 
-Callback summary ưu tiên `fullText` của chính event. Chỉ route chưa từng chồng nhau mới được tra recap mới nhất, kể cả khi thiếu preview. Kết quả rỗng giữ route đang chờ. Sau khi tra recap, chỉ xóa route của đúng run ban đầu; callback không liên quan không được chiếm chat khác.
+Callback summary ưu tiên `fullText` của chính event, vẫn hỗ trợ `text` legacy. Kết quả rỗng giữ route đang chờ, không lấy recap mới nhất. Membership summary hợp lệ chỉ hoàn tất đúng route input tương ứng; callback không liên quan không được chiếm chat khác.
 
 Route được khóa bằng run ID cục bộ của thiết bị, không phải agent ID. Một Harness agent có thể có nhiều task người dùng đang chờ. OS gắn `idempotencyKey` hiện có trước dispatch và khớp event theo run ID và/hoặc key, gồm `payload.idempotencyKey` hoặc `payload.receipt.idempotencyKey`. Tương quan tường minh không khớp thì không fallback sang route khác. Event legacy chỉ có agent ID chỉ được nhận khi có đúng một route pending và agent chưa từng có lượt chồng nhau. Sau lần overlap đầu tiên, agent luôn cần tương quan tường minh đến hết vòng đời tiến trình OS-server, kể cả khi mọi route cùng lúc đã xong; bản sao event muộn không có tương quan không được chiếm lượt mới. Nếu runtime copy cũ riêng phần sequence của response route dạng `device-…-<timestamp>`, OS khôi phục run đúng cùng channel từ flow record trong bộ nhớ có timestamp đó; timestamp khác tuyệt đối không bị đổi. Helper cục bộ lưu receipt đã biết theo response route và từ chối `send` hoặc `answer` thứ hai trên cùng route, ngăn loop receipt/status của model dispatch task hiện tại hai lần. Nếu task mới hoặc task đính chính bị chặn bởi delivery trước, runtime được kiểm receipt đó một lần; khi receipt có trạng thái delivery đã biết, runtime phải gửi task hiện tại trước khi trả `NO_REPLY`.
 
@@ -300,18 +300,119 @@ của request trên event summary, tool và question khi các lượt có thể 
 (hoặc cung cấp device run ID khớp). Không gán kết quả gộp cho input tùy ý hoặc
 nhân bản kết quả dưới key của từng input. Một số summary
 app hiện chưa có tương quan đó; sau overlap, OS bỏ qua event mơ hồ thay vì gán tùy
-ý cho một lượt. Dùng field hiện có, không tạo field wire Harness mới. Test local/mock
+ý cho một lượt. Giữ hỗ trợ field tương quan từng input cùng metadata membership summary mới đã thống nhất. Test local/mock
 bao phủ tương quan OS, chống duplicate và nhận voice; steering app thật và delivery
 đầy đủ khi overlap chưa được kiểm chứng. Thay đổi này không deploy lên thiết bị.
 
-Đã đối chiếu [OpenHarness PR #294](https://github.com/autonomous-ai/openharness/pull/294)
-tại `7d42b3ee619bfe3743cfeae94a04a5ccc0c6cef3`. Adapter Device của PR hỗ trợ
-steering/native queue và trạng thái tùy chọn `receipt.input`. Thay đổi OS này chưa
-đọc `receipt.input`; progress ở trên chỉ phản ánh trạng thái delivery.
-[Contract kết quả gộp](https://github.com/autonomous-ai/openharness/blob/7d42b3ee619bfe3743cfeae94a04a5ccc0c6cef3/docs/autonomous-device-result-correlation.md)
-định nghĩa `turn.correlation.v2` / `turn.result` với danh sách input tường minh,
-ID kết quả bất biến, lưu kết quả bền vững và TTS outbox chống lặp. Cả thay đổi OS
-này lẫn phiên bản Harness đó chưa triển khai hay quảng bá capability này. Hoàn tất
-nhóm cần triển khai hai phía, fixture contract chung và kiểm thử engine/thiết bị
-trước khi cùng bật. Kết quả overlap mơ hồ hiện vẫn để route chưa giải quyết;
-đây chưa phải flow kết quả gộp hoàn chỉnh.
+Contract đã thống nhất mở rộng event `turn.summary` hiện có. Payload cuối mang
+`fullText`, `resultId` ổn định, `serverInstanceId` gốc, `outcome`
+(`completed`, `failed`, `cancelled`) và `correlation` gồm `scope: input|group`,
+`inputs: [{deliveryId, idempotencyKey}]`, cùng `engineTurnId` tùy chọn. Một input
+phải dùng scope `input`; nhiều input đã chứng minh cùng được xử lý dùng `group`.
+Không thêm event riêng, flag, capability hay phiên bản protocol. Trạng thái
+`receipt.input.mode/phase` chỉ nói việc nhận input, steering hoặc hàng đợi;
+accepted và `turn.done` không xác định kết quả đã hoàn tất, không gọi recap/TTS.
+Summary một input chưa có metadata mới vẫn qua bộ đối chiếu legacy an toàn;
+summary overlap mơ hồ vẫn chưa được giải quyết.
+
+Fixture OS `system/harness/testdata/summary-results/group.json` kiểm tra payload summary
+đã thống nhất. Test không xác nhận app đang chạy tạo đúng membership hay build mới
+đã hoạt động với playback Lamp thật. Vẫn cần fixture chung và kiểm chứng engine/
+thiết bị của hai phía.
+
+### Lưu và chuyển kết quả gộp
+
+Đường xử lý OS lưu reservation gồm danh tính request gốc và route
+phản hồi cục bộ trước dispatch, sau đó gắn delivery ID từ receipt. OS dùng owner đã xác
+thực, server instance, agent, idempotency key gốc và delivery ID để đối chiếu toàn bộ
+thành viên. Inbox bền vững giữ kết quả đến trước khi cursor event tiến lên, kể cả kết
+quả đến trước receipt. Thành viên chưa xác định hoặc không khớp ngăn áp dụng toàn bộ
+group; không fallback sang agent/run mới nhất. Kết quả dùng chung và tham chiếu trên
+đúng các thành viên được lưu atomic. Input pending khác vẫn pending; outcome completed,
+failed và cancelled được giữ riêng. Replay giống hệt, kể cả đổi thứ tự membership,
+là no-op; cùng danh tính result nhưng khác nội dung/membership là lỗi protocol.
+
+Mỗi result có một entry outbox bền vững. Không phát tiếng khi các đích khác nhau, route
+voice hết hạn/cũ, route web hoặc text vượt 2.000 ký tự Unicode; vẫn giữ toàn bộ kết quả
+trong store thay vì cắt ngắn để đọc. Claim playback được lưu trước khi gọi HAL.
+`accepted` chỉ nghĩa là HTTP đã nhận, không xác nhận đã phát ra loa. Mất acknowledgment
+thì giữ trạng thái chưa chắc chắn; mở lại store đổi `claimed` còn tồn tại thành
+`uncertain`. Các trạng thái này không cho phép tự phát lại. OS còn phải kiểm tra route
+voice hiện tại trước playback; route đã lưu không chứng minh người nghe cũ vẫn đang
+active. Không đường reconciliation nào tự gửi lại input hay cấp task key mới.
+Route khôi phục sau OS restart chỉ dùng hiển thị/truy xuất; danh tính task đã lưu
+không khôi phục quyền phát tiếng cho người nghe trước đó.
+
+JSON store cục bộ do một tiến trình OS-server sở hữu, dùng atomic replacement, file
+mode `0600`, thư mục mới mode `0700` và từ chối symlink. Giới hạn nhận cục bộ gồm 4.096
+input reservation, 4.096 result record, 4.096 staged event, 64 thành viên mỗi result,
+256 KiB cho từng input text/result text, 512 KiB cho result payload và 64 MiB cho toàn
+store. Đây là giới hạn OS, không phải field wire mới. Hết dung lượng thì từ chối an
+toàn, không xóa việc chưa giải quyết hoặc lịch sử dedupe; không có tự purge retention
+hay hỗ trợ nhiều tiến trình ghi chung.
+
+Kiểm chứng local/mock gồm parser/fixture, group subset và mismatch atomic, thứ tự
+receipt/event đảo nhau, từ chối result đổi nội dung, restart/outbox dedupe, route không
+tương thích và lỗi persistence. Các test này không kiểm chứng playback trên Lamp thật
+hoặc task engine có phí; thay đổi này không deploy lên thiết bị.
+
+Receiver ghi `config/harness/results.json`, mặc định lưu reservation cho các input
+được dispatch có theo dõi. Chỉ đối chiếu receipt
+còn thiếu của result đã lưu inbox: tối đa tám `receipt.get` chỉ đọc mỗi lượt,
+hai giây/lệnh, chu kỳ nền 30 giây. Event hoặc receipt mới cũng đánh thức xử lý.
+Reconnect không thay key, không gửi lại task. Summary giữ danh tính server instance gốc kể cả sau daemon restart. Đối chiếu
+receipt dùng key gốc với cùng owner của cặp đã xác thực; toàn bộ ràng buộc thành
+viên phải khớp. Thành viên chưa biết/chưa theo dõi chặn cả group, không tiêu thụ
+input nào. Membership summary sai không fallback sang routing legacy.
+
+`GET /api/harness/results/:id` chỉ cho loopback; `id` là tham chiếu SHA-256 local
+trong history/monitor. API trả về result chung, các input liên quan, outcome và
+trạng thái tiếp nhận TTS, giới hạn theo cặp đã lưu hiện tại kể cả khi offline.
+Unpair làm mất quyền truy xuất kết quả của cặp cũ. Không có store/result thì trả
+404; API không chạy task hoặc phát âm thanh. History của main runtime lưu tham
+chiếu result chung, còn context follow-up ngắn giữ câu trả lời đầy đủ kèm
+`agentId`, `resultId`, `responseRunIds` dạng danh sách. Chat hiển thị câu trả lời
+một lần và tham chiếu ở các input còn lại. Receipt và `turn.done` không đóng hoặc đọc kết quả. Summary cuối có membership
+được kiểm tra atomic; summary đơn thiếu metadata vẫn dùng bộ đối chiếu legacy an toàn. Câu hỏi có cấu trúc vẫn giữ task pending,
+chống lặp theo question ID trong tiến trình; thông báo này tách khỏi outbox result.
+
+Claim outbox được lưu trước thông báo UI và trước gọi HAL. Kiểm tra mode/generation,
+focus và cancellation của mọi input lúc tiếp nhận; sau đó HAL dùng turn ID của input
+đầu tiên để sở hữu playback. Huỷ sau tiếp nhận vẫn theo quy tắc HAL hiện tại. Chưa có
+receipt xác nhận playback đầu cuối: HTTP accepted không có nghĩa người dùng đã nghe.
+
+Đã đối chiếu handoff từ OpenHarness PR #336 tại
+`16ae5b2197a21988c9fcd68a8f8eb32296494a9f`. Schema, fixture input/group và replay
+nguyên bản được lưu ở `system/harness/testdata/summary-results/pr336` và chạy qua
+test OS. Kết quả một input cho phép `turnId` legacy bằng null; group vẫn không được
+gán singular `turnId`. Đây là kiểm chứng parser/ledger/outbox, chưa phải playback
+trên thiết bị hay engine thật. PR cũng quy định receipt `question.answer` chỉ xác
+nhận gửi answer; route UI của answer phải gắn lại task gốc, không chờ membership
+với answer key. OS lưu bền vững liên kết question với task gốc và lưu command answer riêng,
+không đưa answer vào membership kết quả. Receipt completed/rejected chỉ đóng UI
+của command answer, không TTS hay đóng task gốc. Summary của task gốc là kết quả
+cuối duy nhất. Question từ app không có task local được lưu không có parent, không
+đoán parent. Khi reconnect, OS đọc receipt.get bằng key gốc cho answer chưa xác
+nhận, không gửi lại. ACK khôi phục sau restart luôn im lặng. Test local bao phủ cả
+hai thứ tự receipt/result và khôi phục sau restart.
+
+
+### Kiểm chứng live local (2026-09-25)
+
+Với CLI đã cài `0.3.5-dev.d732a2e5`, OS client local ghép cặp tạm riêng gửi hai
+yêu cầu vào Blender agent máy bay có sẵn: thêm mây trắng, rồi đổi mây sang xanh
+nhạt. Input thứ hai được giao sau khi input đầu bắt đầu, trước lúc hoàn tất.
+CLI phát một `turn.summary` với `scope:group`, đủ hai cặp delivery/key chính xác
+và `outcome:completed`. OS lưu một result, đóng cả hai route phản hồi, không còn
+result staged hay route pending. `turn.done` sau đó không tạo thêm result.
+Blender agent báo đã thêm mây xanh nhạt và reload model/preview. Pairing test đã
+được revoke, pairing thiết bị cũ vẫn online. Bài này chạy transport E2EE, engine
+và result hook OS thật qua route web im lặng; chưa kiểm main/realtime model hoặc
+playback TTS vật lý.
+
+`TestHarnessLiveLocalBridge` chỉ chạy khi đặt `OS_HARNESS_LIVE_DIR` trỏ tới thư mục
+tuyệt đối riêng có sẵn (0700, không qua symlink). Test khởi tạo client riêng dùng
+hook và ledger production, ghi metadata điều khiển riêng, cung cấp `/command`,
+`/state`, `/pair`, `/stop` chỉ qua loopback. Không tự gửi task, dừng trong tối đa
+12 phút. Người chạy cần advertise/pair test client bằng luồng thường và revoke
+trust tạm sau đó. Test tự động thông thường bỏ qua bridge này.

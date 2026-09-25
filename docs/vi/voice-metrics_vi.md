@@ -393,7 +393,7 @@ hoặc excluded tương ứng trở thành eligible, nhưng không ghi đè quy 
 | `task_exclusion_reason` | Loại noise, non-user, transcript rỗng hoặc không hướng tới thiết bị; dispatch lỗi vẫn eligible |
 
 `voice_metrics_task_execution` chứa `schema_version=1`, `run_id`,
-`interaction_id`, `outcome` (`completed`, `failed`, `unknown`), `evidence`,
+`interaction_id`, `outcome` (`completed`, `failed`, `unknown`, hoặc `cancelled` của Harness), `evidence`,
 `execution_at_ms` (Unix milliseconds), và boolean `error`. Không chứa nội dung
 lỗi, transcript hay kết quả tool.
 
@@ -407,10 +407,22 @@ lỗi, transcript hay kết quả tool.
 | `chat_final_no_lifecycle` | `completed`: final có nội dung tiêu thụ pending trace mà không có lifecycle (ví dụ OpenClaw `/status`, `/new`); final rỗng không chứng minh completion |
 | `execution_observation_lost` | `unknown`: runtime mất quan sát tác vụ đã gửi nhưng chưa kết thúc khi mất transport hoặc timeout; chưa chứng minh thực thi thất bại |
 | `harness_delegated` | `unknown`: thực thi chuyển sang Harness; lifecycle end của runtime cục bộ không chứng minh tác vụ remote xong |
-| `harness_turn_done`, `harness_turn_summary` | `completed`: completion Harness đã ghép đúng; summary cần nội dung, done không cần recap hay TTS |
+| `harness_turn_summary` | `completed`: summary cuối legacy được ghép an toàn, có nội dung; riêng `turn.done` không hoàn tất task |
+| `harness_correlated_summary` | `completed`, `failed` hoặc `cancelled`: membership summary đã kiểm chứng và áp dụng atomic một lần; giữ outcome chính xác, độc lập với TTS |
 | `harness_turn_error` | `failed`: `turn.error` hoặc `agent.error` Harness đã ghép đúng, kể cả thiếu text |
 | `harness_question_open` | `unknown`: đang chờ trả lời câu hỏi, gồm thu thập câu trả lời từng phần cục bộ |
 | `realtime_turn_done` | `completed`: terminal thành công của provider gắn đúng lượt hoàn tất turn đã handled; Gemini Extended Thinking dùng `IDLE` cùng text trả lời được chấp nhận và không còn công việc cục bộ chưa xong; session thiếu status giữ xác nhận/kiểm tra outcome, fallback không tính hoàn thành |
+
+Đường `turn.summary` có correlation chỉ phát `harness_correlated_summary` cho result
+mới lưu và đúng các run thành viên; replay không phát lại. `cancelled` giữ riêng và
+có `error=true`, tuyệt đối không đổi thành thành công. Receipt và `turn.done` chỉ
+là lifecycle, không chứng minh kết quả hoàn tất. Summary đơn thiếu metadata vẫn
+qua bộ đối chiếu legacy an toàn; summary mơ hồ không được tính thành công.
+Reporter nhận evidence này trong cohort Harness và đếm riêng `cancelled_turns`,
+vẫn giữ trong mẫu số eligible nhưng không tính completed hay failed. Cancellation
+là terminal: mất quan sát transport hay completion cleanup đến sau không xóa nó.
+Giữ nguyên ưu tiên failure hiện có nếu đồng thời xuất hiện evidence failed mâu thuẫn.
+
 
 Ghép bằng chứng bằng **thiết bị + run_id** hoặc **thiết bị + interaction_id**.
 OS cũng ghi run không phải thoại: không tự đưa chúng vào mẫu số. Với

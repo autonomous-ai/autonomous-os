@@ -23,6 +23,11 @@ import (
 type Frame map[string]any
 type Callbacks struct {
 	OnEvent func(Frame)
+	// BeforeEvent persists correlated results before advancing the replay cursor.
+	BeforeEvent func(Frame, ResultContext) error
+	// BeforeRequest binds local intent to the exact authenticated connection.
+	BeforeRequest func(Frame, ResultContext) error
+	OnReceipt     func(Frame, ResultContext)
 	// OnRevoked runs after the paired computer revoked this device and the pin
 	// was removed (same cleanup as a local unpair, e.g. disable Harness voice).
 	OnRevoked func()
@@ -60,10 +65,43 @@ type response struct {
 	err   error
 }
 type connection struct {
-	channel      *DirectChannel
-	mu           sync.Mutex
-	capabilities map[string]bool
-	pending      map[string]chan response
+	channel       *DirectChannel
+	mu            sync.Mutex
+	capabilities  map[string]bool
+	pending       map[string]chan response
+	resultContext ResultContext
+}
+
+// ResultContext is transport-owned; no event field can choose its owner.
+type ResultContext struct {
+	Owner            string
+	MachineID        string
+	ServerInstanceID string
+}
+
+func (s *Service) ResultContext() ResultContext {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.conn == nil {
+		return ResultContext{}
+	}
+	return s.conn.resultContext
+}
+
+// ResultOwner identifies the saved pair even while disconnected. Unpairing
+// removes access to that owner's locally retained results.
+func (s *Service) ResultOwner() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.disk.Peer == nil {
+		return ""
+	}
+	pub, err := decode(s.disk.Peer.PublicKey, 32)
+	if err != nil {
+		return ""
+	}
+	identity := sha256.Sum256(append(append([]byte{}, s.identity.Public().(ed25519.PublicKey)...), pub...))
+	return hex.EncodeToString(identity[:])
 }
 
 // DeliveryUnknownError means a task/focus mutation may have reached the computer.
@@ -434,6 +472,14 @@ func (s *Service) Request(ctx context.Context, frame Frame) (Frame, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if s.callbacks.BeforeRequest != nil {
+		if err := s.callbacks.BeforeRequest(f, c.resultContext); err != nil {
+			return nil, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := c.channel.SendEncrypted(Frame{"type": "autonomous_device_request", "payload": f}); err != nil {
 		return unknown(err)
 	}
@@ -447,6 +493,9 @@ func (s *Service) Request(ctx context.Context, frame Frame) (Frame, error) {
 	case r := <-ch:
 		if r.err != nil {
 			return unknown(r.err)
+		}
+		if s.callbacks.OnReceipt != nil {
+			s.callbacks.OnReceipt(r.frame, c.resultContext)
 		}
 		return r.frame, nil
 	}
@@ -493,6 +542,8 @@ func (s *Service) handshake(ctx context.Context, channel *DirectChannel, p peer)
 			return nil, nil, errors.New("invalid Harness capability response")
 		}
 		c := &connection{channel: channel, pending: make(map[string]chan response), capabilities: make(map[string]bool)}
+		identity := sha256.Sum256(append(append([]byte{}, s.identity.Public().(ed25519.PublicKey)...), pub...))
+		c.resultContext = ResultContext{Owner: hex.EncodeToString(identity[:]), MachineID: p.MachineID, ServerInstanceID: stringField(welcome, "serverInstanceId")}
 		if caps, ok := welcome["capabilities"].([]any); ok {
 			for _, v := range caps {
 				cap, _ := v.(string)
@@ -561,6 +612,13 @@ func (s *Service) readLoop(c *connection) error {
 			continue
 		}
 		frame := payloadOf(outer)
+		if s.callbacks.BeforeEvent != nil {
+			if err := s.callbacks.BeforeEvent(frame, c.resultContext); err != nil {
+				return fmt.Errorf("persist Harness event before replay acknowledgement: %w", err)
+			}
+		}
+		// Never let wire data masquerade as local authenticated provenance.
+		frame["_osResultContext"] = c.resultContext
 		if !s.emit(frame) {
 			return errors.New("Harness event consumer is behind; reconnecting for replay")
 		}

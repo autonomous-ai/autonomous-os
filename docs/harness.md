@@ -16,7 +16,7 @@ The Harness app and its device integration are developed independently by the Ha
 | Harness team | [OpenHarness](https://github.com/autonomous-ai/openharness): `cli/src/lib/autonomous-device`, `cli/src/lib/e2ee`, `cli/src/backendSocket.ts` | Computer-side discovery/reconnect, original pairing/E2EE, agent operations, capability negotiation, receipts/events and the CLI management API. |
 | Harness team | [OpenHarness](https://github.com/autonomous-ai/openharness): `desktop/lib/autonomous_device`, `desktop/lib/settings/sections/devices_section.dart`, `desktop/lib/state/app_state.dart` | Desktop pairing/management UI over its local Harness CLI. The Desktop UI does not own device trust or execute the skill. |
 
-The execution path is: user/voice → `harness-use` → OS loopback API → authenticated direct connection → Harness CLI → selected computer agent. For an explicit request to a named agent, OS adds internal routing context that selects `harness-use` and excludes Buddy skills, including in a model session that still has older skill instructions. An explicit request for Autonomous Buddy overrides this Harness route and remains with the Buddy skill. The named Harness agent is the execution target: OS directs the skill to send its underlying task, never a request to contact or ask that same agent. A live follow-up window is only a hint; vague, unrelated, or uncertain input stays with the main agent unless it clearly continues the Harness task, answers its open question, or asks whether it is finished or for its result. This rule applies to voice, Web Chat, and MQTT Chat. A `send` or `answer` receipt in `queued`, `delivered`, `started`, `completed`, or `rejected` is a known outcome and ends the skill work immediately: the model makes no more Harness or shell calls, including `receipt`, `status`, `recap`, `list`, or a second mutation, and returns `NO_REPLY`. It may inspect a receipt only after `DeliveryUnknown`/no usable receipt or at the user's explicit request, and must never automatically resend. OS receives lifecycle events and delivers the final result directly. For a user turn, the skill records the local response target when it sends and returns no device-agent prose. Real Harness lifecycle events show acceptance and work in the pending Web Chat response. On terminal `turn.summary`, OS prefers the event’s own `fullText`. Only routes on agents that have never had overlapping outstanding turns may fall back to the latest `recap` RPC entry. For those routes only, a completed `turn.done` without a summary waits briefly for the callback, then reads the latest recap at most twice while that exact response route remains pending. Overlapped agents never use latest recap to identify a turn’s result. `fullText` is the bounded complete user-facing answer; `text` remains a compact preview for older CLIs and device cards. Voice records that direct result in realtime history before any later follow-up, and the next short follow-up receives it as untrusted context for the main runtime. If the agent opens a structured question, OS delivers that question to the original turn; the next routed answer calls `status`, answers the live question with its exact request ID and answer keys, and routes the eventual result to that follow-up turn. Voice speaks direct Harness content, while Web Chat displays it without TTS. Callback frames are not injected as JSON sensing events, so they cannot create a second turn or an altered device-agent answer. `harness-use` takes precedence when the user asks an agent to work, including browser research; Lamp applies the digital-work policy below before generic `computer-use` routing, and Buddy remains available only when explicitly requested.
+The execution path is: user/voice → `harness-use` → OS loopback API → authenticated direct connection → Harness CLI → selected computer agent. For an explicit request to a named agent, OS adds internal routing context that selects `harness-use` and excludes Buddy skills, including in a model session that still has older skill instructions. An explicit request for Autonomous Buddy overrides this Harness route and remains with the Buddy skill. The named Harness agent is the execution target: OS directs the skill to send its underlying task, never a request to contact or ask that same agent. A live follow-up window is only a hint; vague, unrelated, or uncertain input stays with the main agent unless it clearly continues the Harness task, answers its open question, or asks whether it is finished or for its result. This rule applies to voice, Web Chat, and MQTT Chat. A `send` or `answer` receipt in `queued`, `delivered`, `started`, `completed`, or `rejected` is a known outcome and ends the skill work immediately: the model makes no more Harness or shell calls, including `receipt`, `status`, `recap`, `list`, or a second mutation, and returns `NO_REPLY`. It may inspect a receipt only after `DeliveryUnknown`/no usable receipt or at the user's explicit request, and must never automatically resend. OS receives lifecycle events and delivers the final result directly. For a user turn, the skill records the local response target when it sends and returns no device-agent prose. Real Harness lifecycle events show acceptance and work in the pending Web Chat response. On terminal `turn.summary`, OS prefers the event’s own `fullText`. Receipt and `turn.done` events are lifecycle only; they never fetch latest recap or trigger final TTS. Final results arrive through `turn.summary`, with explicit membership for grouped inputs as described below. `fullText` is the bounded complete user-facing answer; `text` remains a compact preview for older CLIs and device cards. Voice records that direct result in realtime history before any later follow-up, and the next short follow-up receives it as untrusted context for the main runtime. If the agent opens a structured question, OS delivers that question to the original turn; the next routed answer calls `status`, answers the live question with its exact request ID and answer keys, and acknowledges that answer command separately while the original task retains ownership of the eventual result. Voice speaks direct Harness content, while Web Chat displays it without TTS. Callback frames are not injected as JSON sensing events, so they cannot create a second turn or an altered device-agent answer. `harness-use` takes precedence when the user asks an agent to work, including browser research; Lamp applies the digital-work policy below before generic `computer-use` routing, and Buddy remains available only when explicitly requested.
 
 Autonomous Buddy is retained separately. This feature does not invoke Buddy, share its pairing keys or require its connection. Reusing the device's existing mDNS advertisement does not combine the two trust stores. Keep the integration device-neutral: `autonomous-device` is the CLI namespace, not `lamp`.
 
@@ -105,13 +105,13 @@ Harness ON uses manual tap-to-record capture, not ambient listening. A tap while
 
 HAL snapshots the authoritative mode before capture and bypasses Realtime while enabled. The normal wake gate resumes after OFF; manual Harness capture does not extend its timer. OS dispatch remains before local intents and main-runtime readiness/busy gates. Generation and CLI focus-revision guards reject stale captures instead of retargeting speech. Typed Web/MQTT chat, ambient sensing and the output route are unchanged.
 
-Normal text uses the existing `turn.send` operation. Registered response routes, lifecycle callbacks, recap retrieval and device TTS remain the output path. Turning the mode off does not cancel work already sent, and its response can still arrive. An offline Harness computer produces a delivery error rather than falling back to the main device agent; the enabled flag remains set, but focus is unavailable until the computer reconnects and supplies fresh focus. Switching focus does not retarget responses for work already sent.
+Normal text uses the existing `turn.send` operation. Registered response routes, final summary callbacks and device TTS remain the output path. Turning the mode off does not cancel work already sent, and its response can still arrive. An offline Harness computer produces a delivery error rather than falling back to the main device agent; the enabled flag remains set, but focus is unavailable until the computer reconnects and supplies fresh focus. Switching focus does not retarget responses for work already sent.
 
 The mode lookup is mandatory for HAL dispatch: timeout, malformed response or HTTP failure fails closed instead of guessing which agent owns the microphone. Deploy matching OS and HAL versions together: an older OS without `/api/harness/voice-mode` also causes this HAL to refuse voice dispatch. This is a rollout requirement, not an automatic deployment step.
 
 ### Task completion telemetry
 
-Voice captures routed to Harness retain their HAL interaction ID and OS `device-harness-*` run ID. Typed `/voice-mode/answer` submissions start a separate `web_chat` task before dispatch, including validation/dispatch errors after JSON validation. Registering a Harness response route records `harness_delegated`; the KPI reporter then ignores the local agent’s lifecycle completion (`NO_REPLY` handoff). `turn.done` completes execution without waiting for spoken output or recap; a nonempty `turn.summary` also supplies completion evidence. `turn.error` and `agent.error` supply failure evidence even without display text. `question.open` and locally collected partial answers are `unknown`, never completion; the answer is a new turn. `DeliveryUnknown` stays unknown; a definite dispatch error is failed. Receipts or a nil dispatch return alone are not execution completion.
+Voice captures routed to Harness retain their HAL interaction ID and OS `device-harness-*` run ID. Typed `/voice-mode/answer` submissions start a separate `web_chat` task before dispatch, including validation/dispatch errors after JSON validation. Registering a Harness response route records `harness_delegated`; the KPI reporter then ignores the local agent’s lifecycle completion (`NO_REPLY` handoff). `turn.done` is lifecycle-only; a safely matched nonempty final `turn.summary` supplies completion evidence. A summary with explicit input membership preserves its completed/failed/cancelled outcome for exactly those members. `turn.error` and `agent.error` supply failure evidence even without display text. `question.open` and locally collected partial answers are `unknown`, never completion; the answer is a new turn. `DeliveryUnknown` stays unknown; a definite dispatch error is failed. Receipts or a nil dispatch return alone are not execution completion.
 
 Telemetry observes existing routes without changing TTS, dispatch, busy state, or the Harness protocol. Explicit event run IDs must match; an agent-only legacy event is attributed only when exactly one nonexpired route exists for that agent. Ambiguous/mismatched events remain uncredited; the legacy reply-routing fallback is unchanged. Existing route retention is 15 minutes. These changes do not reconstruct events lost before deployment.
 
@@ -179,7 +179,7 @@ Authenticated device MQTT data commands expose `harness.pair.start`, `harness.st
 
 Queue replay across all runtimes restores the original `harness-reply` address for Web/MQTT chat and voice follow-ups only while Harness is paired and connected at replay time. A queued request uses the same local run ID and channel as an immediately dispatched request.
 
-Do not poll the latest recap immediately after sending: it can still describe the preceding turn and consume delivery before the new result arrives. Final delivery is triggered by a correlated `turn.summary`; latest-recap compatibility recovery is restricted to agents that have never overlapped, as described above.
+Do not poll the latest recap immediately after sending: it can still describe the preceding turn and consume delivery before the new result arrives. Final delivery is triggered by a correlated `turn.summary`; latest recap is never used to recover a final result.
 
 While Harness owns a run’s response, generic assistant chat events for that exact run are suppressed so a handoff or `NO_REPLY` cannot close Web/MQTT chat before the Harness result arrives. User messages and error events still pass through.
 
@@ -191,7 +191,7 @@ Completed Harness runs retain a delivery tombstone until cleanup after 15 minute
 
 Harness final delivery records `harness_response` in flow JSONL with the original device run ID and complete `text`. Web Chat uses this event to recover pending results after SSE disconnects or page reloads. Live delivery still emits `chat_response` with state `final`.
 
-Summary callbacks prefer their own `fullText`. Only never-overlapped routes may look up latest recap, including when preview text is absent. Empty results retain the pending route. Recap completion removes only the same run route it started with; unrelated callbacks cannot consume another pending chat.
+Summary callbacks prefer their own `fullText`, with legacy `text` supported. Empty results retain the pending route without fetching latest recap. Validated summary membership completes only its exact input routes; unrelated callbacks cannot consume another pending chat.
 
 Routes are keyed by the local device run ID, not by agent ID. One Harness agent may have several outstanding user tasks. OS binds the existing `idempotencyKey` before dispatch and matches events using their run ID and/or key, including `payload.idempotencyKey` or `payload.receipt.idempotencyKey`. Explicit mismatches never fall back to another route. Legacy agent-only events are accepted only for one unique outstanding route on an agent that has never overlapped. Once overlap occurs, that agent requires explicit correlation for the remainder of the OS-server process lifetime, even after all sibling routes finish; late uncorrelated duplicates cannot claim a later turn. If a runtime stale-copies only the sequence component of a `device-…-<timestamp>` response route, OS restores the matching channel run from the in-memory flow record with that timestamp; a different timestamp is never rewritten. The local helper records a known receipt against its response route and rejects a second `send` or `answer` for that same route, preventing a model receipt/status loop from dispatching the current task twice. If a corrected or new user task is blocked by an earlier delivery, the runtime may inspect that receipt once; once it has a known terminal delivery state, it must send the current task before returning `NO_REPLY`.
 
@@ -307,19 +307,130 @@ request `idempotencyKey` on summary, tool and question events when turns can ove
 (or provide a matching device run ID). A merged result must not be attributed to an
 arbitrary input or duplicated under every input key.
 Some current app summaries omit that correlation; those ambiguous events are
-ignored after overlap rather than assigned to an arbitrary turn. This uses existing
-fields and does not invent a new Harness wire field. Local/mock tests cover OS
+ignored after overlap rather than assigned to an arbitrary turn. The existing per-input fields remain supported alongside the agreed summary
+membership metadata. Local/mock tests cover OS
 correlation, duplicate protection and voice admission; live app steering and full
 overlap delivery remain unverified. This change does not deploy to devices.
 
-Reviewed against [OpenHarness PR #294](https://github.com/autonomous-ai/openharness/pull/294)
-at `7d42b3ee619bfe3743cfeae94a04a5ccc0c6cef3`. Its Device adapter supports native
-steering/queueing and optional `receipt.input` status. This OS change does not yet
-interpret `receipt.input`; receipt progress above reports delivery state only.
-The [grouped-result contract](https://github.com/autonomous-ai/openharness/blob/7d42b3ee619bfe3743cfeae94a04a5ccc0c6cef3/docs/autonomous-device-result-correlation.md)
-defines `turn.correlation.v2` / `turn.result` with explicit input membership,
-immutable result IDs, durable result storage and a deduplicated TTS outbox. Neither
-this OS change nor that Harness revision implements or advertises this capability.
-Group completion requires both implementations, shared contract fixtures and joint
-engine/device validation before mutual enablement. Ambiguous overlapping results
-currently leave their routes unresolved; this is not a complete merged-result flow.
+The agreed result contract extends the existing `turn.summary` event. Its final
+payload carries `fullText`, stable `resultId`, the original `serverInstanceId`,
+`outcome` (`completed`, `failed`, `cancelled`) and `correlation` with
+`scope: input|group`, `inputs: [{deliveryId, idempotencyKey}]` and optional
+`engineTurnId`. One input requires scope `input`; multiple proven inputs require
+`group`. This adds no separate event, feature flag, capability or protocol version.
+`receipt.input.mode/phase` describes admission, steering or queue progress only;
+accepted input and `turn.done` do not identify a completed result or trigger recap
+fetching/TTS. A single-input summary without the new metadata still uses the safe
+legacy matcher; ambiguous overlapping summaries remain unresolved.
+
+The OS fixture `system/harness/testdata/summary-results/group.json` exercises this agreed
+summary payload. Tests do not establish that the running app produces correct
+membership or that its newest build works with physical Lamp playback. Shared
+fixtures and joint engine/device verification are still required.
+
+### Grouped-result storage and delivery
+
+The OS path reserves the original request identity and local response route
+before dispatch, then binds its receipt delivery ID. It uses the authenticated
+owner, server instance, agent, original idempotency key and delivery ID to match all
+members. A durable inbox retains incoming results before the event cursor advances,
+including results arriving before their receipts. An unresolved or mismatched member
+prevents the entire group from being applied; there is no latest-agent/run fallback.
+Storing the shared result and references on exactly its members is atomic. Other
+pending inputs remain pending, and completed/failed/cancelled outcomes stay distinct.
+Identical replay, including reordered membership, is a no-op; the same result identity
+with different content or membership is a protocol error.
+
+One durable outbox entry belongs to each result. Mixed destinations, expired or stale
+voice routes, web routes and text over 2,000 Unicode characters are not spoken; the
+complete result remains available in storage rather than being truncated for speech.
+A playback claim is persisted before contacting HAL. `accepted` means HTTP admission
+only, not audible completion. A lost acknowledgment remains uncertain; reopening the
+store changes an outstanding `claimed` state to `uncertain`. Neither state permits
+automatic speech replay. The OS must also validate the current voice route before
+playback; a persisted route alone does not prove that its old listener is still active.
+No reconciliation path automatically resends an input or allocates a new task key.
+Routes restored after OS restart are display/retrieval-only; persisted task identity
+does not restore permission to speak to the previous listener.
+
+The local JSON store is owned by one OS-server process, with atomic replacement,
+file mode `0600`, newly created directory mode `0700` and symlink refusal. Local
+admission limits are 4,096 input reservations, 4,096 result records, 4,096 staged events,
+64 members per result, 256 KiB each for input text and result text, 512 KiB per result
+payload and 64 MiB for the whole store. These are OS bounds, not new wire fields.
+Capacity exhaustion fails closed without evicting unresolved work or dedupe history;
+there is no automatic retention purge or multi-process writer support.
+
+Validation is local/mock: parser/fixture, group subset and all-or-nothing mismatch,
+receipt/event reordering, changed-result rejection, restart/outbox dedupe, incompatible
+routes and persistence failure. No physical Lamp playback or paid engine task is
+validated by these tests, and this change does not deploy to a device.
+
+The receiver writes `config/harness/results.json` and reserves tracked dispatched
+inputs by default. It reconciles only
+missing receipts for staged results (at most eight read-only `receipt.get` calls
+per pass, two seconds each, with a 30-second background interval). Reconnect never
+changes original keys or dispatches another task. A local wake also processes new
+events and bound receipts. The summary keeps its original server-instance identity even after a daemon
+restart. Receipt reconciliation uses the original keys with the same authenticated
+paired owner; all member bindings must still match. Unknown or untracked members
+block the entire group and cannot consume any input. Malformed summary membership
+never falls back to legacy routing.
+
+`GET /api/harness/results/:id` is strict loopback-only; `id` is the SHA-256 local
+reference emitted in history/monitor metadata. It returns the one stored result,
+member bindings, outcome and speech admission state, scoped to the currently saved
+pair (including while offline). Unpairing removes retrieval access to the old pair.
+A missing store/result returns 404; this endpoint does not execute work or play audio.
+The main-runtime history receives shared-result references, while the short follow-up
+context retains the full answer with `agentId`, `resultId` and plural `responseRunIds`.
+Live chat shows the answer once and references for sibling inputs. Receipt updates
+and `turn.done` do not complete or speak a result. Final summaries with membership
+are validated atomically; metadata-free single summaries retain the legacy safe matcher. Structured questions remain pending and
+use their question ID for in-process duplicate suppression. These question notices
+are separate from the durable final-result outbox.
+
+The outbox claim precedes both final UI notification and HAL submission. Current
+voice mode/generation, focus and per-member cancellation are checked at admission;
+HAL then owns playback under the first member's turn ID. Cancellation after admission
+continues to follow HAL's existing ownership rules. No end-to-end playback receipt
+exists yet: HTTP acceptance must not be described as hearing the answer.
+
+The producer handoff was checked against OpenHarness PR #336 at
+`16ae5b2197a21988c9fcd68a8f8eb32296494a9f`. Its unchanged schema, input/group
+fixtures and replay cases are copied under `system/harness/testdata/summary-results/pr336`.
+OS contract tests exercise those actual fixtures, including a nullable legacy `turnId`
+for a single input; a group still cannot nominate a singular `turnId`. This is
+parser/ledger/outbox verification, not physical playback or a live engine test.
+The PR also specifies that a `question.answer` receipt only acknowledges the answer
+operation: its UI route must bind back to the original task, not wait for membership
+under the answer key. OS persists the explicit question-to-task association and answer command separately
+from result inputs. A completed/rejected answer receipt closes only its command UI,
+without TTS or completing the original task. The original summary remains the sole
+final result. App-origin questions without a local parent are journaled unlinked;
+OS does not guess a parent. Reconnect reconciles unresolved answers using receipt.get
+and the original key, never by resending. Restored command acknowledgements are
+silent. Local tests cover both receipt/result arrival orders and restart recovery.
+
+
+### Local live verification (2026-09-25)
+
+With installed CLI `0.3.5-dev.d732a2e5`, a temporary separately paired local OS
+client sent two requests into the existing Blender airplane agent: add a white
+cloud, then change that cloud to pale blue. The second input was delivered after
+the first input started, before completion. The CLI emitted one `turn.summary`
+with `scope:group`, both exact delivery/key pairs, and `outcome:completed`.
+The OS stored one result, closed both response routes, and retained no staged
+result or pending route. Later `turn.done` did not create another result.
+The Blender agent reported the pale-blue cloud and reloaded its model/preview.
+The temporary pairing was revoked afterward; the existing device pairing stayed
+online. This exercised the real E2EE transport, engine and OS result hooks using
+silent web routes, not the main/realtime model or physical TTS playback.
+
+The opt-in `TestHarnessLiveLocalBridge` accepts `OS_HARNESS_LIVE_DIR` pointing to
+an existing private absolute directory (0700, no symlink alias). It starts an
+isolated client with the production hooks and ledger, writes private control
+metadata, and exposes loopback-only `/command`, `/state`, `/pair`, `/stop` routes.
+It sends no task automatically and stops within twelve minutes. The caller must
+advertise/pair this test client normally and revoke its temporary trust afterward.
+Normal automated tests skip this bridge.

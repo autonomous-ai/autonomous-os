@@ -10,13 +10,15 @@ import (
 )
 
 type harnessReplyState struct {
-	created   time.Time
-	webChat   bool
-	delegated bool
-	localOnly bool
-	delivered bool
-	toolName  string
-	toolArgs  string
+	created     time.Time
+	webChat     bool
+	delegated   bool
+	localOnly   bool
+	delivered   bool
+	restored    bool
+	toolName    string
+	toolArgs    string
+	questionIDs map[string]bool
 }
 
 // MarkHarnessResponseRun holds a user turn open for the final recap from its
@@ -171,7 +173,7 @@ func (h *AgentHandler) DeliverHarnessResponse(runID, text string) bool {
 			Detail: map[string]string{"role": "assistant", "message": text, "source": "harness"},
 		})
 	}
-	if !state.webChat {
+	if !state.webChat && !state.restored {
 		// Same gate as every other reply: a run the user cancelled by click
 		// keeps its answer in history but loses the speaker. Harness results
 		// land tens of seconds later, exactly when a bypass is audible.
@@ -182,4 +184,14 @@ func (h *AgentHandler) DeliverHarnessResponse(runID, text string) bool {
 		h.deliverTTS(speak, text, runID, "speak Harness result")
 	}
 	return true
+}
+
+// MarkHarnessRestoredRun restores a display address without reviving its speaker.
+func (h *AgentHandler) MarkHarnessRestoredRun(runID string) {
+	h.harnessRepliesMu.Lock()
+	defer h.harnessRepliesMu.Unlock()
+	if state, ok := h.harnessReplies[runID]; ok {
+		state.restored = true
+		h.harnessReplies[runID] = state
+	}
 }
