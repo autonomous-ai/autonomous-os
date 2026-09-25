@@ -129,3 +129,15 @@ def test_handler_direct_keeps_basic_auth(monkeypatch):
     assert session.posts[0][0] == "https://logs.example/gelf"
     assert session.auth == ("u", "p")
     assert "Authorization" not in session.headers
+
+
+def test_session_pools_enough_connections_for_log_bursts():
+    from hal.drivers import gelf_handler
+
+    handler = gelf_handler.GELFHandler.__new__(gelf_handler.GELFHandler)
+    handler._session = None
+    handler._auth = ("", "")
+    handler._headers = {}
+    session = handler._get_session()
+    for prefix in ("https://", "http://"):
+        assert session.get_adapter(prefix + "campaign-api.autonomous.ai")._pool_maxsize == gelf_handler.GELF_POOL_MAXSIZE == 32

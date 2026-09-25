@@ -9,6 +9,9 @@ import threading
 from typing import Any, Callable, Mapping, Optional
 from urllib.parse import urlparse
 
+# Pooled connections to the log collector; see GELFHandler._get_session.
+GELF_POOL_MAXSIZE = 32
+
 _LEVEL_MAP = {
     logging.CRITICAL: 2,
     logging.ERROR: 3,
@@ -107,7 +110,16 @@ class GELFHandler(logging.Handler):
         if self._session is None:
             import requests
 
+            from requests.adapters import HTTPAdapter
+
             self._session = requests.Session()
+            # Every record posts on its own thread, so a log burst (TTS timing,
+            # realtime turns) opens more than requests' default 10 pooled
+            # connections to one host and urllib3 discards the extras with a
+            # "Connection pool is full" warning (lamp-ee17, 2026-09-25).
+            adapter = HTTPAdapter(pool_maxsize=GELF_POOL_MAXSIZE)
+            self._session.mount("https://", adapter)
+            self._session.mount("http://", adapter)
             self._session.auth = self._auth
             self._session.headers["Content-Type"] = "application/json"
             self._session.headers.update(self._headers)
