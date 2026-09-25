@@ -116,7 +116,7 @@ func (h *AgentHandler) speakHarnessGroupedResult(text string, runIDs []string, s
 	// An earlier member may have lost the speaker before the user supplied a
 	// new input. The merged answer belongs to that newest input's speech turn;
 	// never let cancellation of an older member cancel the newer request too.
-	if h.isSpeechCancelled(owner) {
+	if h.isHarnessSpeechCancelled(owner) {
 		flow.Log("tts_cancelled", map[string]any{"run_id": owner, "source": h.speechCancelSource(owner)}, owner)
 		return fmt.Errorf("%w: latest member %q lost the speaker", ErrHarnessResultSpeechSuppressed, owner)
 	}
@@ -158,7 +158,7 @@ func (h *AgentHandler) DeliverHarnessQuestion(runID, questionID, text string) bo
 		h.monitorBus.Push(domain.MonitorEvent{Type: "assistant_delta", Summary: text, RunID: runID, Detail: map[string]string{"role": "assistant", "source": "harness", "question_id": questionID}})
 	}
 	if !state.webChat && !state.restored {
-		h.deliverTTS(func(text string) error {
+		h.deliverTTSUnless(h.isHarnessSpeechCancelled, func(text string) error {
 			return hal.AnnounceHarnessUpdate(hal.HarnessUpdateQuestion, text, runID, "")
 		}, text, runID, "speak Harness question")
 	}

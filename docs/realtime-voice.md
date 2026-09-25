@@ -239,7 +239,10 @@ provider can open a response from text alone; `announce(text)` queues an
 `RealtimeOrchestrator.prepare_announcement(allow_resume)` readies the session the
 same way `prepare_turn()` does (parked resume, unresolved-tool rebuild, Gemini
 pre-turn idle recycle) but refuses while a user turn is in flight, and never
-resumes a parked session for progress. `announce(text, stop_event)` flushes stale
+resumes a parked session for progress. It waits (up to `PREWARM_JOIN_TIMEOUT_S`)
+for an in-flight rebuild such as a noise-drop reconnect, and replaces a Gemini
+session that still holds a manual-VAD activity no capture owns any more.
+`announce(text, stop_event)` flushes stale
 output, sends the input and yields exactly like `stream_output()`, with the
 silent-turn watchdog raised to `ANNOUNCE_RECV_TIMEOUT_S` (20 s; the pipecat relay
 measured 11.6 s to first token on a cold 12.5k-token context);

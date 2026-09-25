@@ -241,7 +241,10 @@ có thể mở một response chỉ từ text hay không; `announce(text)` đưa
 `RealtimeOrchestrator.prepare_announcement(allow_resume)` chuẩn bị session giống
 `prepare_turn()` (resume khi park, rebuild khi còn tool chưa xử lý, recycle idle
 trước lượt của Gemini) nhưng từ chối khi có lượt người dùng đang xử lý, và không
-bao giờ resume session đang park cho progress. `announce(text, stop_event)` flush
+bao giờ resume session đang park cho progress. Nó chờ (tối đa `PREWARM_JOIN_TIMEOUT_S`)
+một lần rebuild đang chạy, ví dụ reconnect sau khi loại nhiễu, và thay session Gemini
+vẫn còn giữ activity manual-VAD mà không capture nào sở hữu nữa.
+`announce(text, stop_event)` flush
 output cũ, gửi input và yield giống hệt `stream_output()`, với watchdog lượt im
 lặng được nâng lên `ANNOUNCE_RECV_TIMEOUT_S` (20 s; relay pipecat đo được 11.6 s tới
 token đầu tiên với context nguội 12.5k token);

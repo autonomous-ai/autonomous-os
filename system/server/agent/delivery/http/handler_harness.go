@@ -187,7 +187,11 @@ func (h *AgentHandler) DeliverHarnessResponse(runID, text string) bool {
 		if state.localOnly {
 			speak = hal.SpeakReply
 		}
-		h.deliverTTS(speak, text, runID, "speak Harness result")
+		cancelled := h.isHarnessSpeechCancelled
+		if state.localOnly {
+			cancelled = h.isSpeechCancelled
+		}
+		h.deliverTTSUnless(cancelled, speak, text, runID, "speak Harness result")
 	}
 	return true
 }
@@ -207,7 +211,7 @@ func (h *AgentHandler) AnnounceHarnessProgress(runID, text string) {
 	}
 	// A progress line is never worth a speech-cancel record or a history feed:
 	// a cancelled run simply stays quiet.
-	if h.isSpeechCancelled(runID) {
+	if h.isHarnessSpeechCancelled(runID) {
 		return
 	}
 	go func() {

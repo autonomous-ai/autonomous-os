@@ -276,3 +276,21 @@ def test_announcement_waits_for_an_in_flight_rebuild(monkeypatch):
 
     threading.Timer(0.2, finish_rebuild).start()
     assert orch.prepare_announcement(allow_resume=True)
+
+
+def test_abandoned_activity_gets_a_fresh_session_before_announcing(monkeypatch):
+    monkeypatch.setattr(config, "REALTIME_PROVIDER", "pipecat_v1")
+    stale = _ScriptedAgent([])
+    stale._activity_started = True  # a capture ended without a commit
+    fresh = _ScriptedAgent([])
+    orch = _orchestrator(stale)
+    reasons = []
+
+    def rebuild(reason, **kwargs):
+        reasons.append(reason)
+        orch._agent = fresh
+        return True
+
+    orch._rebuild_now = rebuild
+    assert orch.prepare_announcement(allow_resume=True)
+    assert reasons == ["announce-abandoned-activity"] and orch._agent is fresh

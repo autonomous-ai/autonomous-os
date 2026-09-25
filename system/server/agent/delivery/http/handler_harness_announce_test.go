@@ -2,6 +2,7 @@ package http
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -106,5 +107,39 @@ func TestHarnessProgressAnnouncedOnlyForLiveVoiceRuns(t *testing.T) {
 	case payload := <-got:
 		t.Fatalf("progress announced for an ineligible run: %v", payload)
 	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// A realtime reply to a newer, unrelated utterance must not mute a Harness
+// update: the announcer waits for a free moment itself. Only the click does.
+func TestHarnessUpdatesIgnoreRealtimeSupersedeButHonorClick(t *testing.T) {
+	const run = "device-chat-270-1790318924951"
+	later := int64(1790319247903) // someone chatted after the task was sent
+
+	got := captureHALUpdates(t)
+	h := &AgentHandler{}
+	h.MarkHarnessResponseRun(run, false, false)
+	h.autoSpeechWatermarkMs.Store(later)
+	if !h.isSpeechCancelled(run) {
+		t.Fatal("invalid setup: ordinary replies must still be superseded")
+	}
+	if err := h.SpeakHarnessGroupedResult("Story done.", "completed", []string{run}); err != nil {
+		t.Fatalf("superseded grouped result: %v", err)
+	}
+	nextHALUpdate(t, got)
+	h.MarkHarnessResponseRun("device-chat-271-1790318925000", false, false)
+	if !h.DeliverHarnessQuestion("device-chat-271-1790318925000", "q1", "Which ending?") {
+		t.Fatal("question not delivered")
+	}
+	if payload := nextHALUpdate(t, got); payload["kind"] != "question" {
+		t.Fatalf("superseded question: %v", payload)
+	}
+
+	clicked := &AgentHandler{}
+	clicked.MarkHarnessResponseRun(run, false, false)
+	clicked.speechWatermarkMs.Store(later)
+	err := clicked.SpeakHarnessGroupedResult("Story done.", "completed", []string{run})
+	if !errors.Is(err, ErrHarnessResultSpeechSuppressed) {
+		t.Fatalf("click must still silence the result, got %v", err)
 	}
 }

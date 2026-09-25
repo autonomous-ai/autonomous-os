@@ -1673,6 +1673,14 @@ class RealtimeOrchestrator:
         self._last_activity_monotonic = time.monotonic()
         self._prepare_session()
         agent = self._agent
+        if agent is not None and getattr(agent, "_activity_started", False):
+            # Manual-VAD Gemini with an activity no capture owns any more (a
+            # capture that ended without a commit). Text sent into it would
+            # split that activity, so the provider refuses the announcement;
+            # replace the session as discard_open_activity does for noise.
+            logger.info("[realtime] Abandoned activity open — fresh session before announcing")
+            self._rebuild_now("announce-abandoned-activity", discard_old_on_failure=True)
+            agent = self._agent
         return bool(
             self.available and agent is not None and agent.available
             and agent.supports_announce and not agent.requires_fresh_session
