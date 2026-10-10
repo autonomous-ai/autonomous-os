@@ -11,6 +11,9 @@ use tokio_tungstenite::tungstenite::protocol::{
     },
 };
 
+mod followups;
+mod playback;
+
 type MockSocket = WebSocketStream<DuplexStream>;
 fn configuration(timeouts: Timeouts) -> SessionConfig {
     SessionConfig::new(
@@ -51,12 +54,18 @@ async fn mock_with(configuration: SessionConfig) -> (Connection, MockSocket) {
     (connect.await.unwrap().unwrap(), server)
 }
 async fn receive(server: &mut MockSocket) -> Value {
-    let message = timeout(Duration::from_secs(2), server.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    serde_json::from_slice(&message.into_data()).unwrap()
+    loop {
+        let message = timeout(Duration::from_secs(2), server.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        // Keepalive pings appear in scenarios longer than the keepalive
+        // period. Reading one queues its pong; it is not a client message.
+        if !matches!(message, Message::Ping(_) | Message::Pong(_)) {
+            return serde_json::from_slice(&message.into_data()).unwrap();
+        }
+    }
 }
 async fn send_json(server: &mut MockSocket, value: Value) {
     server.send(Message::text(value.to_string())).await.unwrap();
@@ -337,7 +346,7 @@ async fn retirement_filters_already_queued_output_and_does_not_wait_for_network(
 }
 
 #[tokio::test]
-async fn stalled_consumer_stops_socket_reads_then_fails_with_received_output_intact() {
+async fn consumer_that_takes_nothing_fails_within_the_delivery_bound_with_queued_output_intact() {
     let timeouts = Timeouts {
         deliver: Duration::from_millis(60),
         ..Timeouts::default()
@@ -348,8 +357,8 @@ async fn stalled_consumer_stops_socket_reads_then_fails_with_received_output_int
         send_json(&mut server, audio(value)).await;
     }
     assert_eq!(disconnected(&connection).await, Error::Backpressure);
-    // The queue is full, one message waited in the outbox and the rest were
-    // never read from the socket: nothing grew with the traffic.
+    // The consumer is the failure, so nothing more is pushed at it: what the
+    // bounded queue already held is intact and the stream then ends.
     assert_eq!(connection.events.len(), EVENT_QUEUE_CAPACITY);
     for value in 0..EVENT_QUEUE_CAPACITY as i16 {
         assert!(
@@ -1054,19 +1063,16 @@ async fn waiting_request_cancelled_before_the_barrier_is_never_committed() {
 }
 
 #[tokio::test]
-async fn unanswered_interruption_fails_by_default_and_can_assume_cancellation() {
+async fn silent_service_after_an_interruption_fails_or_is_assumed_by_policy() {
     let timeouts = Timeouts {
         barrier: Duration::from_millis(80),
         ..Timeouts::default()
     };
     // The first request ended but the service has sent nothing for it when
     // the person resumes speaking, and it sends no terminal event either.
-    for policy in [
-        UnansweredInterruption::Fail,
-        UnansweredInterruption::AssumeCancelled,
-    ] {
+    for policy in [BarrierPolicy::Require, BarrierPolicy::AssumeAfterQuiet] {
         let (mut connection, mut server) =
-            mock_with(configuration(timeouts).unanswered_interruption(policy)).await;
+            mock_with(configuration(timeouts).barrier_policy(policy)).await;
         ended_turn(&mut connection, &mut server, 1).await;
         let second = request(2);
         let input = connection.input();
@@ -1078,11 +1084,16 @@ async fn unanswered_interruption_fails_by_default_and_can_assume_cancellation() 
         sent(&mut server, "activityStart").await;
         sent(&mut server, "audio").await;
         event(&mut connection).await;
-        if policy == UnansweredInterruption::Fail {
+        if policy == BarrierPolicy::Require {
             assert_eq!(disconnected(&connection).await, Error::BarrierTimeout);
             continue;
         }
-        discarded(&mut connection, Discard::UnansweredBarrier).await;
+        // Reported before anything of the next answer can arrive.
+        assert!(matches!(
+            event(&mut connection).await,
+            Event::BarrierAssumed { session, superseded: Some(old), successor: Some(new) }
+                if session.get() == 17 && old.get() == 1 && new == second
+        ));
         sent(&mut server, "activityEnd").await;
         send_json(&mut server, audio(9)).await;
         assert!(
@@ -1090,17 +1101,6 @@ async fn unanswered_interruption_fails_by_default_and_can_assume_cancellation() 
         );
         assert_eq!(connection.state(), State::Ready);
     }
-    // Once the old response has produced anything, the barrier is mandatory
-    // under either policy.
-    let (mut connection, mut server) = mock_with(
-        configuration(timeouts).unanswered_interruption(UnansweredInterruption::AssumeCancelled),
-    )
-    .await;
-    ended_turn(&mut connection, &mut server, 1).await;
-    send_json(&mut server, audio(1)).await;
-    event(&mut connection).await;
-    connection.input().try_start(request(2)).unwrap();
-    assert_eq!(disconnected(&connection).await, Error::BarrierTimeout);
 }
 
 // ---- Late events from an old request ------------------------------------

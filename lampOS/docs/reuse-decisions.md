@@ -68,7 +68,9 @@ V1's useful bounded frame queues and cancellation-aware synthesis producers.
 Capacity must propagate back to generation without pausing local microphone or
 control handling. The Rust implementation reserves at most two provider packets
 in flight, retains strict IPC age checks and keeps the 30-second coordinator
-backlog bound. Upstream playback-paced delivery remains a separate open test.
+backlog bound. The later [provider integration](provider-recovery-integration.md)
+adds playback-paced worker regressions and preserves the distinction between
+modeled playback and real acoustic delivery.
 
 For [conversation lifecycle cues](live-session-cues.md), preserve V1 main
 `d5efe9d7b`'s `hal/telemetry/voice_metrics.py` distinction between monotonic

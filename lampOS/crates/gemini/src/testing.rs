@@ -23,6 +23,7 @@ const RECEIVE_TIMEOUT: Duration = Duration::from_secs(2);
 /// The server end of one scripted connection.
 pub struct FakeService {
     socket: WebSocketStream<DuplexStream>,
+    closed: bool,
 }
 impl FakeService {
     /// Next client JSON message. Panics when none arrives within two seconds.
@@ -40,10 +41,32 @@ impl FakeService {
                     return serde_json::from_slice(text.as_bytes()).ok();
                 }
                 Ok(Some(Ok(Message::Binary(bytes)))) => return serde_json::from_slice(&bytes).ok(),
-                Ok(Some(Ok(Message::Ping(_) | Message::Pong(_)))) => {}
-                _ => return None,
+                // Reading a ping queues its pong; send it, as a service would.
+                Ok(Some(Ok(Message::Ping(_) | Message::Pong(_)))) => {
+                    let _ = self.socket.flush().await;
+                }
+                // Silence within the wait.
+                Err(_) => return None,
+                _ => {
+                    self.closed = true;
+                    return None;
+                }
             }
         }
+    }
+    /// Let time pass while answering keepalive pings, as a live service does
+    /// throughout a long answer. Returns early with a client message if one
+    /// arrives.
+    pub async fn rest(&mut self, wait: Duration) -> Option<Value> {
+        let until = tokio::time::Instant::now() + wait;
+        if !self.closed
+            && let Some(message) = self.try_receive(wait).await
+        {
+            return Some(message);
+        }
+        // A closed connection has nothing to answer; time still passes.
+        tokio::time::sleep_until(until).await;
+        None
     }
     /// Receive the setup message and acknowledge it.
     pub async fn accept(&mut self) -> Value {
@@ -105,7 +128,10 @@ pub async fn pair(
         WebSocketStream::from_raw_socket(server, Role::Server, Some(socket_config())).await;
     (
         setup_and_spawn(client, config, session),
-        FakeService { socket: server },
+        FakeService {
+            socket: server,
+            closed: false,
+        },
     )
 }
 
@@ -146,7 +172,10 @@ impl Connect for FakeConnector {
 
 /// Next dial, or a panic when the supervisor does not attempt one in time.
 pub async fn next_dial(observed: &mut mpsc::UnboundedReceiver<Dial>) -> Dial {
-    timeout(RECEIVE_TIMEOUT, observed.recv())
+    dial_within(observed, RECEIVE_TIMEOUT).await
+}
+pub async fn dial_within(observed: &mut mpsc::UnboundedReceiver<Dial>, wait: Duration) -> Dial {
+    timeout(wait, observed.recv())
         .await
         .expect("connection attempt")
         .expect("connector alive")

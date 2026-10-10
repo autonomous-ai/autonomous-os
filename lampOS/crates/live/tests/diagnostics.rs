@@ -577,12 +577,18 @@ fn audio_fault_end_is_incomplete_even_with_good_written_pcm() {
     let temp = Private::new();
     let mut recorder = Recorder::start(temp.config(StreamKind::Capture)).unwrap();
     let at = recorder.started_at_us();
-    recorder.try_privacy(PrivacyMeta {
-        at_us: at,
-        generation: 2,
-        open: true,
-    });
-    recorder.try_capture(capture(at + 1, 1), &[1; 160], &[2; 160]);
+    assert_eq!(
+        recorder.try_privacy(PrivacyMeta {
+            at_us: at,
+            generation: 2,
+            open: true,
+        }),
+        SubmitResult::Queued
+    );
+    assert_eq!(
+        recorder.try_capture(capture(at + 1, 1), &[1; 160], &[2; 160]),
+        SubmitResult::Queued
+    );
     let report = recorder.finish(
         EndMeta {
             at_us: at + 2,

@@ -10,6 +10,25 @@ The broader goal remains unfinished; this document is not release acceptance.
 See [voice workstream ownership](docs/development-workstreams.md) before making
 parallel edits or integrating another agent's changes.
 
+- Integrated Agent 1's subsequent committed `d6b813695` with review fixes for
+  repeated disconnects losing retained audio, old input crossing connection
+  boundaries, repeated startup readiness, resumption-context provenance and a
+  racy evaluator fixture. Production cancellation barriers remain strict.
+  An initial ARM failure exposed a diagnostic shutdown race that could discard
+  accepted recording records; five deterministic regressions reproduce it and
+  verify the correction without widening bounds or deadlines. Final combined
+  source `a19382a9` passed **822 host tests** and **861 emulated Linux/ARM64
+  tests**, with zero failures. All **three normally ignored tests** also ran
+  and passed on both platforms: a 1,600-turn scripted fault soak and complete
+  60-/180-second modeled answers with deliberate playback holds. Formatting,
+  strict Clippy and both release builds pass. See
+  [provider recovery integration](docs/provider-recovery-integration.md) for
+  full source identity, exact commands, measured boundaries, retained earlier
+  failures and evidence in `artifacts/provider-recovery-20261011/`.
+  Coordinator outage/readiness/failure handling remains unfinished; typed
+  recovery is still disabled. No cloud, device, acoustic or natural-interaction
+  qualification follows from these software gates.
+
 - Fixed ring renewals exhausting the session trace after about 200 simulated
   seconds. Routine evidence is summarized; every hardware command and receipt
   check remains. Exact transition and tail samples preserve evaluator evidence.
@@ -50,14 +69,14 @@ parallel edits or integrating another agent's changes.
   identity, exact gates, reproduced failures and remaining qualification.
   This adds no ARM64, cloud, device or acoustic result.
 
-- Agent 1 delivered Gemini reliability commit `fbf9ecc3c` on `gemini-voice`,
-  directly above `23bde4873`. This checkpoint integrates it with
+- Agent 1 initially delivered Gemini reliability commit `fbf9ecc3c` on
+  `gemini-voice`, directly above `23bde4873`. The earlier integration added
   [provider output credits](docs/provider-flow-control.md), reserving PCM space
   before sending while preserving capture, control and 100 ms IPC freshness.
   The coordinator's 30-second cap is a backlog limit; long answers no longer
-  depend on the root accepting unreserved PCM. This is not yet sustained
-  end-to-end qualification: the upstream two-second delivery watchdog still
-  needs Agent 1's playback-paced regression. See the linked protocol and
+  depend on the root accepting unreserved PCM. Its upstream two-second delivery
+  watchdog required the playback-paced correction now integrated above.
+  Sustained physical end-to-end qualification remains open. See the protocol and
   [next 24-hour assignments](docs/development-workstreams.md).
 
 - The earlier combined source `670a905d` passed **696 host tests, zero failed or
@@ -72,8 +91,9 @@ parallel edits or integrating another agent's changes.
   acoustic scoring. Known irrelevant/incomplete or duplicate/split answers do
   not improve completion rates, and missing/changed recordings remain unscored.
   Unreviewed playback still cannot establish semantic success. Directed-mode
-  cues are integrated; playback-paced upstream delivery, relay framing, and
-  physical admission/echo qualification remain open in the workstream notes.
+  cues and scripted playback-paced upstream delivery are integrated; relay
+  framing and physical admission/echo qualification remain open in the
+  workstream notes.
 
 - [AEC alignment diagnostics](docs/aec-alignment.md) now record Sonora's cached
   internal alignment separately from the supplied queue hint, only with explicit

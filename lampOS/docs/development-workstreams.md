@@ -24,12 +24,13 @@ tasks and new long-term memory are outside this first release.
 
 ## Next 24-hour assignments
 
-Agent 1 continues provider reliability from pushed commit `fbf9ecc3c` on
-`gemini-voice`: playback-paced 60–180-second answers, maximum-size bursts and
-flow-control timeout behavior first; then pause/resume and repeated interruption,
-explicit outage/recovery/turn-failure contracts, narrow service probes when
-access permits, and Linux/ARM64 verification. Codex integrates coordinator
-contract changes. No accepted audio may be silently lost or replayed twice.
+Agent 1's subsequent committed checkpoint `d6b813695` adds playback-paced
+60–180-second tests, bounded output buffering, concurrent recovery and narrow
+service probes. Shared [integration qualification](provider-recovery-integration.md)
+records the additional review corrections and exact combined gates. Codex owns
+the next explicit outage/recovery/turn-failure coordinator contract. Keep the
+production barrier policy `Require` until service ordering and ownership are
+qualified. No accepted audio may be silently lost or replayed twice.
 
 Agent 2 delivered the Rust voice acceptance runner through `3eaa0365a`, with
 42 scenarios, 21 evaluator canaries, fake-runtime fault injection, an attempt
@@ -55,9 +56,10 @@ provider-credit IPC contract and is not silently fixed in the reporting patch.
 
 ## Current contracts relevant to both sessions
 
-- Agent 1 delivered Gemini reliability at `fbf9ecc3c`; see its
-  [integration handoff](gemini-session-reliability.md). Its reported verification
-  is macOS/scripted-service only, not cloud or device qualification.
+- Agent 1's initial Gemini reliability at `fbf9ecc3c` is followed by `d6b813695`;
+  see its [integration handoff](gemini-session-reliability.md) and the later
+  [combined qualification](provider-recovery-integration.md). Keep host,
+  emulated ARM64, cloud and physical evidence separate.
 - Agent 2 delivered ten commits from `186253939` through `3eaa0365a`. Preserve
   that history and its scenario/ledger format. The production provider-credit
   protocol does not change its CLI-level runner interface. Review fixes must
@@ -72,8 +74,9 @@ provider-credit IPC contract and is not silently fixed in the reporting patch.
   preserve counters across startup/turns/recovery, and return credits according
   to actual coordinator capacity. Provider tests/fixtures must speak this
   protocol. Do not overwrite the sender or retired-output pruning while
-  integrating new Gemini work. The upstream two-second delivery timeout needs
-  a real playback-paced regression; fast burst draining is insufficient.
+  integrating new Gemini work. The upstream delivery timeout is now 30 seconds;
+  playback-paced regressions explicitly cover long answers and holds. They
+  still model the coordinator and speaker, so they do not qualify room audio.
 
 - A Gemini request can have [multiple playback occurrences](playback-occurrences.md).
   Do not equate generation completion or one segment's retirement with final

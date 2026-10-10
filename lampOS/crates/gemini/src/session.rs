@@ -1,22 +1,25 @@
 use crate::{
-    Discard, EVENT_QUEUE_CAPACITY, Error, Event, INPUT_QUEUE_CAPACITY, Lineage, MAX_INPUT_AGE,
-    MAX_INPUT_SAMPLES, MAX_WIRE_BYTES, OUTBOX_CAPACITY, OUTPUT_RATE, RequestId, Result, Resumption,
-    ResumptionHandle, SessionConfig, SessionId, State, Timeouts, UnansweredInterruption, wire,
+    BarrierPolicy, Discard, EVENT_QUEUE_CAPACITY, Error, Event, INPUT_QUEUE_CAPACITY, Lineage,
+    MAX_INPUT_AGE, MAX_INPUT_SAMPLES, MAX_WIRE_BYTES, OUTPUT_RATE, RequestId, Result, Resumption,
+    ResumptionHandle, SessionConfig, SessionId, State, Timeouts, wire,
 };
 use futures_util::{SinkExt, StreamExt};
 use std::{
     collections::VecDeque,
     sync::{
         Arc, Mutex, PoisonError,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
+// Deadlines use the runtime clock so scripted tests can cover minutes of
+// conversation without waiting for them. Capture ages stay on the system
+// monotonic clock: they describe when audio was actually acquired.
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     sync::{Notify, mpsc, watch},
     task::JoinHandle,
-    time::{MissedTickBehavior, timeout},
+    time::{Instant as Clock, MissedTickBehavior, timeout},
 };
 use tokio_tungstenite::{
     WebSocketStream, connect_async_with_config,
@@ -29,6 +32,9 @@ struct Shared {
     wake: Notify,
     stop: watch::Sender<Option<Error>>,
     resumption: Mutex<Option<ResumptionPoint>>,
+    // An invalidation can arrive on a resumed connection before it issues a
+    // local handle. Retain that fact for the supervisor's inherited point.
+    resumption_invalidated: AtomicBool,
 }
 
 /// The latest point from which the service said this session can be resumed.
@@ -36,21 +42,31 @@ struct Shared {
 pub struct ResumptionPoint {
     handle: ResumptionHandle,
     current: bool,
+    advertised_session: SessionId,
 }
 impl ResumptionPoint {
     pub fn handle(&self) -> &ResumptionHandle {
         &self.handle
     }
-    /// False once the service has since reported a state it cannot resume
-    /// from. Resuming then restores the conversation only up to this point.
+    /// Whether the latest applicable service metadata advertised this point
+    /// as current. This does not acknowledge which client messages the point
+    /// includes or guarantee the model's exact restored context.
     pub fn is_current(&self) -> bool {
         self.current
     }
+    pub(crate) fn advertised_session(&self) -> SessionId {
+        self.advertised_session
+    }
+    pub(crate) fn invalidate(&mut self) {
+        self.current = false;
+    }
 }
 impl Shared {
+    /// The first failure is kept. A local close always takes precedence, so a
+    /// privacy stop still drops output queued behind an earlier remote failure.
     fn fail(&self, error: Error) {
         self.stop.send_if_modified(|value| {
-            if value.is_none() {
+            if value.is_none() || (error == Error::Closed && *value != Some(Error::Closed)) {
                 *value = Some(error);
                 true
             } else {
@@ -182,11 +198,20 @@ impl Connection {
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
+    pub(crate) fn resumption_invalidated(&self) -> bool {
+        self.input
+            .shared
+            .resumption_invalidated
+            .load(Ordering::Acquire)
+    }
     /// Cancellation-safe receiver. Already queued retired audio/text is dropped,
     /// while lifecycle events retain their original lineage for bookkeeping.
     /// Output received before a remote or transport failure is still delivered,
     /// in order, ahead of the end of the stream: a failure must not truncate an
-    /// answer that had already arrived. A local shutdown drops queued output.
+    /// answer that had already arrived. [`Connection::state`] reports the
+    /// failure, and input is refused, as soon as it happens; the stream ends
+    /// only after that buffered output has been taken. A local shutdown drops
+    /// queued output.
     pub async fn next_event(&mut self) -> Option<Event> {
         while let Some(event) = self.events.recv().await {
             let output_request = match &event {
@@ -305,6 +330,7 @@ where
         wake: Notify::new(),
         stop,
         resumption: Mutex::new(None),
+        resumption_invalidated: AtomicBool::new(false),
     });
     let input = InputSender {
         commands: commands_tx,
@@ -316,35 +342,32 @@ where
         session,
         timeouts: config.timeouts,
         retain: config.resumption != Resumption::Off,
-        unanswered: config.unanswered,
+        policy: config.barrier,
+        output_buffer: config.output_buffer,
         commands,
         events: events_tx,
-        outbox: VecDeque::with_capacity(OUTBOX_CAPACITY),
-        outbox_since: None,
+        state: state_tx,
+        outbox: VecDeque::new(),
+        outbox_bytes: 0,
+        waiting_since: None,
+        gated: false,
+        purged_through: 0,
         shared,
         stop: stop_rx,
         current: None,
-        successor: None,
+        barrier: None,
         last_responder: None,
         stale_terminal: None,
         go_away: false,
         activity_open: false,
         last_request: 0,
-        read_at: Instant::now(),
-        ping_at: Instant::now(),
+        read_at: Clock::now(),
+        ping_at: Clock::now(),
     };
-    // Actor::run owns and drops its event sender before returning. Keep one
-    // sender until the final state is published so an EOF-first receiver cannot
-    // observe Ready and lose the sanitized failure on a multithreaded runtime.
-    let event_close_guard = actor.events.clone();
-    let task = tokio::spawn(async move {
-        let result = actor.run().await;
-        state_tx.send_replace(match result {
-            Ok(()) | Err(Error::Closed) => State::Closed,
-            Err(error) => State::Disconnected(error),
-        });
-        drop(event_close_guard);
-    });
+    // The actor publishes its terminal state before it lets go of the event
+    // sender, so a receiver that sees the end of the stream never reads Ready
+    // and loses the sanitized failure, even on a multithreaded runtime.
+    let task = tokio::spawn(actor.run());
     Ok(Connection {
         input,
         events,
@@ -397,27 +420,27 @@ impl InputState {
 struct Turn {
     lineage: Lineage,
     input: InputState,
-    /// Superseded or cancelled locally. Its output is never delivered.
+    /// Cancelled locally while its input was still open. Its End drops it.
     retired: bool,
-    /// When this client asked the service to interrupt the retired response.
-    retire_at: Option<Instant>,
-    saw_interrupt: bool,
+    /// The person finished, but activityEnd is withheld until an earlier
+    /// response has settled.
+    end_held: bool,
     /// activityEnd sent: the service now owes a response or a terminal event.
-    ended_at: Option<Instant>,
-    first_output_at: Option<Instant>,
-    progress_at: Option<Instant>,
-    generation_at: Option<Instant>,
+    /// Until then nothing the service sends can belong to this request.
+    ended_at: Option<Clock>,
+    first_output_at: Option<Clock>,
+    progress_at: Option<Clock>,
+    generation_at: Option<Clock>,
     output_samples: u64,
     audio_sequence: u64,
 }
 impl Turn {
-    fn new(lineage: Lineage, input: InputState) -> Self {
+    fn new(lineage: Lineage) -> Self {
         Self {
             lineage,
-            input,
+            input: InputState::new(),
             retired: false,
-            retire_at: None,
-            saw_interrupt: false,
+            end_held: false,
             ended_at: None,
             first_output_at: None,
             progress_at: None,
@@ -427,47 +450,111 @@ impl Turn {
         }
     }
 }
-/// The request admitted while an earlier response still owns the output
-/// stream. Its audio goes to the service at once: the service cannot answer an
-/// activity before its activityEnd, so only that End waits for the barrier.
-struct Successor {
-    request: RequestId,
-    input: InputState,
+/// An earlier response that must settle before the newest request may be
+/// committed with activityEnd. The newest request's audio is never held: the
+/// service cannot answer an activity before its End, so everything that
+/// arrives while a barrier stands belongs to the earlier response.
+struct Barrier {
+    /// Unknown when stray output arrives with no response on record.
+    old: Option<Lineage>,
+    /// When the earlier response was asked to stop, or first seen.
+    since: Clock,
+    /// That moment, then the latest event of the earlier response.
+    last_event_at: Clock,
+}
+impl Barrier {
+    fn new(old: Option<Lineage>) -> Self {
+        let now = Clock::now();
+        Self {
+            old,
+            since: now,
+            last_event_at: now,
+        }
+    }
 }
 struct Actor<S> {
     socket: WebSocketStream<S>,
     session: SessionId,
     timeouts: Timeouts,
     retain: bool,
-    unanswered: UnansweredInterruption,
+    policy: BarrierPolicy,
+    output_buffer: usize,
     commands: mpsc::Receiver<Command>,
     events: mpsc::Sender<Event>,
-    /// Events decoded but not yet accepted by the bounded event queue.
+    state: watch::Sender<State>,
+    /// Decoded events the bounded event queue has not accepted yet. Bounded by
+    /// `output_buffer` bytes: beyond that the socket is not read.
     outbox: VecDeque<Event>,
-    outbox_since: Option<Instant>,
+    outbox_bytes: usize,
+    /// Since when the consumer has accepted nothing while events waited.
+    waiting_since: Option<Clock>,
+    gated: bool,
+    purged_through: u64,
     shared: Arc<Shared>,
     stop: watch::Receiver<Option<Error>>,
+    /// The newest request: the only one that accepts input.
     current: Option<Turn>,
-    successor: Option<Successor>,
+    barrier: Option<Barrier>,
     /// Most recent request that produced output: the only possible owner of an
     /// output transcript that trails its audio.
     last_responder: Option<Lineage>,
     /// When a stray `interrupted` was dropped whose companion completion has
     /// not been seen yet. Only honored within `Timeouts::barrier` of it.
-    stale_terminal: Option<Instant>,
+    stale_terminal: Option<Clock>,
     go_away: bool,
     activity_open: bool,
     last_request: u64,
-    read_at: Instant,
-    ping_at: Instant,
+    read_at: Clock,
+    ping_at: Clock,
+}
+fn cost(event: &Event) -> usize {
+    64 + match event {
+        Event::Audio { pcm, .. } => pcm.len() * 2,
+        Event::OutputTranscript { text, .. }
+        | Event::ModelText { text, .. }
+        | Event::UncorrelatedInputTranscript { text, .. } => text.len(),
+        _ => 0,
+    }
 }
 impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
-    async fn run(mut self) -> Result<()> {
+    async fn run(mut self) {
         let result = self.serve().await;
-        // Hand over as much already decoded output as fits, in order, before
-        // the stream ends. Nothing is skipped: the first refusal stops it.
-        self.flush();
-        result
+        let terminal = match result {
+            Ok(()) | Err(Error::Closed) => State::Closed,
+            Err(error) => {
+                // Refuse input and report the failure now. Output that had
+                // already arrived is still handed over, in order, below.
+                self.shared.fail(error);
+                State::Disconnected(error)
+            }
+        };
+        self.state.send_replace(terminal);
+        // A consumer that has stopped taking events is the failure itself;
+        // every other failure leaves earlier, valid output worth delivering.
+        if !matches!(result, Ok(()) | Err(Error::Closed | Error::Backpressure)) {
+            self.drain().await;
+        }
+    }
+    /// After a failure: keep handing buffered output to a consumer that keeps
+    /// taking it, for as long as it does. Nothing is read or sent any more.
+    async fn drain(&mut self) {
+        let mut tick = tokio::time::interval(Duration::from_millis(10));
+        tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        loop {
+            if *self.stop.borrow() == Some(Error::Closed) {
+                return;
+            }
+            self.purge_retired();
+            self.flush();
+            if self.outbox.is_empty() || self.delivery_expired() {
+                return;
+            }
+            tokio::select! {
+                _ = capacity(&self.events) => {},
+                _ = self.shared.wake.notified() => {},
+                _ = tick.tick() => {},
+            }
+        }
     }
     async fn serve(&mut self) -> Result<()> {
         let mut tick = tokio::time::interval(Duration::from_millis(10));
@@ -477,12 +564,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
                 return Err(error);
             }
             self.retire_active().await?;
+            self.purge_retired();
             self.enforce_barrier().await?;
             self.flush();
             self.check_deadlines()?;
             if self.go_away
                 && self.current.is_none()
-                && self.successor.is_none()
+                && self.barrier.is_none()
                 && self.outbox.is_empty()
             {
                 // Nothing is owed on this connection: end it at a clean
@@ -496,18 +584,21 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
                     self.timeouts.write,
                 )
                 .await?;
-                self.ping_at = Instant::now();
+                self.ping_at = Clock::now();
             }
-            // While the consumer is behind, stop reading the socket and let
-            // transport flow control hold the service back. Commands, local
-            // retirement and shutdown stay live; only cloud output waits.
-            let gated = !self.outbox.is_empty();
+            // Output is buffered up to a fixed amount of audio so the answer is
+            // received at network speed whatever the playback speed. Only past
+            // that bound does the socket go unread and transport flow control
+            // hold the service back. Commands, local retirement and shutdown
+            // stay live throughout.
+            let waiting = !self.outbox.is_empty();
+            let gated = self.gated;
             tokio::select! {
                 _ = self.shared.wake.notified() => {},
                 _ = tick.tick() => {},
                 // This actor is the only sender, so the released slot is still
                 // free when the next iteration flushes the outbox into it.
-                ready = capacity(&self.events), if gated => ready?,
+                ready = capacity(&self.events), if waiting => ready?,
                 command = self.commands.recv() => match command {
                     Some(command) => self.command(command).await?,
                     None => return Ok(()),
@@ -516,7 +607,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
                     let incoming = incoming
                         .ok_or(Error::PeerClosed { code: None })?
                         .map_err(transport_error)?;
-                    self.read_at = Instant::now();
+                    self.read_at = Clock::now();
                     self.message(incoming).await?;
                     // One server message per scheduling turn: a burst already in
                     // the socket buffer cannot starve the caller's control tick.
@@ -525,19 +616,23 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
             }
         }
     }
+    fn delivery_expired(&self) -> bool {
+        self.waiting_since
+            .is_some_and(|since| since.elapsed() >= self.timeouts.deliver)
+    }
     fn check_deadlines(&self) -> Result<()> {
-        if let Some(since) = self.outbox_since {
-            if since.elapsed() >= self.timeouts.deliver {
-                return Err(Error::Backpressure);
-            }
+        if self.delivery_expired() {
+            return Err(Error::Backpressure);
+        }
+        if self.gated {
             // The socket is deliberately unread, so neither liveness nor
-            // response progress can be judged until delivery resumes.
+            // response progress can be judged until reading resumes.
             return Ok(());
         }
         if self.read_at.elapsed() >= self.timeouts.read {
             return Err(Error::ReadTimeout);
         }
-        let Some(turn) = self.current.as_ref().filter(|turn| !turn.retired) else {
+        let Some(turn) = self.current.as_ref() else {
             return Ok(());
         };
         let Some(ended) = turn.ended_at else {
@@ -567,7 +662,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
                     turn.output_samples.saturating_mul(1_000_000) / u64::from(OUTPUT_RATE),
                 );
                 let due = (first + playback).max(generated) + self.timeouts.completion;
-                if Instant::now() >= due {
+                if Clock::now() >= due {
                     return Err(Error::CompletionTimeout);
                 }
             }
@@ -586,7 +681,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
         }
         Ok(())
     }
-    async fn end_activity(&mut self) -> Result<()> {
+    /// Commit the current request: from here on the service owes it a response.
+    async fn commit(&mut self) -> Result<()> {
         send(
             &mut self.socket,
             Message::text(wire::ACTIVITY_END),
@@ -594,6 +690,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
         )
         .await?;
         self.activity_open = false;
+        if let Some(turn) = self.current.as_mut() {
+            turn.end_held = false;
+            turn.ended_at = Some(Clock::now());
+        }
         Ok(())
     }
     fn retired_through(&self) -> u64 {
@@ -604,52 +704,69 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
         let Some(turn) = self.current.as_mut() else {
             return Ok(());
         };
-        if turn.retired || turn.lineage.request.get() > retired_through {
+        if turn.lineage.request.get() > retired_through {
             return Ok(());
         }
-        turn.retired = true;
+        if turn.ended_at.is_some() {
+            // Committed: its response becomes the earlier stream that must
+            // settle. Explicit activityStart is the only interruption request
+            // available with provider activity detection disabled.
+            self.barrier = Some(Barrier::new(Some(turn.lineage)));
+            self.current = None;
+            return self.start_activity().await;
+        }
         if turn.input.open {
             // No activityEnd was sent, so the service owes this request
             // nothing. Its End drops it without asking for a response.
-            return Ok(());
+            turn.retired = true;
+        } else {
+            // Its End was withheld and now never needs sending.
+            self.current = None;
         }
-        turn.retire_at = Some(Instant::now());
-        // Explicit activityStart is the only interruption request available
-        // with provider activity detection disabled.
-        self.start_activity().await
+        Ok(())
     }
     async fn enforce_barrier(&mut self) -> Result<()> {
-        let Some(turn) = self.current.as_ref() else {
+        let Some(barrier) = self.barrier.as_ref() else {
             return Ok(());
         };
-        if turn
-            .retire_at
-            .is_none_or(|at| at.elapsed() < self.timeouts.barrier)
-        {
+        if barrier.since.elapsed() >= self.timeouts.response {
+            // Still producing this long after being asked to stop. Waiting on
+            // is not an option under either policy: the next request would
+            // never be committed.
+            return Err(Error::BarrierTimeout);
+        }
+        if barrier.last_event_at.elapsed() < self.timeouts.barrier {
             return Ok(());
         }
-        if self.unanswered == UnansweredInterruption::AssumeCancelled
-            && turn.first_output_at.is_none()
-            && !turn.saw_interrupt
-        {
-            self.current = None;
-            self.emit(Event::Discarded {
-                session: self.session,
-                reason: Discard::UnansweredBarrier,
-            })?;
-            return self.promote().await;
+        match self.policy {
+            BarrierPolicy::Require => Err(Error::BarrierTimeout),
+            BarrierPolicy::AssumeAfterQuiet => {
+                // Asked to stop and silent for the whole bound. The service
+                // never confirmed it, so whatever follows is flagged.
+                let superseded = barrier.old.map(|lineage| lineage.request);
+                let successor = self.current.as_ref().map(|turn| turn.lineage.request);
+                self.barrier = None;
+                self.emit(Event::BarrierAssumed {
+                    session: self.session,
+                    superseded,
+                    successor,
+                });
+                self.release().await
+            }
         }
-        Err(Error::BarrierTimeout)
+    }
+    /// The earlier response has settled: a withheld End may go out now.
+    async fn release(&mut self) -> Result<()> {
+        if self.current.as_ref().is_some_and(|turn| turn.end_held) {
+            self.commit().await?;
+        }
+        Ok(())
     }
     async fn command(&mut self, command: Command) -> Result<()> {
         match command {
             Command::Start(request) => {
                 if request.get() <= self.last_request
                     || self.current.as_ref().is_some_and(|turn| turn.input.open)
-                    || self
-                        .successor
-                        .as_ref()
-                        .is_some_and(|successor| successor.input.open)
                 {
                     return Err(Error::OverlappingInput);
                 }
@@ -658,64 +775,50 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
                     session: self.session,
                     request,
                 };
-                let waiting_for_barrier = self.current.is_some();
-                if waiting_for_barrier {
-                    self.retire_active().await?;
-                    // An earlier successor whose End is still held was never
-                    // committed. Its audio stays in the activity this request
-                    // continues; it cannot receive a response of its own.
-                    self.successor = Some(Successor {
-                        request,
-                        input: InputState::new(),
-                    });
-                } else {
-                    self.current = Some(Turn::new(lineage, InputState::new()));
-                }
+                // try_start retired every earlier request. A committed one
+                // becomes the barrier; one whose End was withheld was never
+                // committed, and its audio stays in the activity this request
+                // continues. It cannot receive a response of its own.
+                self.retire_active().await?;
+                self.current = Some(Turn::new(lineage));
                 self.start_activity().await?;
                 self.emit(Event::InputStarted {
                     lineage,
-                    waiting_for_barrier,
-                })?;
+                    waiting_for_barrier: self.barrier.is_some(),
+                });
             }
             Command::Audio(audio) => {
                 if audio.request.get() <= self.retired_through() {
                     return Ok(());
                 }
-                let input = match (self.successor.as_mut(), self.current.as_mut()) {
-                    (Some(successor), _) if successor.request == audio.request => {
-                        &mut successor.input
-                    }
-                    (None, Some(turn)) if turn.lineage.request == audio.request => &mut turn.input,
-                    _ => return Err(Error::StaleRequest),
-                };
-                input.accept(&audio)?;
+                let turn = self
+                    .current
+                    .as_mut()
+                    .filter(|turn| turn.lineage.request == audio.request)
+                    .ok_or(Error::StaleRequest)?;
+                turn.input.accept(&audio)?;
                 send_audio(&mut self.socket, &audio, self.timeouts.write).await?;
             }
             Command::End(request) => {
-                if let Some(successor) = self.successor.as_mut() {
-                    if successor.request != request || !successor.input.open {
-                        return Err(Error::StaleRequest);
-                    }
-                    // Held until the superseded response reaches its idle
-                    // barrier: output after this End belongs to this request.
-                    successor.input.open = false;
-                    return Ok(());
-                }
                 let retired_through = self.retired_through();
-                let turn = self.current.as_mut().ok_or(Error::StaleRequest)?;
-                if turn.lineage.request != request || !turn.input.open {
-                    return Err(Error::StaleRequest);
-                }
+                let turn = self
+                    .current
+                    .as_mut()
+                    .filter(|turn| turn.lineage.request == request && turn.input.open)
+                    .ok_or(Error::StaleRequest)?;
                 turn.input.open = false;
                 if turn.retired || request.get() <= retired_through {
                     // Cancelled before commit. Sending activityEnd would ask
                     // for a response nobody owns; leave the activity open for
                     // the next admitted request to continue.
                     self.current = None;
-                    return Ok(());
+                } else if self.barrier.is_some() {
+                    // Withheld until the earlier response settles, so output
+                    // after this End can only belong to this request.
+                    turn.end_held = true;
+                } else {
+                    self.commit().await?;
                 }
-                turn.ended_at = Some(Instant::now());
-                self.end_activity().await?;
             }
         }
         Ok(())
@@ -743,6 +846,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
             return Err(Error::UnexpectedResponse);
         }
         if let Some(update) = frame.resumption {
+            self.shared
+                .resumption_invalidated
+                .store(update.handle.is_none(), Ordering::Release);
             let mut point = self
                 .shared
                 .resumption
@@ -753,6 +859,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
                     *point = Some(ResumptionPoint {
                         handle,
                         current: true,
+                        advertised_session: self.session,
                     });
                 }
                 // The previous handle still resumes, but only up to its own point.
@@ -770,33 +877,33 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
             self.emit(Event::GoAway {
                 session: self.session,
                 time_left: notice.time_left,
-            })?;
+            });
         }
         if let Some(activity) = frame.voice_activity {
             self.emit(Event::VoiceActivity {
                 session: self.session,
                 kind: activity.kind,
                 audio_offset: activity.audio_offset,
-            })?;
+            });
         }
         if let Some(content) = frame.content {
             self.content(content).await?;
         }
         Ok(())
     }
-    fn discard(&mut self, reason: Discard) -> Result<()> {
+    fn discard(&mut self, reason: Discard) {
         self.emit(Event::Discarded {
             session: self.session,
             reason,
-        })
+        });
     }
     /// The service gives output transcripts no ordering relative to audio or
     /// completion. One that arrives before the current request has produced
     /// output cannot describe it, so it stays with the previous responder.
-    fn output_transcript(&mut self, transcript: wire::Transcript) -> Result<()> {
+    fn output_transcript(&mut self, transcript: wire::Transcript) {
         let owner = match &self.current {
             Some(turn)
-                if !turn.input.open
+                if turn.ended_at.is_some()
                     && (turn.first_output_at.is_some() || self.last_responder.is_none()) =>
             {
                 Some(turn.lineage)
@@ -818,7 +925,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
                 session: self.session,
                 text: transcript.text,
                 finished: transcript.finished,
-            })?;
+            });
         }
         let transcript = content.output_transcript.take();
         let payload = !content.audio.is_empty() || !content.text.is_empty();
@@ -826,58 +933,79 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
         if payload || terminal || content.generation_complete {
             // Apply any local retirement first so ownership below is current.
             self.retire_active().await?;
-            self.owned(content, payload).await?;
+            if self
+                .current
+                .as_ref()
+                .is_some_and(|turn| turn.ended_at.is_some())
+            {
+                self.response(content, payload);
+            } else {
+                self.earlier(content, payload).await?;
+            }
         }
         if let Some(transcript) = transcript {
-            self.output_transcript(transcript)?;
+            self.output_transcript(transcript);
         }
         Ok(())
     }
-    async fn owned(&mut self, content: wire::ServerContent, payload: bool) -> Result<()> {
-        let stale = if content.interrupted {
-            Discard::LateInterruption
-        } else if payload {
-            Discard::LateOutput
-        } else {
-            Discard::LateTerminal
-        };
-        let Some(turn) = self.current.as_mut() else {
-            return self.discard(if content.interrupted {
-                Discard::LateInterruption
-            } else {
-                Discard::UnownedOutput
-            });
-        };
-        let lineage = turn.lineage;
-        let now = Instant::now();
-        if turn.input.open {
-            // No activityEnd has been sent for this request, so the service
-            // cannot be answering it. Everything here belongs to the past.
-            if content.interrupted && !content.turn_complete {
-                self.stale_terminal = Some(now);
-            }
-            return self.discard(stale);
-        }
-        if turn.retired {
-            if payload {
-                turn.first_output_at.get_or_insert(now);
+    /// No request is committed, so the service cannot be answering one.
+    /// Everything here belongs to an earlier response.
+    async fn earlier(&mut self, content: wire::ServerContent, payload: bool) -> Result<()> {
+        let now = Clock::now();
+        let producing = payload || content.generation_complete;
+        let settled = content.turn_complete && content.idle;
+        let known = self.barrier.as_ref().and_then(|barrier| barrier.old);
+        if let Some(lineage) = known {
+            // A response this client retired. Its output is dropped here; its
+            // lifecycle is still reported under its own name.
+            if producing {
+                self.last_responder = Some(lineage);
             }
             if content.interrupted {
-                turn.saw_interrupt = true;
-                self.emit(Event::Interrupted { lineage })?;
+                self.emit(Event::Interrupted { lineage });
             }
             if content.turn_complete {
                 self.emit(Event::TurnComplete {
                     lineage,
                     idle: content.idle,
-                })?;
-                if content.idle {
-                    self.current = None;
-                    self.promote().await?;
-                }
+                });
             }
-            return Ok(());
+        } else {
+            if content.interrupted && !content.turn_complete {
+                self.stale_terminal = Some(now);
+            }
+            self.discard(if content.interrupted {
+                Discard::LateInterruption
+            } else if self.current.is_none() {
+                Discard::UnownedOutput
+            } else if producing {
+                Discard::LateOutput
+            } else {
+                Discard::LateTerminal
+            });
         }
+        if settled {
+            if self.barrier.take().is_some() {
+                self.release().await?;
+            }
+        } else if let Some(barrier) = self.barrier.as_mut() {
+            barrier.last_event_at = now;
+        } else if producing {
+            // A response is still producing after its barrier, or with none
+            // on record. Hold the next commit until it settles, exactly as
+            // for a response this client retired itself.
+            self.barrier = Some(Barrier::new(None));
+        }
+        Ok(())
+    }
+    /// The current request is committed and no earlier response is pending.
+    fn response(&mut self, content: wire::ServerContent, payload: bool) {
+        let barrier = self.timeouts.barrier;
+        let Some(turn) = self.current.as_mut() else {
+            return;
+        };
+        let lineage = turn.lineage;
+        let now = Clock::now();
         if content.interrupted {
             // This client has not asked to interrupt this request, and nothing
             // else can with provider activity detection disabled. The event is
@@ -896,7 +1024,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
         }
         let sequence = turn.audio_sequence;
         if !content.audio.is_empty() {
-            turn.audio_sequence = sequence.checked_add(1).ok_or(Error::UnexpectedResponse)?;
+            turn.audio_sequence = sequence.saturating_add(1);
             turn.output_samples = turn
                 .output_samples
                 .saturating_add(content.audio.len() as u64);
@@ -912,19 +1040,19 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
                 lineage,
                 sequence,
                 pcm: content.audio,
-            })?;
+            });
         }
         for text in content.text {
-            self.emit(Event::ModelText { lineage, text })?;
+            self.emit(Event::ModelText { lineage, text });
         }
         if content.generation_complete {
-            self.emit(Event::GenerationComplete { lineage })?;
+            self.emit(Event::GenerationComplete { lineage });
         }
         if content.turn_complete {
             let companion = self
                 .stale_terminal
                 .take()
-                .is_some_and(|at| at.elapsed() < self.timeouts.barrier);
+                .is_some_and(|at| at.elapsed() < barrier);
             if companion && !answered {
                 // Companion of the stray interruption dropped just before.
                 return self.discard(Discard::LateTerminal);
@@ -932,74 +1060,66 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
             self.emit(Event::TurnComplete {
                 lineage,
                 idle: content.idle,
-            })?;
+            });
             if content.idle {
                 self.current = None;
             } else if let Some(turn) = self.current.as_mut() {
                 turn.progress_at = Some(now);
             }
         }
-        Ok(())
     }
-    async fn promote(&mut self) -> Result<()> {
-        let Some(successor) = self.successor.take() else {
-            return Ok(());
-        };
-        let mut turn = Turn::new(
-            Lineage {
-                session: self.session,
-                request: successor.request,
-            },
-            successor.input,
-        );
-        if successor.request.get() <= self.retired_through() {
-            // Cancelled while it waited. Never commit it; an input that is
-            // still open stays only until its End arrives.
-            if turn.input.open {
-                turn.retired = true;
-                self.current = Some(turn);
-            }
-            return Ok(());
-        }
-        if !turn.input.open {
-            self.end_activity().await?;
-            turn.ended_at = Some(Instant::now());
-        }
-        self.current = Some(turn);
-        Ok(())
-    }
-    fn emit(&mut self, event: Event) -> Result<()> {
-        if self.outbox.len() >= OUTBOX_CAPACITY {
-            return Err(Error::Backpressure);
-        }
+    fn emit(&mut self, event: Event) {
+        self.outbox_bytes += cost(&event);
         self.outbox.push_back(event);
         self.flush();
-        Ok(())
+    }
+    /// Retired output still waiting here would only be skipped by the receiver
+    /// later. Drop it now so a cancelled long answer frees its buffer at once.
+    fn purge_retired(&mut self) {
+        let retired_through = self.retired_through();
+        if retired_through == self.purged_through {
+            return;
+        }
+        self.purged_through = retired_through;
+        self.outbox.retain(|event| match event {
+            Event::Audio { lineage, .. }
+            | Event::OutputTranscript { lineage, .. }
+            | Event::ModelText { lineage, .. } => lineage.request.get() > retired_through,
+            _ => true,
+        });
+        self.outbox_bytes = self.outbox.iter().map(cost).sum();
     }
     fn flush(&mut self) {
         let mut accepted = false;
         while let Some(event) = self.outbox.pop_front() {
+            let bytes = cost(&event);
             match self.events.try_send(event) {
-                Ok(()) => accepted = true,
+                Ok(()) => {
+                    accepted = true;
+                    self.outbox_bytes = self.outbox_bytes.saturating_sub(bytes);
+                }
                 Err(mpsc::error::TrySendError::Full(event)) => {
                     self.outbox.push_front(event);
                     break;
                 }
                 Err(mpsc::error::TrySendError::Closed(_)) => {
                     self.outbox.clear();
+                    self.outbox_bytes = 0;
                     break;
                 }
             }
         }
-        if !self.outbox.is_empty() {
-            // The delivery bound measures a consumer taking nothing at all,
-            // not one that is slow but still making progress.
-            if accepted || self.outbox_since.is_none() {
-                self.outbox_since = Some(Instant::now());
-            }
-        } else if self.outbox_since.take().is_some() {
+        // The delivery bound measures a consumer taking nothing at all, not
+        // one that is slower than the network, as real-time playback always is.
+        if self.outbox.is_empty() {
+            self.waiting_since = None;
+        } else if accepted || self.waiting_since.is_none() {
+            self.waiting_since = Some(Clock::now());
+        }
+        let gated = self.outbox_bytes >= self.output_buffer;
+        if self.gated && !gated {
             // Time spent not reading is this client's doing, not a stall.
-            let now = Instant::now();
+            let now = Clock::now();
             self.read_at = now;
             if let Some(progress) = self
                 .current
@@ -1009,6 +1129,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
                 *progress = now;
             }
         }
+        self.gated = gated;
     }
 }
 

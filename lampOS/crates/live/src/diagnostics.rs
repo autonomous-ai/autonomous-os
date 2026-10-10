@@ -1006,6 +1006,8 @@ fn discard_matches(discarded: Option<DiscardedRange>, epoch: u64, cursor: u64) -
 struct Hooks {
     #[cfg(test)]
     before_record: Option<Box<dyn FnMut() -> io::Result<()> + Send>>,
+    #[cfg(test)]
+    after_empty: Option<Box<dyn FnOnce() + Send>>,
 }
 impl Hooks {
     fn before_record(&mut self) -> io::Result<()> {
@@ -1014,6 +1016,12 @@ impl Hooks {
             return hook();
         }
         Ok(())
+    }
+    #[cfg(test)]
+    fn after_empty(&mut self) {
+        if let Some(hook) = self.after_empty.take() {
+            hook();
+        }
     }
 }
 fn write_record(storage: &mut Storage, envelope: &Envelope) -> io::Result<()> {
@@ -1083,32 +1091,51 @@ fn run_writer(
             shared.faults.fetch_or(DURATION_LIMIT, Ordering::Release);
             break;
         }
-        match consumer.pop() {
-            Ok(envelope) => {
-                let mut next = state.clone();
-                if let Err(fault) = next.accept(&envelope, config.max_seconds, config.stream) {
-                    shared.faults.fetch_or(fault, Ordering::Release);
-                    break;
-                }
-                if let Err(failure) = hooks
-                    .before_record()
-                    .and_then(|()| write_record(&mut storage, &envelope))
-                {
-                    let fault = if failure.to_string() == "diagnostic byte limit" {
-                        BYTE_LIMIT
-                    } else {
-                        WRITER_ERROR
-                    };
-                    shared.faults.fetch_or(fault, Ordering::Release);
-                    error = Some(short_error(&failure));
-                    break;
-                }
-                state = next;
-            }
-            Err(_) if shared.closed.load(Ordering::Acquire) || consumer.is_abandoned() => break,
-            Err(_) if shared.faults.load(Ordering::Acquire) != 0 => break,
-            Err(_) => thread::sleep(Duration::from_millis(1)),
+        let popped = consumer.pop();
+        #[cfg(test)]
+        if popped.is_err() {
+            hooks.after_empty();
         }
+        let envelope = match popped {
+            Ok(envelope) => envelope,
+            Err(_) => {
+                if shared.closed.load(Ordering::Acquire)
+                    || consumer.is_abandoned()
+                    || shared.faults.load(Ordering::Acquire) != 0
+                {
+                    // Closure or a terminal producer fault publishes earlier
+                    // accepted records. The first Empty may predate them, so
+                    // only a fresh Empty after the terminal observation is EOF.
+                    // rtrb 0.4 synchronizes producer drop with is_abandoned().
+                    match consumer.pop() {
+                        Ok(envelope) => envelope,
+                        Err(_) => break,
+                    }
+                } else {
+                    thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
+            }
+        };
+        let mut next = state.clone();
+        if let Err(fault) = next.accept(&envelope, config.max_seconds, config.stream) {
+            shared.faults.fetch_or(fault, Ordering::Release);
+            break;
+        }
+        if let Err(failure) = hooks
+            .before_record()
+            .and_then(|()| write_record(&mut storage, &envelope))
+        {
+            let fault = if failure.to_string() == "diagnostic byte limit" {
+                BYTE_LIMIT
+            } else {
+                WRITER_ERROR
+            };
+            shared.faults.fetch_or(fault, Ordering::Release);
+            error = Some(short_error(&failure));
+            break;
+        }
+        state = next;
     }
     if state.end.is_some_and(|end| end.reason == EndReason::Fault) {
         shared.faults.fetch_or(AUDIO_FAULT, Ordering::Release);
@@ -1278,6 +1305,155 @@ mod tests {
         }
     }
 
+    fn recorder_paused_after_empty(temp: &Private) -> (Recorder, Gate) {
+        let latch = Arc::new((Mutex::new(false), Condvar::new()));
+        let gate = Gate(latch.clone());
+        let (tx, rx) = mpsc::sync_channel(1);
+        let hooks = Hooks {
+            after_empty: Some(Box::new(move || {
+                tx.try_send(()).unwrap();
+                let mut ready = latch.0.lock().unwrap();
+                while !*ready {
+                    ready = latch.1.wait(ready).unwrap();
+                }
+            })),
+            ..Hooks::default()
+        };
+        let recorder = Recorder::start_inner(temp.config(), hooks).unwrap();
+        rx.recv_timeout(DEFAULT_FINISH_WAIT).unwrap();
+        (recorder, gate)
+    }
+
+    fn shutdown_after_empty(reason: EndReason, publish_closed: bool) -> (Private, Acknowledgement) {
+        let temp = Private::new();
+        let (mut recorder, gate) = recorder_paused_after_empty(&temp);
+        let at = recorder.started_at_us;
+        assert_eq!(recorder.submit(open(at)), SubmitResult::Queued);
+        assert_eq!(recorder.submit(capture(at, 1)), SubmitResult::Queued);
+        assert_eq!(
+            recorder.submit(Record::End(EndMeta { at_us: at, reason })),
+            SubmitResult::Queued
+        );
+        // Publish the same End/drop/closed sequence as finish(), but release
+        // the empty-pop latch only after closure. No scheduler timing decides
+        // whether the final three records were queued before EOF is examined.
+        recorder.shutdown_requested = true;
+        if publish_closed {
+            recorder.close_producer();
+        } else {
+            // Also cover the interval inside close_producer() after rtrb's
+            // producer-drop publication but before Shared::closed is stored.
+            drop(recorder.producer.take());
+        }
+        drop(gate);
+        let ack = recorder
+            .acknowledgement
+            .recv_timeout(DEFAULT_FINISH_WAIT)
+            .unwrap();
+        assert_eq!(
+            recorder.shared.closed.load(Ordering::Acquire),
+            publish_closed
+        );
+        (temp, ack)
+    }
+
+    fn assert_shutdown_records_retained(reason: EndReason, publish_closed: bool) {
+        let (temp, ack) = shutdown_after_empty(reason, publish_closed);
+        assert_eq!(ack.summary.records_queued, 3);
+        assert_eq!(ack.summary.capture_frames, 160, "{:?}", ack.summary);
+        assert_eq!(ack.summary.records_written, 3);
+        assert_eq!(ack.summary.records_rejected, 0);
+        assert_eq!(ack.summary.end.unwrap().reason, reason);
+        assert_eq!(
+            fs::metadata(temp.0.join("audio/pre_aec.pcm16le"))
+                .unwrap()
+                .len(),
+            320
+        );
+        assert_eq!(
+            fs::metadata(temp.0.join("audio/post_aec.pcm16le"))
+                .unwrap()
+                .len(),
+            320
+        );
+        let complete = reason == EndReason::Completed;
+        assert_eq!(ack.summary.valid, complete);
+        assert_eq!(ack.marker_published, complete);
+        assert_eq!(temp.0.join("audio/complete.json").exists(), complete);
+        assert_eq!(ack.summary.faults, if complete { 0 } else { AUDIO_FAULT });
+    }
+
+    #[test]
+    fn completed_close_after_empty_retains_queued_pcm_and_end() {
+        assert_shutdown_records_retained(EndReason::Completed, true);
+    }
+
+    #[test]
+    fn fault_close_after_empty_retains_queued_pcm_and_end_without_marker() {
+        assert_shutdown_records_retained(EndReason::Fault, true);
+    }
+
+    #[test]
+    fn completed_producer_drop_after_empty_retains_queued_pcm_and_end() {
+        assert_shutdown_records_retained(EndReason::Completed, false);
+    }
+
+    #[test]
+    fn fault_producer_drop_after_empty_retains_queued_pcm_and_end_without_marker() {
+        assert_shutdown_records_retained(EndReason::Fault, false);
+    }
+
+    #[test]
+    fn producer_fault_after_empty_retains_accepted_prefix_without_marker() {
+        let temp = Private::new();
+        let (mut recorder, gate) = recorder_paused_after_empty(&temp);
+        let at = recorder.started_at_us;
+        assert_eq!(recorder.submit(open(at)), SubmitResult::Queued);
+        assert_eq!(recorder.submit(capture(at, 1)), SubmitResult::Queued);
+        // A real producer rejection latches a fault while its handle remains
+        // open. All later submissions are disabled, including an End record.
+        assert_eq!(
+            recorder.submit(capture(at.checked_sub(1).unwrap(), 2)),
+            SubmitResult::InvalidRecord
+        );
+        assert_eq!(
+            recorder.submit(Record::End(EndMeta {
+                at_us: at,
+                reason: EndReason::Fault,
+            })),
+            SubmitResult::Disabled
+        );
+        assert_eq!(recorder.faults(), INVALID_RECORD);
+        drop(gate);
+        let ack = recorder
+            .acknowledgement
+            .recv_timeout(DEFAULT_FINISH_WAIT)
+            .unwrap();
+        assert!(recorder.producer.is_some());
+        assert!(!recorder.shared.closed.load(Ordering::Acquire));
+        assert_eq!(ack.summary.records_queued, 2);
+        assert_eq!(ack.summary.capture_frames, 160, "{:?}", ack.summary);
+        assert_eq!(ack.summary.records_written, 2);
+        assert_eq!(ack.summary.records_rejected, 2);
+        assert!(ack.summary.end.is_none());
+        assert_eq!(ack.summary.faults, INVALID_RECORD | ABANDONED);
+        assert!(!ack.summary.valid);
+        assert!(!ack.marker_published);
+        assert!(!temp.0.join("audio/complete.json").exists());
+        assert_eq!(
+            fs::metadata(temp.0.join("audio/pre_aec.pcm16le"))
+                .unwrap()
+                .len(),
+            320
+        );
+        assert_eq!(
+            fs::metadata(temp.0.join("audio/post_aec.pcm16le"))
+                .unwrap()
+                .len(),
+            320
+        );
+    }
+
     #[test]
     fn stalled_writer_queue_overflow_and_finish_timeout_never_wait_for_join() {
         let temp = Private::new();
@@ -1297,6 +1473,7 @@ mod tests {
                 }
                 Ok(())
             })),
+            ..Hooks::default()
         };
         let mut recorder = Recorder::start_inner(temp.config(), hooks).unwrap();
         let at = recorder.started_at_us;
@@ -1329,6 +1506,7 @@ mod tests {
             before_record: Some(Box::new(|| {
                 Err(io::Error::other("injected writer failure"))
             })),
+            ..Hooks::default()
         };
         let mut recorder = Recorder::start_inner(temp.config(), hooks).unwrap();
         let at = recorder.started_at_us;

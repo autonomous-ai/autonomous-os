@@ -527,11 +527,14 @@ fn a_transport_that_closes_mid_trace_invalidates_the_attempt() {
     );
     let assets = AssetIndex::load(&dir.join("cache"), &[manifest], &catalog).unwrap();
     let mut cfg = config(&dir, "quick-chat", fixture());
-    // Relays a session start and the first trace record, then disconnects.
+    // Consume the complete startup ping before injecting the partial trace.
+    // Otherwise the shell can exit before begin() writes it, testing startup
+    // BrokenPipe instead of the intended mid-trace transport failure.
     cfg.lamp_command = vec![
         "/bin/sh".into(),
         "-c".into(),
-        r#"printf '%s\n' '{"type":"session_start","schema":1,"lamp_us":1,"mode":"fixture","cue_socket":true,"runtime_argv":[]}' '{"type":"trace","record":{"kind":"run_start","at_us":2,"provider_kind":"one_cached_reply"}}'"#.into(),
+        r#"IFS= read -r initial_ping || exit 1
+printf '%s\n' '{"type":"session_start","schema":1,"lamp_us":1,"mode":"fixture","cue_socket":true,"runtime_argv":[]}' '{"type":"trace","record":{"kind":"run_start","at_us":2,"provider_kind":"one_cached_reply"}}'"#.into(),
         "sh".into(),
     ];
     let mut backend = PhysicalBackend::new(

@@ -650,7 +650,10 @@ impl StartupEvents {
         for _ in 0..16 {
             match role {
                 "provider" => match channels.data.receive::<ProviderOutput>()? {
-                    Some(ProviderOutput::Ready { setup_us }) if !self.provider_ready => {
+                    // A provider can recover while later children are still
+                    // starting. Count its repeated Ready against the original
+                    // capacity sequence; it does not admit input by itself.
+                    Some(ProviderOutput::Ready { setup_us }) => {
                         self.output_flow.received()?;
                         self.provider_ready = true;
                         self.push(json!({"kind":"provider_ready","at_us":monotonic_us(),"setup_us":setup_us}))?;
@@ -2216,7 +2219,20 @@ mod tests {
         assert_eq!(startup.events[0]["setup_us"], 1234);
         provider
             .data
-            .send(ProviderOutput::Ready { setup_us: 1234 })
+            .send(ProviderOutput::Ready { setup_us: 2345 })
+            .unwrap();
+        startup.poll(&mut parent, "provider").unwrap();
+        assert!(startup.provider_ready);
+        assert_eq!(startup.events.len(), 2);
+        assert_eq!(startup.events[1]["setup_us"], 2345);
+        // Recovery during later-child startup is legitimate. Output for an
+        // unaccepted request remains an error, even after a second Ready.
+        provider
+            .data
+            .send(ProviderOutput::TurnComplete {
+                request: 1,
+                idle: true,
+            })
             .unwrap();
         assert!(startup.poll(&mut parent, "provider").is_err());
     }

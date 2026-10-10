@@ -75,7 +75,7 @@ fn configuration_rejects_insecure_or_credential_bearing_endpoints_and_redacts_de
             ..Timeouts::default()
         },
         Timeouts {
-            deliver: Duration::from_secs(11),
+            deliver: Duration::from_secs(121),
             ..Timeouts::default()
         },
     ] {
@@ -86,6 +86,23 @@ fn configuration_rejects_insecure_or_credential_bearing_endpoints_and_redacts_de
                 .is_err()
         );
     }
+    // The default delivery bound outlasts the longest message at speaking
+    // speed, and the output buffer has a floor and a ceiling.
+    assert!(Timeouts::default().deliver > Duration::from_secs(2));
+    for seconds in [0, 601] {
+        assert!(
+            SessionConfig::google(Credential::api_key("key").unwrap())
+                .unwrap()
+                .output_buffer_seconds(seconds)
+                .is_err()
+        );
+    }
+    assert!(
+        SessionConfig::google(Credential::api_key("key").unwrap())
+            .unwrap()
+            .output_buffer_seconds(600)
+            .is_ok()
+    );
 }
 
 #[test]

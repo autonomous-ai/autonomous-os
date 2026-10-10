@@ -5,7 +5,7 @@ one person at a desk.
 
 **Status: V2 has completed finite real-Lamp voice pilots and a physical
 cancellation-clock regression. False interruptions from playback remain
-unresolved. The latest terminal shutdown fix passed 518 native ARM64 tests,
+unresolved. The earlier terminal shutdown checkpoint passed 518 native ARM64 tests,
 strict Clippy, formatting and release build; its physical rerun is pending.
 There is no validated V1-main/V2 p50, p95 or speedup. The installed legacy
 runtime remains the rollback; full choreography, sensors and social
@@ -14,6 +14,9 @@ interaction qualification remain.**
 Read the [Claude Code handoff](HANDOFF.md) for the exact source, device,
 evidence, reusable test assets and unfinished work. Work resumed after the
 export; Lamp-4ace is currently unreachable, so physical validation is on hold.
+Later provider and diagnostic fixes have separate
+[host and emulated ARM64 qualification](docs/provider-recovery-integration.md);
+those checks do not replace a physical rerun.
 
 See [benchmark progress](docs/benchmark-progress.md) for the retained trials and current blockers.
 
@@ -42,7 +45,8 @@ implementation remains available for validation rollback until V2 qualifies.
 
 Use the pinned Rust toolchain in `rust-toolchain.toml`. Linux audio builds also
 need ALSA development headers and pkg-config. macOS runs the portable core and
-fixture tooling; Linux hardware modules are compiled and tested on Lamp.
+fixture tooling. Linux hardware modules require separate Linux/ARM64 checks
+and real-Lamp qualification; a passing Mac suite does not exercise those paths.
 
 ```sh
 cargo test --workspace --locked

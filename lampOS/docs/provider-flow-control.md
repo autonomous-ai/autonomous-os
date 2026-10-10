@@ -109,18 +109,21 @@ credits; it now speaks the new protocol. A subsequent run exposed the
 [private-socket startup race](worker-startup.md), fixed separately without
 weakening endpoint permissions. Both failed runs are retained in the evidence.
 
-**Upstream playback-paced delivery remains unqualified.** Agent 1's current
-Gemini actor has a two-second no-consumption watchdog. One maximum 48,000-sample
-event becomes 50 packets. At real playback speed, draining the wrapper from 433
-packets to below its 384-packet high watermark takes two seconds, with no margin
-for scheduling. Its prior 80-second burst test consumes IPC immediately and
-does not cover this boundary. The new credits expose real downstream pressure;
-they do not prove the upstream watchdog tolerates it. Agent 1 owns a real-time
-60–180-second consumer regression and the resulting fix. Do not call sustained
-long-answer delivery qualified until that integrated test passes.
+The earlier `fbf9ecc3c` actor had a two-second no-consumption watchdog. One
+maximum 48,000-sample event becomes 50 packets; at playback speed, draining
+the wrapper from 433 packets below its 384-packet high watermark already takes
+two seconds. The later [provider integration](provider-recovery-integration.md)
+replaces that bound with 30 seconds and incorporates real-time playback-paced
+60–180-second regressions with deliberate holds. The separate transport buffer
+holds at most 300 seconds of audio before socket reads pause. These tests use
+the actual worker and capacity receiver with modeled coordinator playback;
+they do not exercise the full coordinator, hardware speaker or room audio.
 
-Linux/ARM64 compilation, cloud behavior, room-audio latency, genuine overlapping
-human speech, and natural desk interaction remain unverified for this source.
+The original `670a905d` qualification did not include Linux/ARM64 compilation.
+The later [combined integration](provider-recovery-integration.md) records its
+own ARM build and emulation gates. Cloud behavior, room-audio latency, genuine
+overlapping human speech and natural desk interaction remain unverified by
+these software gates.
 The owner has deferred physical work until Lamp access is restored.
 
 A subsequent integration of Agent 2 through `3eaa0365a` is recorded in

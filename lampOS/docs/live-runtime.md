@@ -169,10 +169,11 @@ permanently retires superseded request IDs, closes an actually submitted open
 input once, and ignores subsequently delivered commands for that retired input.
 Unknown/future requests still fail. The Gemini transport sends a new request's
 audio at once and holds only its activityEnd until the old response's idle
-barrier. It fails explicitly if that barrier does not arrive and never relabels
-old server audio. Late interruption, completion or output from an earlier
-request is dropped and cannot cancel, complete or supply a newer one. See
-[Gemini session reliability](gemini-session-reliability.md).
+barrier. If the service neither confirms nor produces anything for 2 s, the
+production worker fails the barrier. The explicit transport assumption policy
+remains unqualified and is not enabled by the worker. Late interruption, completion or
+output from an earlier request is dropped and cannot cancel, complete or supply
+a newer one. See [Gemini session reliability](gemini-session-reliability.md).
 
 Authority-before-Start send order does not impose receive order across the two
 Unix sockets. The Gemini intake rereads priority control after receiving each
@@ -227,11 +228,15 @@ measurement; portable socket tests do not establish a kernel or acoustic deadlin
 
 This slice records failures but does not yet guarantee an audible failure
 message when the provider or speaker fails. That remains required release work.
-The provider worker reconnects only while no request is in flight, or after an
-answer's generation completed and was delivered. It reports that as a repeated
-`provider_ready` and one line on standard error. Any other provider loss still
-fails the trial, naming the request and the stage it had reached. Input is never
-replayed and no answer is requested twice, so no retry hides a failed trial. See
+The provider worker can begin replacing a failed connection while delivering
+received output. An answer whose generation completed before the disconnect
+can finish delivery. Recovery is reported as a repeated `provider_ready` and
+one line on standard error. A request whose answer had not finished generating
+when the connection failed still fails the trial, naming the request and its
+stage; legacy reporting does not promise to drain that failed answer before
+exit. Input is never replayed and no answer is requested twice, so no retry
+hides a failed trial. Typed per-turn failure events are implemented but not
+enabled. See
 [Gemini session reliability](gemini-session-reliability.md).
 
 A queued speaker-permission failure now retains one bounded discard receipt
@@ -331,8 +336,11 @@ failed trials. Trace storage is bounded at 20,000 events. Runtime output audio
 is bounded at 30 seconds of queued 24 kHz PCM through
 [provider output credits](provider-flow-control.md). This is a backlog limit,
 not an answer-duration limit. Input handoff stays at 64 commands, and provider
-transport/IPC queues have separate limits. Sustained playback-paced upstream
-delivery still needs qualification against Gemini's delivery watchdog. A trace failure cannot become a valid
+transport/IPC queues have separate limits. The Gemini provider passes scripted
+real-time 60 s and 180 s answers against this contract on the host
+([Gemini session reliability](gemini-session-reliability.md)); the coordinator
+and that provider have not yet been run together at speaking speed, and nothing
+here is cloud or device evidence. A trace failure cannot become a valid
 benchmark. A complete report with `completed_unscored` still needs a valid room
 recording, acoustic annotation and correctness review.
 
