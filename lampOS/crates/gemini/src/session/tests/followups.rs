@@ -433,3 +433,46 @@ async fn input_of_a_superseded_request_that_has_not_reached_the_wire_is_dropped_
     }
     answered(&mut connection, &mut server, 2).await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn earlier_response_that_never_stops_cannot_hold_the_next_request_forever() {
+    for policy_choice in [BarrierPolicy::Require, BarrierPolicy::AssumeAfterQuiet] {
+        let (mut connection, mut server) = mock_with(policy(policy_choice)).await;
+        endpointed(&mut connection, &mut server).await;
+        let resumed_at = Clock::now();
+        resumed(&mut connection, &mut server).await;
+        // Asked to stop, the service keeps producing the first answer: never
+        // silent for the barrier bound, never settled.
+        let streaming = async {
+            loop {
+                if server
+                    .send(Message::text(audio(11).to_string()))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                sleep(Duration::from_millis(500)).await;
+            }
+        };
+        let failed = async {
+            let mut state = connection.subscribe_state();
+            let failed = state.wait_for(|state| matches!(state, State::Disconnected(_)));
+            *timeout(Duration::from_secs(120), failed)
+                .await
+                .unwrap()
+                .unwrap()
+        };
+        tokio::select! {
+            _ = streaming => panic!("the connection closed before it was declared failed"),
+            state = failed => assert_eq!(state, State::Disconnected(Error::BarrierTimeout)),
+        }
+        // Bounded by the same limit as a response that never starts.
+        let waited = resumed_at.elapsed();
+        let bound = Timeouts::default().response;
+        assert!(
+            waited >= bound && waited < bound + Duration::from_secs(1),
+            "{waited:?}"
+        );
+    }
+}

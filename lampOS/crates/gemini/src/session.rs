@@ -439,8 +439,20 @@ impl Turn {
 struct Barrier {
     /// Unknown when stray output arrives with no response on record.
     old: Option<Lineage>,
-    /// Interruption request, then the latest event of the earlier response.
+    /// When the earlier response was asked to stop, or first seen.
+    since: Clock,
+    /// That moment, then the latest event of the earlier response.
     last_event_at: Clock,
+}
+impl Barrier {
+    fn new(old: Option<Lineage>) -> Self {
+        let now = Clock::now();
+        Self {
+            old,
+            since: now,
+            last_event_at: now,
+        }
+    }
 }
 struct Actor<S> {
     socket: WebSocketStream<S>,
@@ -681,10 +693,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
             // Committed: its response becomes the earlier stream that must
             // settle. Explicit activityStart is the only interruption request
             // available with provider activity detection disabled.
-            self.barrier = Some(Barrier {
-                old: Some(turn.lineage),
-                last_event_at: Clock::now(),
-            });
+            self.barrier = Some(Barrier::new(Some(turn.lineage)));
             self.current = None;
             return self.start_activity().await;
         }
@@ -702,6 +711,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
         let Some(barrier) = self.barrier.as_ref() else {
             return Ok(());
         };
+        if barrier.since.elapsed() >= self.timeouts.response {
+            // Still producing this long after being asked to stop. Waiting on
+            // is not an option under either policy: the next request would
+            // never be committed.
+            return Err(Error::BarrierTimeout);
+        }
         if barrier.last_event_at.elapsed() < self.timeouts.barrier {
             return Ok(());
         }
@@ -957,10 +972,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
             // A response is still producing after its barrier, or with none
             // on record. Hold the next commit until it settles, exactly as
             // for a response this client retired itself.
-            self.barrier = Some(Barrier {
-                old: None,
-                last_event_at: now,
-            });
+            self.barrier = Some(Barrier::new(None));
         }
         Ok(())
     }
