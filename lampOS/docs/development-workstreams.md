@@ -1,5 +1,11 @@
 # Voice development coordination
 
+The latest owner instruction broadens the next work allocation to finish the
+Rust implementation before returning to physical testing. Follow the
+[three-agent completion plan](rust-completion-plan.md) for current file ownership,
+deliverables and integration gates. It supersedes the earlier 24-hour allocation
+below; the delivered history and outstanding findings remain useful evidence.
+
 The owner has prioritized complete voice interaction and requested two external
 Claude Code sessions alongside Codex. This is an ownership plan, not proof of
 the other sessions' implementation or test status. Use `lamp-v2-chat` as the
