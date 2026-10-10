@@ -169,10 +169,11 @@ permanently retires superseded request IDs, closes an actually submitted open
 input once, and ignores subsequently delivered commands for that retired input.
 Unknown/future requests still fail. The Gemini transport sends a new request's
 audio at once and holds only its activityEnd until the old response's idle
-barrier. It fails explicitly if that barrier does not arrive and never relabels
-old server audio. Late interruption, completion or output from an earlier
-request is dropped and cannot cancel, complete or supply a newer one. See
-[Gemini session reliability](gemini-session-reliability.md).
+barrier. If the service neither confirms nor produces anything for 2 s, the
+provider worker treats the old response as over and reports that assumption;
+the answer's ownership is then unqualified. Late interruption, completion or
+output from an earlier request is dropped and cannot cancel, complete or supply
+a newer one. See [Gemini session reliability](gemini-session-reliability.md).
 
 Authority-before-Start send order does not impose receive order across the two
 Unix sockets. The Gemini intake rereads priority control after receiving each
@@ -227,11 +228,13 @@ measurement; portable socket tests do not establish a kernel or acoustic deadlin
 
 This slice records failures but does not yet guarantee an audible failure
 message when the provider or speaker fails. That remains required release work.
-The provider worker reconnects only while no request is in flight, or after an
-answer's generation completed and was delivered. It reports that as a repeated
-`provider_ready` and one line on standard error. Any other provider loss still
-fails the trial, naming the request and the stage it had reached. Input is never
-replayed and no answer is requested twice, so no retry hides a failed trial. See
+The provider worker replaces a failed connection at once while output it had
+already received keeps playing. It reports the recovery as a repeated
+`provider_ready` and one line on standard error. A request whose answer had not
+finished generating when the connection failed still fails the trial, naming
+the request and the stage it had reached. Input is never replayed and no answer
+is requested twice, so no retry hides a failed trial. Typed per-turn failure
+events are implemented but not enabled. See
 [Gemini session reliability](gemini-session-reliability.md).
 
 A queued speaker-permission failure now retains one bounded discard receipt
