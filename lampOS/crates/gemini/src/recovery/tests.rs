@@ -1,7 +1,9 @@
 use super::*;
+
+mod soak;
 use crate::{
     Credential, GOOGLE_ENDPOINT, Resumption, Timeouts,
-    testing::{Dial, FakeConnector, audio, connector, next_dial},
+    testing::{Dial, FakeConnector, audio, connector, dial_within, next_dial},
 };
 use serde_json::{Value, json};
 use tokio::{sync::mpsc::UnboundedReceiver, time::timeout};
@@ -32,17 +34,29 @@ fn handle(value: &str) -> Value {
 }
 type Rig = (Supervisor<FakeConnector>, UnboundedReceiver<Dial>);
 
+/// The next notice other than the outage announcement, which has its own
+/// tests: when it arrives relative to buffered output depends on scheduling.
 async fn notice(supervisor: &mut Supervisor<FakeConnector>) -> Notice {
+    loop {
+        match raw(supervisor).await.expect("no failure") {
+            Notice::Unavailable { .. } => {}
+            other => return other,
+        }
+    }
+}
+async fn raw(supervisor: &mut Supervisor<FakeConnector>) -> std::result::Result<Notice, Failure> {
     timeout(WAIT, supervisor.next())
         .await
         .expect("notice in time")
-        .expect("no failure")
 }
 async fn failure(supervisor: &mut Supervisor<FakeConnector>) -> Failure {
-    timeout(WAIT, supervisor.next())
-        .await
-        .expect("failure in time")
-        .expect_err("a terminal failure")
+    loop {
+        match raw(supervisor).await {
+            Ok(Notice::Unavailable { .. }) => {}
+            Ok(other) => panic!("expected a terminal failure, got {other:?}"),
+            Err(failure) => return failure,
+        }
+    }
 }
 /// Drive the supervisor until the scripted service has accepted its next dial.
 async fn ready(rig: &mut Rig) -> (Notice, Dial, Value) {
@@ -86,7 +100,7 @@ async fn speak(rig: &mut Rig, dial: &mut Dial, id: u64, end: bool) {
         Notice::Event(Event::InputStarted { lineage, .. }) if lineage.request.get() == id
     ));
     supervisor
-        .try_audio(request(id), 0, Instant::now(), &[1; 160])
+        .try_audio(request(id), 0, std::time::Instant::now(), &[1; 160])
         .unwrap();
     assert!(
         dial.service.receive().await["realtimeInput"]
@@ -331,6 +345,13 @@ async fn stalled_response_is_a_bounded_reported_loss_then_recovery() {
 async fn input_is_refused_not_buffered_while_disconnected_and_control_is_never_blocked() {
     let (mut rig, mut dial) = connected(quick(), config()).await;
     dial.service.close(1008, "idle").await;
+    // The outage is announced at once, with its fixed category.
+    assert!(matches!(
+        raw(&mut rig.0).await,
+        Ok(Notice::Unavailable {
+            error: Error::PeerClosed { code: Some(1008) }
+        })
+    ));
     // The reconnect is in flight and unanswered. Polling returns control to
     // the caller every time; nothing here waits on the network.
     for _ in 0..3 {
@@ -342,7 +363,8 @@ async fn input_is_refused_not_buffered_while_disconnected_and_control_is_never_b
         assert!(!rig.0.is_connected());
         assert_eq!(rig.0.try_start(request(1)), Err(Error::NotConnected));
         assert_eq!(
-            rig.0.try_audio(request(1), 0, Instant::now(), &[0; 160]),
+            rig.0
+                .try_audio(request(1), 0, std::time::Instant::now(), &[0; 160]),
             Err(Error::NotConnected)
         );
         assert_eq!(rig.0.try_end(request(1)), Err(Error::NotConnected));
@@ -504,8 +526,16 @@ async fn refused_handle_falls_back_to_a_fresh_session_only_when_policy_allows() 
             let setup = fresh.service.accept().await;
             Some((fresh, setup, refused))
         };
-        let (outcome, served) = tokio::join!(timeout(WAIT, supervisor.next()), serve);
-        match (outcome.unwrap(), served) {
+        let settle = async {
+            loop {
+                match raw(supervisor).await {
+                    Ok(Notice::Unavailable { .. }) => {}
+                    other => return other,
+                }
+            }
+        };
+        let (outcome, served) = tokio::join!(settle, serve);
+        match (outcome, served) {
             (Err(ended), None) => {
                 assert_eq!(ended.error, Error::ServerRejected);
                 assert_eq!(ended.reason, FailureReason::NotRecoverable);
@@ -572,4 +602,317 @@ async fn first_connection_is_never_retried_and_shutdown_is_terminal() {
         )
         .is_err()
     );
+}
+
+// ---- A failed connection that still holds an answer ----------------------
+
+const RATE: u64 = crate::OUTPUT_RATE as u64;
+const LARGEST: usize = crate::MAX_OUTPUT_SAMPLES;
+
+/// Take audio at 24,000 samples per second until `stop` returns true for a
+/// notice, collecting every non-audio notice and the samples played.
+async fn play_until(
+    rig: &mut Rig,
+    mut stop: impl FnMut(&Notice) -> bool,
+) -> (u64, Vec<&'static str>) {
+    let mut samples = 0u64;
+    let mut order = Vec::new();
+    loop {
+        let notice = timeout(Duration::from_secs(900), rig.0.next())
+            .await
+            .expect("a notice")
+            .expect("no terminal failure");
+        let done = stop(&notice);
+        match notice {
+            Notice::Event(Event::Audio { pcm, .. }) => {
+                samples += pcm.len() as u64;
+                tokio::time::sleep(Duration::from_micros(pcm.len() as u64 * 1_000_000 / RATE))
+                    .await;
+            }
+            Notice::Event(Event::GenerationComplete { .. }) => order.push("generated"),
+            Notice::Event(Event::TurnComplete { .. }) => order.push("complete"),
+            Notice::Event(_) => {}
+            Notice::Unavailable { .. } => order.push("unavailable"),
+            Notice::Ready { .. } => order.push("ready"),
+            Notice::Settled { .. } => order.push("settled"),
+            Notice::TurnLost { .. } => order.push("lost"),
+        }
+        if done {
+            return (samples, order);
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn buffered_answer_plays_out_after_its_connection_dies_while_a_replacement_is_made() {
+    let (mut rig, mut dial) = connected(quick(), config()).await;
+    speak(&mut rig, &mut dial, 1, true).await;
+    // A minute of speech generated in one burst, then the connection dies:
+    // the service's lifetime limit, a network change, an idle proxy.
+    for _ in 0..30 {
+        dial.service.send(audio(7, LARGEST)).await;
+    }
+    dial.service
+        .send(json!({"serverContent":{"generationComplete":true}}))
+        .await;
+    dial.service.close(1011, "internal").await;
+    let died = Instant::now();
+    // The replacement is dialed and accepted while the answer is still playing.
+    let (supervisor, dials) = (&mut rig.0, &mut rig.1);
+    let replace = async {
+        let mut redial = dial_within(dials, Duration::from_secs(30)).await;
+        redial.service.accept().await;
+        (redial, died.elapsed())
+    };
+    let play = async {
+        let mut samples = 0u64;
+        let mut order = Vec::new();
+        loop {
+            match timeout(Duration::from_secs(900), supervisor.next())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                Notice::Event(Event::Audio { pcm, .. }) => {
+                    assert!(pcm.iter().all(|sample| *sample == 7));
+                    samples += pcm.len() as u64;
+                    tokio::time::sleep(Duration::from_micros(pcm.len() as u64 * 1_000_000 / RATE))
+                        .await;
+                }
+                Notice::Event(Event::GenerationComplete { .. }) => {
+                    order.push(("generated", died.elapsed()))
+                }
+                Notice::Unavailable { error } => {
+                    assert_eq!(error, Error::PeerClosed { code: Some(1011) });
+                    order.push(("unavailable", died.elapsed()));
+                }
+                Notice::Ready { context, after, .. } => {
+                    assert_eq!(context, Context::Resumed);
+                    assert!(after.is_some());
+                    order.push(("ready", died.elapsed()));
+                }
+                Notice::Settled { lineage, .. } => {
+                    assert_eq!(lineage.request.get(), 1);
+                    order.push(("settled", died.elapsed()));
+                    return (samples, order);
+                }
+                other => panic!("unexpected notice: {other:?}"),
+            }
+        }
+    };
+    let ((samples, order), (_redial, replaced_in)) = tokio::join!(play, replace);
+    // The whole answer, at speaking speed, from a connection that was gone.
+    assert_eq!(samples, 60 * RATE);
+    let at = |name: &str| order.iter().find(|(kind, _)| *kind == name).unwrap().1;
+    // Without upkeep the failure is noticed when the caller next asks: here
+    // once per two-second message. The replacement follows at once.
+    assert!(at("unavailable") <= Duration::from_secs(4), "{order:?}");
+    assert!(at("ready") <= Duration::from_secs(6), "{order:?}");
+    assert!(replaced_in <= Duration::from_secs(6));
+    assert!(at("settled") >= Duration::from_secs(59), "{order:?}");
+    assert!(at("generated") <= at("settled"));
+    assert!(rig.0.is_connected());
+}
+
+#[tokio::test(start_paused = true)]
+async fn follow_up_during_a_dead_connections_answer_is_served_by_the_replacement() {
+    let (mut rig, mut dial) = connected(quick(), config()).await;
+    speak(&mut rig, &mut dial, 1, true).await;
+    for _ in 0..30 {
+        dial.service.send(audio(7, LARGEST)).await;
+    }
+    dial.service
+        .send(json!({"serverContent":{"generationComplete":true}}))
+        .await;
+    dial.service.close(1011, "internal").await;
+    let (supervisor, dials) = (&mut rig.0, &mut rig.1);
+    let replace = async {
+        let mut redial = dial_within(dials, Duration::from_secs(30)).await;
+        redial.service.accept().await;
+        redial
+    };
+    // Ten seconds of the old answer are heard before the person speaks again.
+    let listen = async {
+        let mut samples = 0u64;
+        let mut ready = false;
+        while samples < 10 * RATE || !ready {
+            match timeout(Duration::from_secs(900), supervisor.next())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                Notice::Event(Event::Audio { pcm, .. }) => {
+                    samples += pcm.len() as u64;
+                    tokio::time::sleep(Duration::from_micros(pcm.len() as u64 * 1_000_000 / RATE))
+                        .await;
+                }
+                Notice::Ready { .. } => ready = true,
+                _ => {}
+            }
+        }
+        samples
+    };
+    let (heard, mut redial) = tokio::join!(listen, replace);
+    assert!(heard < 14 * RATE);
+    // The follow-up goes to the live connection. The dead one's remaining
+    // fifty seconds are cancelled with the request they belonged to.
+    rig.0.retire(request(1));
+    rig.0.try_start(request(2)).unwrap();
+    rig.0
+        .try_audio(request(2), 0, std::time::Instant::now(), &[2; 160])
+        .unwrap();
+    rig.0.try_end(request(2)).unwrap();
+    for field in ["activityStart", "audio", "activityEnd"] {
+        assert!(
+            redial.service.receive().await["realtimeInput"]
+                .get(field)
+                .is_some()
+        );
+    }
+    redial.service.send(audio(9, 240)).await;
+    redial.service.send(idle()).await;
+    let asked = Instant::now();
+    let (_, order) = play_until(&mut rig, |notice| {
+        matches!(notice, Notice::Event(Event::TurnComplete { lineage, .. }) if lineage.request.get() == 2)
+    })
+    .await;
+    // No stale audio was played on the way. The cancelled answer's own
+    // lifecycle may still be reported, but it is neither settled nor lost:
+    // it was cancelled.
+    assert!(
+        asked.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        asked.elapsed()
+    );
+    assert_eq!(order.last(), Some(&"complete"));
+    assert!(
+        !order.contains(&"settled") && !order.contains(&"lost"),
+        "{order:?}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn answer_cut_before_generation_completed_is_delivered_as_far_as_it_got_then_reported_lost() {
+    let (mut rig, mut dial) = connected(quick(), config()).await;
+    speak(&mut rig, &mut dial, 1, true).await;
+    for _ in 0..5 {
+        dial.service.send(audio(7, LARGEST)).await;
+    }
+    dial.service.close(1011, "internal").await;
+    let (supervisor, dials) = (&mut rig.0, &mut rig.1);
+    let replace = async {
+        let mut redial = dial_within(dials, Duration::from_secs(30)).await;
+        redial.service.accept().await;
+        redial
+    };
+    let play = async {
+        let mut samples = 0u64;
+        loop {
+            match timeout(Duration::from_secs(900), supervisor.next())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                Notice::Event(Event::Audio { pcm, .. }) => {
+                    samples += pcm.len() as u64;
+                    tokio::time::sleep(Duration::from_micros(pcm.len() as u64 * 1_000_000 / RATE))
+                        .await;
+                }
+                Notice::TurnLost {
+                    lineage,
+                    stage,
+                    error,
+                } => {
+                    assert_eq!(lineage.request.get(), 1);
+                    assert_eq!(stage, Stage::Responding);
+                    assert_eq!(error, Error::PeerClosed { code: Some(1011) });
+                    return samples;
+                }
+                Notice::Settled { .. } => panic!("an incomplete answer is not settled"),
+                _ => {}
+            }
+        }
+    };
+    let (samples, _redial) = tokio::join!(play, replace);
+    // Everything that arrived was played; the loss is reported only after it.
+    assert_eq!(samples, 10 * RATE);
+}
+
+#[tokio::test(start_paused = true)]
+async fn unrecoverable_failure_still_delivers_the_buffered_answer_before_ending() {
+    let (mut rig, mut dial) = connected(quick(), config()).await;
+    speak(&mut rig, &mut dial, 1, true).await;
+    for _ in 0..10 {
+        dial.service.send(audio(7, LARGEST)).await;
+    }
+    dial.service
+        .send(json!({"serverContent":{"generationComplete":true}}))
+        .await;
+    dial.service
+        .close(1011, "You exceeded your current quota")
+        .await;
+    let (samples, order) =
+        play_until(&mut rig, |notice| matches!(notice, Notice::Settled { .. })).await;
+    assert_eq!(samples, 20 * RATE);
+    assert_eq!(order.first(), Some(&"unavailable"));
+    assert_eq!(order.last(), Some(&"settled"));
+    assert_eq!(
+        failure(&mut rig.0).await,
+        Failure {
+            error: Error::QuotaExceeded,
+            reason: FailureReason::NotRecoverable,
+            attempts: 0,
+        }
+    );
+    // No reconnect was attempted for a quota refusal.
+    assert!(timeout(Duration::from_secs(5), rig.1.recv()).await.is_err());
+}
+
+#[tokio::test(start_paused = true)]
+async fn upkeep_notices_a_dead_connection_and_redials_without_being_asked_for_notices() {
+    let (mut rig, mut dial) = connected(quick(), config()).await;
+    speak(&mut rig, &mut dial, 1, true).await;
+    for _ in 0..30 {
+        dial.service.send(audio(7, LARGEST)).await;
+    }
+    dial.service
+        .send(json!({"serverContent":{"generationComplete":true}}))
+        .await;
+    dial.service.close(1011, "internal").await;
+    let died = Instant::now();
+    // The caller is busy playing and asks for nothing. Its service tick alone
+    // must be enough to notice the failure and start the replacement.
+    let redial = loop {
+        rig.0.maintain();
+        if let Ok(redial) = rig.1.try_recv() {
+            break redial;
+        }
+        assert!(
+            died.elapsed() < Duration::from_secs(1),
+            "no redial from upkeep"
+        );
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    };
+    assert!(
+        died.elapsed() <= Duration::from_millis(50),
+        "{:?}",
+        died.elapsed()
+    );
+    assert!(redial.resumed);
+    assert!(!rig.0.is_connected());
+    assert_eq!(rig.0.try_start(request(2)), Err(Error::NotConnected));
+    // Backoff and the outage budget are applied by upkeep too.
+    drop(redial);
+    let second = loop {
+        rig.0.maintain();
+        // The failed attempt is observed through `next`, which never blocks
+        // the tick: it is polled and abandoned.
+        let _ = timeout(Duration::from_millis(1), rig.0.next()).await;
+        if let Ok(redial) = rig.1.try_recv() {
+            break redial;
+        }
+        assert!(died.elapsed() < Duration::from_secs(5), "no second attempt");
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    };
+    assert!(second.resumed);
 }
