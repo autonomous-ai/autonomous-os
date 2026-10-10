@@ -1,5 +1,6 @@
 use super::*;
 
+mod availability;
 mod context;
 mod drain;
 mod soak;
@@ -647,7 +648,14 @@ async fn play_until(
 
 #[tokio::test(start_paused = true)]
 async fn buffered_answer_plays_out_after_its_connection_dies_while_a_replacement_is_made() {
-    let (mut rig, mut dial) = connected(quick(), config()).await;
+    // This legacy consumer polls once per 2-second PCM message. Recovery now
+    // counts from the actor's failure observation, not the later next() call;
+    // use the production outage budget while testing playback/drain ordering.
+    let policy = RecoveryPolicy {
+        outage_budget: Duration::from_secs(15),
+        ..quick()
+    };
+    let (mut rig, mut dial) = connected(policy, config()).await;
     speak(&mut rig, &mut dial, 1, true).await;
     // A minute of speech generated in one burst, then the connection dies:
     // the service's lifetime limit, a network change, an idle proxy.
@@ -718,7 +726,14 @@ async fn buffered_answer_plays_out_after_its_connection_dies_while_a_replacement
 
 #[tokio::test(start_paused = true)]
 async fn follow_up_during_a_dead_connections_answer_is_served_by_the_replacement() {
-    let (mut rig, mut dial) = connected(quick(), config()).await;
+    // This legacy consumer polls once per 2-second PCM message. Recovery now
+    // counts from the actor's failure observation, not the later next() call;
+    // use the production outage budget while testing playback/drain ordering.
+    let policy = RecoveryPolicy {
+        outage_budget: Duration::from_secs(15),
+        ..quick()
+    };
+    let (mut rig, mut dial) = connected(policy, config()).await;
     speak(&mut rig, &mut dial, 1, true).await;
     for _ in 0..30 {
         dial.service.send(audio(7, LARGEST)).await;
@@ -795,7 +810,14 @@ async fn follow_up_during_a_dead_connections_answer_is_served_by_the_replacement
 
 #[tokio::test(start_paused = true)]
 async fn answer_cut_before_generation_completed_is_delivered_as_far_as_it_got_then_reported_lost() {
-    let (mut rig, mut dial) = connected(quick(), config()).await;
+    // This legacy consumer polls once per 2-second PCM message. Recovery now
+    // counts from the actor's failure observation, not the later next() call;
+    // use the production outage budget while testing playback/drain ordering.
+    let policy = RecoveryPolicy {
+        outage_budget: Duration::from_secs(15),
+        ..quick()
+    };
+    let (mut rig, mut dial) = connected(policy, config()).await;
     speak(&mut rig, &mut dial, 1, true).await;
     for _ in 0..5 {
         dial.service.send(audio(7, LARGEST)).await;

@@ -18,12 +18,14 @@ async fn observe_link_failure(rig: &mut Rig) {
 /// Drive only connection setup, leaving the old answer completely unread.
 /// This uses the production progress/apply path and actual in-memory transport.
 async fn accept_replacement(rig: &mut Rig) -> Dial {
+    while rig.0.poll_link().is_some() {}
     let mut dial = next_dial(&mut rig.1).await;
     let policy = rig.0.policy;
     let (step, _) = tokio::join!(progress(&mut rig.0.link, &policy), dial.service.accept());
+    rig.0.apply(step);
     assert!(matches!(
-        rig.0.apply(step),
-        Some(Notice::Ready { session, after: Some(_), .. }) if session == dial.session
+        rig.0.poll_link(),
+        Some(LinkUpdate { session, kind: LinkUpdateKind::Ready { after: Some(_), .. }, .. }) if session == dial.session
     ));
     dial
 }

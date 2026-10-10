@@ -10,6 +10,17 @@ The broader goal remains unfinished; this document is not release acceptance.
 See [voice workstream ownership](docs/development-workstreams.md) before making
 parallel edits or integrating another agent's changes.
 
+- The [provider availability prerequisite](docs/provider-availability.md) adds
+  independent supervisor link polling, source-stamped connection progress and
+  accurate opt-in request outcomes. Production still uses Legacy; coordinator
+  outage gating, priority link IPC and audible failure delivery remain pending.
+  Source `bc9e6ba2` passed **843 host tests** and **174 targeted emulated
+  Linux/ARM64 tests**, with zero failures, formatting, strict Clippy and both
+  release builds. Three long tests remain ignored in this batch; the full ARM
+  workspace was not rerun. Exact commands and evidence are in the linked note
+  and `artifacts/provider-availability-20261011/`. No physical or cloud
+  qualification follows from these software gates.
+
 - Integrated Agent 1's subsequent committed `d6b813695` with review fixes for
   repeated disconnects losing retained audio, old input crossing connection
   boundaries, repeated startup readiness, resumption-context provenance and a

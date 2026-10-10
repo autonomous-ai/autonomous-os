@@ -212,6 +212,11 @@ the gates. Runtime, fixture and configuration bytes match the frozen source.
 
 ## Next contract work
 
+The next [provider availability prerequisite](provider-availability.md) adds a
+split supervisor control/output API and corrects opt-in request failure tracking.
+Its coordinator, priority IPC, readiness and audible-failure integration is still
+pending. The final qualification above identifies the earlier source only.
+
 The typed statuses in the provider worker remain disabled. Simply enabling
 them is not sufficient:
 
@@ -234,11 +239,12 @@ them is not sufficient:
   failure should remain ordered after its received PCM; placing it on another
   socket instead requires an explicit data-delivery fence. Packet credit
   counters must remain cumulative, including discarded old-owner data.
-- Every accepted request needs exactly one accurate failure stage. A refused
-  Audio/End after successful Start must not be called `not_delivered` or mask
-  the supervisor's later accurate lost-request report.
-- Both the urgent status queue and tick-generated output need explicit hard
-  bounds. Allocated capacity alone is not a bound.
+- The opt-in worker now distinguishes refused Start from refused Audio/End
+  after accepted Start, preserving the supervisor's terminal stage. Coordinator
+  consumption and per-owner evaluation of these outcomes remain to integrate.
+- Tick-generated refusal reports now respect the output bound and pause intake
+  before overwriting a pending report. The urgent status queue still needs a
+  bounded priority control implementation; allocated capacity is not a bound.
 - Startup, normal operation and the evaluator must consume the same status
   contract. Any assumed ownership must taint the correct answer, including an
   assumption that precedes identification of its successor.
@@ -246,10 +252,9 @@ them is not sufficient:
   invalidation. No context status proves that the latest exchange or every
   client message survived. Legacy exposes it through a diagnostic line, not a
   memory guarantee.
-- A locally retired open request from a failed connection is now correctly
-  rejected if its remaining End targets the replacement. Legacy fails closed;
-  typed recovery must recognize this old-session handoff without killing a
-  newer healthy request.
+- A locally retired open request from a failed connection is rejected if its
+  remaining End targets the replacement. Legacy fails closed; opt-in typed
+  recovery now discards it only with exact replaced-connection lineage proof.
 - Failure speech must use valid current output ownership, never old callbacks
   or a fabricated successful completion. Privacy and stop remain authoritative.
 

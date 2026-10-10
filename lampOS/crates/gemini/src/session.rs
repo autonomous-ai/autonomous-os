@@ -26,11 +26,17 @@ use tokio_tungstenite::{
     tungstenite::{self, Message, protocol::WebSocketConfig},
 };
 
+#[derive(Clone, Copy)]
+struct Stopped {
+    error: Error,
+    observed_at: Clock,
+}
+
 struct Shared {
     retired_through: AtomicU64,
     submitted_through: AtomicU64,
     wake: Notify,
-    stop: watch::Sender<Option<Error>>,
+    stop: watch::Sender<Option<Stopped>>,
     resumption: Mutex<Option<ResumptionPoint>>,
     // An invalidation can arrive on a resumed connection before it issues a
     // local handle. Retain that fact for the supervisor's inherited point.
@@ -66,8 +72,13 @@ impl Shared {
     /// privacy stop still drops output queued behind an earlier remote failure.
     fn fail(&self, error: Error) {
         self.stop.send_if_modified(|value| {
-            if value.is_none() || (error == Error::Closed && *value != Some(Error::Closed)) {
-                *value = Some(error);
+            if value.is_none()
+                || (error == Error::Closed && value.is_some_and(|stop| stop.error != Error::Closed))
+            {
+                *value = Some(Stopped {
+                    error,
+                    observed_at: Clock::now(),
+                });
                 true
             } else {
                 false
@@ -170,17 +181,32 @@ pub struct Connection {
     events: mpsc::Receiver<Event>,
     state: watch::Receiver<State>,
     task: JoinHandle<()>,
+    ready_at: Clock,
 }
 impl Connection {
     pub fn input(&self) -> InputSender {
         self.input.clone()
     }
     pub fn state(&self) -> State {
+        self.observed_state().0
+    }
+    /// Source-local observation time, retained even when the supervisor is
+    /// backpressured. This is not when a remote network failure occurred.
+    pub(crate) fn observed_state(&self) -> (State, Clock) {
         match *self.input.shared.stop.borrow() {
-            Some(Error::Closed) => State::Closed,
-            Some(error) => State::Disconnected(error),
-            None => *self.state.borrow(),
+            Some(stop) => (
+                if stop.error == Error::Closed {
+                    State::Closed
+                } else {
+                    State::Disconnected(stop.error)
+                },
+                stop.observed_at,
+            ),
+            None => (*self.state.borrow(), self.ready_at),
         }
+    }
+    pub(crate) fn ready_at(&self) -> Clock {
+        self.ready_at
     }
     pub fn subscribe_state(&self) -> watch::Receiver<State> {
         self.state.clone()
@@ -221,7 +247,11 @@ impl Connection {
                 _ => None,
             };
             if output_request.is_some_and(|id| {
-                *self.input.shared.stop.borrow() == Some(Error::Closed)
+                self.input
+                    .shared
+                    .stop
+                    .borrow()
+                    .is_some_and(|stop| stop.error == Error::Closed)
                     || id <= self.input.shared.retired_through.load(Ordering::Acquire)
             }) {
                 continue;
@@ -287,7 +317,7 @@ where
                 Message::Text(text) => {
                     let frame = wire::decode_server(text.as_bytes())?;
                     if frame.setup_complete {
-                        return Ok(());
+                        return Ok(Clock::now());
                     }
                     if frame.content.is_some()
                         || frame.go_away.is_some()
@@ -299,7 +329,7 @@ where
                 Message::Binary(bytes) => {
                     let frame = wire::decode_server(&bytes)?;
                     if frame.setup_complete {
-                        return Ok(());
+                        return Ok(Clock::now());
                     }
                     if frame.content.is_some()
                         || frame.go_away.is_some()
@@ -317,7 +347,7 @@ where
             }
         }
     };
-    timeout(config.timeouts.setup, setup)
+    let ready_at = timeout(config.timeouts.setup, setup)
         .await
         .map_err(|_| Error::SetupTimeout)??;
     let (commands_tx, commands) = mpsc::channel(INPUT_QUEUE_CAPACITY);
@@ -373,6 +403,7 @@ where
         events,
         state,
         task,
+        ready_at,
     })
 }
 
@@ -491,7 +522,7 @@ struct Actor<S> {
     gated: bool,
     purged_through: u64,
     shared: Arc<Shared>,
-    stop: watch::Receiver<Option<Error>>,
+    stop: watch::Receiver<Option<Stopped>>,
     /// The newest request: the only one that accepts input.
     current: Option<Turn>,
     barrier: Option<Barrier>,
@@ -520,7 +551,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
     async fn run(mut self) {
         let result = self.serve().await;
         let terminal = match result {
-            Ok(()) | Err(Error::Closed) => State::Closed,
+            Ok(()) | Err(Error::Closed) => {
+                self.shared.fail(Error::Closed);
+                State::Closed
+            }
             Err(error) => {
                 // Refuse input and report the failure now. Output that had
                 // already arrived is still handed over, in order, below.
@@ -541,7 +575,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
         let mut tick = tokio::time::interval(Duration::from_millis(10));
         tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
-            if *self.stop.borrow() == Some(Error::Closed) {
+            if self
+                .stop
+                .borrow()
+                .is_some_and(|stop| stop.error == Error::Closed)
+            {
                 return;
             }
             self.purge_retired();
@@ -560,8 +598,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Actor<S> {
         let mut tick = tokio::time::interval(Duration::from_millis(10));
         tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
-            if let Some(error) = *self.stop.borrow() {
-                return Err(error);
+            if let Some(stop) = *self.stop.borrow() {
+                return Err(stop.error);
             }
             self.retire_active().await?;
             self.purge_retired();

@@ -18,8 +18,8 @@ pub use config::{
     ThinkingLevel, Timeouts,
 };
 pub use recovery::{
-    Attempt, Connect, Context, Dialer, Failure, FailureReason, Notice, RecoveryPolicy, Stage,
-    Supervisor,
+    Attempt, Connect, Context, Dialer, Failure, FailureReason, LinkUpdate, LinkUpdateKind, Notice,
+    OutputNotice, RecoveryPolicy, Stage, Supervisor,
 };
 use serde::{Deserialize, Serialize};
 pub use session::{Connection, InputSender, ResumptionPoint, connect};

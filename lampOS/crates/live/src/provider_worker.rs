@@ -293,6 +293,21 @@ fn prune_retired_output(output: &mut VecDeque<Outbound>, retired_through: u64) {
     });
 }
 
+/// The single refused Start stays in intake until its outcome has reserved
+/// space. Input consumption pauses meanwhile; neither a later request nor a
+/// full PCM queue can overwrite the report or grow the bounded output queue.
+fn queue_undelivered(handoff: &mut InputHandoff, output: &mut VecDeque<Outbound>) {
+    if output.len() < MAX_QUEUED_OUTPUT
+        && let Some(request) = handoff.undelivered.take()
+    {
+        output.push_back(Outbound::Status(ProviderStatus::TurnFailed {
+            request,
+            stage: FailedStage::NotDelivered,
+            reason: Fault::Local,
+        }));
+    }
+}
+
 pub async fn run(channels: WorkerChannels, boot: BootId, config_path: &Path) -> Result<()> {
     let config = ProviderConfig::load(config_path)?
         .into_session()?
@@ -321,7 +336,6 @@ async fn serve<C: Connect>(
     let mut urgent: VecDeque<Outbound> = VecDeque::with_capacity(4);
     let mut output = VecDeque::with_capacity(MAX_QUEUED_OUTPUT);
     let mut output_sequence = 0u64;
-    let mut failed_through = 0u64;
     let mut discards = DiscardLog::default();
     loop {
         // Control is polled first and never waits for the provider: stop,
@@ -340,22 +354,20 @@ async fn serve<C: Connect>(
                 intake.handoff.synchronize(&provider)?;
                 prune_retired_output(&mut output, intake.handoff.retired_through);
                 if control == ControlDrain::Deferred { continue; }
-                let received = intake.receive_inputs(&mut monotonic_us, &mut || channels.control.receive(), &mut channels.data, &provider, &mut control_budget);
-                match received {
-                    Ok(ControlDrain::Stopped) => { provider.shutdown(); return Ok(()); }
-                    Ok(ControlDrain::Deferred) => continue,
-                    Ok(ControlDrain::Empty) => {}
-                    // Admitted input cannot be held until a connection exists:
-                    // it would be answered late or not at all. Say so and end.
-                    Err(error) if !provider.is_connected() => return Err(io::Error::other(format!("provider unavailable while input was admitted: {error}")).into()),
-                    Err(error) => return Err(error),
+                queue_undelivered(&mut intake.handoff, &mut output);
+                if intake.handoff.undelivered.is_none() {
+                    let received = intake.receive_inputs(&mut monotonic_us, &mut || channels.control.receive(), &mut channels.data, &provider, &mut control_budget);
+                    match received {
+                        Ok(ControlDrain::Stopped) => { provider.shutdown(); return Ok(()); }
+                        Ok(ControlDrain::Deferred) => continue,
+                        Ok(ControlDrain::Empty) => {}
+                        // Admitted input cannot be held until a connection exists:
+                        // it would be answered late or not at all. Say so and end.
+                        Err(error) if !provider.is_connected() => return Err(io::Error::other(format!("provider unavailable while input was admitted: {error}")).into()),
+                        Err(error) => return Err(error),
+                    }
                 }
-                if let Some(request) = intake.handoff.undelivered.take()
-                    && request > failed_through
-                {
-                    failed_through = request;
-                    output.push_back(Outbound::Status(ProviderStatus::TurnFailed { request, stage: FailedStage::NotDelivered, reason: Fault::Local }));
-                }
+                queue_undelivered(&mut intake.handoff, &mut output);
                 // receive_inputs can observe a newer authority too.
                 prune_retired_output(&mut output, intake.handoff.retired_through);
                 for _ in 0..8 {
@@ -418,10 +430,11 @@ async fn serve<C: Connect>(
                         }
                         // Later input for it is swallowed, not sent to a new session.
                         intake.handoff.fail(request);
-                        if request > failed_through {
-                            failed_through = request;
-                            output.push_back(Outbound::Status(ProviderStatus::TurnFailed { request, stage: stage.into(), reason: error.into() }));
-                        }
+                        // A newer refused Start must not suppress this older
+                        // accepted request's ordered terminal outcome. Refused
+                        // Starts are never tracked by the supervisor, so these
+                        // two outcome sources are disjoint.
+                        output.push_back(Outbound::Status(ProviderStatus::TurnFailed { request, stage: stage.into(), reason: error.into() }));
                     },
                     Err(failure)=>return Err(ended(failure).into()),
                 }
@@ -700,6 +713,9 @@ impl ProviderIntake {
         self.check_retained(now())?;
         self.handoff.synchronize(input)?;
         for _ in 0..INPUT_SLICE {
+            if self.handoff.undelivered.is_some() {
+                break;
+            }
             if self.retained.is_none()
                 && let Some(command) = data.receive::<ProviderInput>()?
             {
@@ -748,7 +764,8 @@ struct InputHandoff {
     failed_through: u64,
     /// Report an undeliverable request instead of ending the worker.
     tolerate_outage: bool,
-    /// The latest request that was admitted while no connection existed.
+    /// The sole unreported request whose Start was refused while disconnected.
+    /// Drain it before receiving another command; it is never overwritten.
     undelivered: Option<u64>,
 }
 
@@ -795,7 +812,12 @@ impl InputHandoff {
                 // leave the Gemini actor's old input open and reject the Start.
                 match input.end(submitted.request) {
                     // Its connection is gone; there is no open input to close.
-                    Err(Error::NotConnected) if self.tolerate_outage => {}
+                    Err(error)
+                        if self.tolerate_outage
+                            && (error == Error::NotConnected
+                                || (error == Error::StaleRequest
+                                    && input
+                                        .belongs_to_replaced_connection(submitted.request))) => {}
                     other => other?,
                 }
             }
@@ -816,12 +838,25 @@ impl InputHandoff {
         }
     }
 
-    /// A sink refusal. Only a missing connection is survivable, and only when
-    /// the caller reports the request as failed.
-    fn refused(&mut self, request: RequestId, error: Error) -> Result<()> {
-        if self.tolerate_outage && error == Error::NotConnected {
+    /// A missing connection or proven old-session input is survivable only in
+    /// typed recovery. An arbitrary stale request remains a protocol fault.
+    fn refused(&mut self, request: RequestId, error: Error, input: &impl InputSink) -> Result<()> {
+        let was_submitted = self
+            .submitted
+            .is_some_and(|submitted| submitted.request == request);
+        let replaced = was_submitted
+            && error == Error::StaleRequest
+            && input.belongs_to_replaced_connection(request);
+        if self.tolerate_outage && (error == Error::NotConnected || replaced) {
+            if !was_submitted && self.undelivered.is_some() {
+                return Err(io::Error::other("unreported refused Start must be drained").into());
+            }
             self.fail(request.get());
-            self.undelivered = Some(request.get());
+            // Audio/End refusal cannot undo an accepted Start. The supervisor
+            // reports that request's actual stage after draining its prior PCM.
+            if !was_submitted {
+                self.undelivered = Some(request.get());
+            }
             return Ok(());
         }
         Err(error.into())
@@ -858,7 +893,7 @@ impl InputHandoff {
                     return Err(io::Error::other("provider input already started").into());
                 }
                 if let Err(error) = input.start(request) {
-                    return self.refused(request, error);
+                    return self.refused(request, error, input);
                 }
                 self.submitted = Some(SubmittedInput {
                     request,
@@ -881,13 +916,13 @@ impl InputHandoff {
                     .checked_sub(age)
                     .ok_or_else(|| io::Error::other("invalid capture age"))?;
                 if let Err(error) = input.audio(request, sequence, captured, &samples) {
-                    return self.refused(request, error);
+                    return self.refused(request, error, input);
                 }
             }
             ProviderInput::End { .. } => {
                 self.require_open(request)?;
                 if let Err(error) = input.end(request) {
-                    return self.refused(request, error);
+                    return self.refused(request, error, input);
                 }
                 if let Some(submitted) = self.submitted.as_mut() {
                     submitted.open = false;
@@ -922,6 +957,11 @@ trait InputSink {
     ) -> lamp_gemini::Result<()>;
     fn end(&self, request: RequestId) -> lamp_gemini::Result<()>;
     fn retire(&self, request: RequestId);
+    /// Exact successful submission lineage belongs to an earlier connection.
+    /// Absence of this proof never turns StaleRequest into a recoverable error.
+    fn belongs_to_replaced_connection(&self, _request: RequestId) -> bool {
+        false
+    }
 }
 
 impl<C: Connect> InputSink for Supervisor<C> {
@@ -942,6 +982,9 @@ impl<C: Connect> InputSink for Supervisor<C> {
     }
     fn retire(&self, request: RequestId) {
         Supervisor::retire(self, request);
+    }
+    fn belongs_to_replaced_connection(&self, request: RequestId) -> bool {
+        self.input_belongs_to_replaced_connection(request)
     }
 }
 
@@ -1069,9 +1112,13 @@ mod tests {
         retired: Cell<u64>,
         reject_end: Cell<bool>,
         reject_start: Cell<bool>,
+        disconnected: Cell<bool>,
     }
     impl InputSink for RecordingSink {
         fn start(&self, request: RequestId) -> lamp_gemini::Result<()> {
+            if self.disconnected.get() {
+                return Err(lamp_gemini::Error::NotConnected);
+            }
             if self.reject_start.get() {
                 return Err(lamp_gemini::Error::Backpressure);
             }
@@ -1089,6 +1136,9 @@ mod tests {
             _captured: Instant,
             samples: &[i16],
         ) -> lamp_gemini::Result<()> {
+            if self.disconnected.get() {
+                return Err(lamp_gemini::Error::NotConnected);
+            }
             if self.open.get() != Some(request.get()) || request.get() <= self.retired.get() {
                 return Err(lamp_gemini::Error::StaleRequest);
             }
@@ -1098,6 +1148,9 @@ mod tests {
             Ok(())
         }
         fn end(&self, request: RequestId) -> lamp_gemini::Result<()> {
+            if self.disconnected.get() {
+                return Err(lamp_gemini::Error::NotConnected);
+            }
             if self.reject_end.get() {
                 self.calls
                     .borrow_mut()
@@ -1832,6 +1885,205 @@ mod tests {
     }
 
     #[test]
+    fn outage_after_accepted_start_never_reports_that_request_as_not_delivered() {
+        for refuse_end in [false, true] {
+            let mut owner = controller();
+            let mut handoff = InputHandoff {
+                tolerate_outage: true,
+                ..InputHandoff::default()
+            };
+            let sink = RecordingSink::default();
+            let request = authorize(&mut owner, &mut handoff);
+            handoff
+                .submit(start(request, &handoff), NOW, &sink)
+                .unwrap();
+            handoff
+                .submit(audio(request, 1, 7, &handoff), NOW, &sink)
+                .unwrap();
+            sink.disconnected.set(true);
+            let refused = if refuse_end {
+                end(request, &handoff)
+            } else {
+                audio(request, 2, 8, &handoff)
+            };
+            handoff.submit(refused, NOW, &sink).unwrap();
+            assert_eq!(
+                handoff.undelivered, None,
+                "the supervisor owns the accepted request's actual terminal stage"
+            );
+            assert_eq!(handoff.failed_through, request);
+            assert!(handoff.submitted.is_none());
+            // The remaining input is discarded even after connectivity returns.
+            sink.disconnected.set(false);
+            handoff
+                .submit(audio(request, 3, 9, &handoff), NOW, &sink)
+                .unwrap();
+            handoff.submit(end(request, &handoff), NOW, &sink).unwrap();
+            assert_eq!(
+                *sink.calls.borrow(),
+                vec![Call::Start(request), Call::Audio(request, 1, vec![7; 160])]
+            );
+        }
+    }
+
+    #[test]
+    fn outage_before_start_reports_not_delivered_once_and_never_replays_input() {
+        let mut owner = controller();
+        let mut handoff = InputHandoff {
+            tolerate_outage: true,
+            ..InputHandoff::default()
+        };
+        let sink = RecordingSink::default();
+        sink.disconnected.set(true);
+        let request = authorize(&mut owner, &mut handoff);
+        handoff
+            .submit(start(request, &handoff), NOW, &sink)
+            .unwrap();
+        assert_eq!(handoff.undelivered.take(), Some(request));
+        sink.disconnected.set(false);
+        for command in [
+            start(request, &handoff),
+            audio(request, 1, 9, &handoff),
+            end(request, &handoff),
+        ] {
+            handoff.submit(command, NOW, &sink).unwrap();
+        }
+        assert_eq!(handoff.undelivered, None);
+        assert!(sink.calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn typed_recovery_does_not_swallow_an_unproven_stale_request() {
+        let mut owner = controller();
+        let mut handoff = InputHandoff {
+            tolerate_outage: true,
+            ..InputHandoff::default()
+        };
+        let sink = RecordingSink::default();
+        let request = authorize(&mut owner, &mut handoff);
+        handoff
+            .submit(start(request, &handoff), NOW, &sink)
+            .unwrap();
+        assert!(
+            handoff
+                .refused(RequestId::new(request).unwrap(), Error::StaleRequest, &sink)
+                .is_err()
+        );
+        assert_eq!(handoff.failed_through, 0);
+        assert_eq!(handoff.undelivered, None);
+        assert_eq!(handoff.submitted.unwrap().request.get(), request);
+    }
+
+    #[test]
+    fn pending_not_delivered_report_cannot_be_overwritten_by_a_new_refused_start() {
+        let mut owner = controller();
+        let mut handoff = InputHandoff {
+            tolerate_outage: true,
+            ..InputHandoff::default()
+        };
+        let sink = RecordingSink::default();
+        sink.disconnected.set(true);
+        let old = authorize(&mut owner, &mut handoff);
+        handoff.submit(start(old, &handoff), NOW, &sink).unwrap();
+        let next = authorize(&mut owner, &mut handoff);
+        assert!(handoff.submit(start(next, &handoff), NOW, &sink).is_err());
+        assert_eq!(handoff.undelivered, Some(old));
+        assert_eq!(handoff.failed_through, old);
+        let mut output = VecDeque::new();
+        queue_undelivered(&mut handoff, &mut output);
+        handoff.submit(start(next, &handoff), NOW, &sink).unwrap();
+        queue_undelivered(&mut handoff, &mut output);
+        assert_eq!(output.len(), 2);
+        for request in [old, next] {
+            assert!(
+                matches!(output.pop_front(), Some(Outbound::Status(ProviderStatus::TurnFailed {
+                request: reported, stage: FailedStage::NotDelivered, ..
+            })) if reported == request)
+            );
+        }
+    }
+
+    #[test]
+    fn refused_start_outcome_waits_for_capacity_without_growing_output() {
+        let mut handoff = InputHandoff {
+            undelivered: Some(7),
+            ..InputHandoff::default()
+        };
+        let mut output = VecDeque::new();
+        for sequence in 1..=MAX_QUEUED_OUTPUT {
+            output.push_back(Outbound::Output(ProviderOutput::Audio {
+                request: 6,
+                sequence: sequence as u64,
+                provider_event_at_us: NOW,
+                source_frames: PACKET_SAMPLES,
+                source_offset: 0,
+                samples: vec![2; PACKET_SAMPLES],
+            }));
+        }
+        queue_undelivered(&mut handoff, &mut output);
+        assert_eq!(handoff.undelivered, Some(7));
+        assert_eq!(output.len(), MAX_QUEUED_OUTPUT);
+        output.pop_front();
+        queue_undelivered(&mut handoff, &mut output);
+        assert_eq!(handoff.undelivered, None);
+        assert_eq!(output.len(), MAX_QUEUED_OUTPUT);
+        assert!(matches!(
+            output.back(),
+            Some(Outbound::Status(ProviderStatus::TurnFailed {
+                request: 7,
+                stage: FailedStage::NotDelivered,
+                ..
+            }))
+        ));
+        queue_undelivered(&mut handoff, &mut output);
+        assert_eq!(output.len(), MAX_QUEUED_OUTPUT);
+    }
+
+    #[test]
+    fn refused_start_pauses_intake_before_more_pcm_but_does_not_block_stop() {
+        let (_directory, mut parent, mut worker) = intake_channels();
+        let mut owner = controller();
+        let mut intake = ProviderIntake::new(BootId::new([9; 16]).unwrap(), NOW);
+        intake.handoff.tolerate_outage = true;
+        let request = authorize(&mut owner, &mut intake.handoff);
+        let sink = RecordingSink::default();
+        sink.disconnected.set(true);
+        for command in [
+            start(request, &intake.handoff),
+            audio(request, 1, 8, &intake.handoff),
+            end(request, &intake.handoff),
+        ] {
+            parent.data.send(command).unwrap();
+        }
+        let mut budget = CONTROL_SLICE;
+        assert_eq!(
+            intake
+                .receive_inputs(
+                    &mut || NOW,
+                    &mut || worker.control.receive(),
+                    &mut worker.data,
+                    &sink,
+                    &mut budget
+                )
+                .unwrap(),
+            ControlDrain::Empty
+        );
+        assert_eq!(intake.handoff.undelivered, Some(request));
+        assert!(
+            matches!(worker.data.receive::<ProviderInput>().unwrap(), Some(ProviderInput::Audio { request: received, .. }) if received == request)
+        );
+        parent.control.send(Control::Stop).unwrap();
+        assert_eq!(
+            intake
+                .drain_control(&mut || NOW, &mut || worker.control.receive(), &mut budget)
+                .unwrap(),
+            ControlDrain::Stopped
+        );
+        assert!(intake.stopped);
+        assert!(sink.calls.borrow().is_empty());
+    }
+
+    #[test]
     fn privacy_generation_and_expired_authority_still_prevent_audio() {
         let mut owner = controller();
         let mut handoff = InputHandoff::default();
@@ -2206,6 +2458,129 @@ mod tests {
     }
     fn idle_complete() -> serde_json::Value {
         json!({"serverContent":{"turnComplete":true,"interactionStatus":"IDLE"}})
+    }
+
+    #[tokio::test]
+    async fn typed_replaced_session_drops_old_input_without_failing_the_new_connection() {
+        use lamp_gemini::{LinkUpdate, LinkUpdateKind, OutputNotice, testing::next_dial};
+
+        async fn link<C: Connect>(provider: &mut Supervisor<C>) -> LinkUpdate {
+            tokio::time::timeout(Duration::from_secs(2), async {
+                let mut tick = tokio::time::interval(Duration::from_millis(1));
+                loop {
+                    tick.tick().await;
+                    if let Some(update) = provider.poll_link() {
+                        return update;
+                    }
+                }
+            })
+            .await
+            .expect("link observation")
+        }
+
+        // Exercise Audio, End and the implicit End before successor Start in
+        // both modes. The production Legacy contract must still fail closed.
+        for case in 0..6 {
+            let mode = case % 3;
+            let typed = case >= 3;
+            let config =
+                SessionConfig::new(GOOGLE_ENDPOINT, Credential::api_key("test-only").unwrap())
+                    .unwrap()
+                    .resumption(RESUMPTION)
+                    .barrier_policy(BARRIER);
+            let (connector, mut dials) = connector(config);
+            let mut provider = Supervisor::new(connector, quick_policy()).unwrap();
+            let mut first = next_dial(&mut dials).await;
+            first.service.accept().await;
+            assert!(matches!(
+                link(&mut provider).await.kind,
+                LinkUpdateKind::Ready { .. }
+            ));
+            let mut owner = controller();
+            let mut handoff = InputHandoff {
+                tolerate_outage: typed,
+                ..InputHandoff::default()
+            };
+            let old = authorize(&mut owner, &mut handoff);
+            handoff
+                .submit(start(old, &handoff), NOW, &provider)
+                .unwrap();
+            assert!(matches!(
+                provider.next_output().await.unwrap(),
+                OutputNotice::Event(Event::InputStarted { .. })
+            ));
+            assert!(
+                first.service.receive().await["realtimeInput"]
+                    .get("activityStart")
+                    .is_some()
+            );
+            handoff
+                .submit(audio(old, 1, 7, &handoff), NOW, &provider)
+                .unwrap();
+            assert!(
+                first.service.receive().await["realtimeInput"]
+                    .get("audio")
+                    .is_some()
+            );
+            first.service.send(resumable()).await;
+            first.service.close(1011, "test disconnect").await;
+            assert!(matches!(
+                link(&mut provider).await.kind,
+                LinkUpdateKind::Unavailable { .. }
+            ));
+            let mut replacement = next_dial(&mut dials).await;
+            assert!(replacement.resumed);
+            replacement.service.accept().await;
+            assert!(matches!(
+                link(&mut provider).await.kind,
+                LinkUpdateKind::Ready { .. }
+            ));
+            assert!(provider.is_connected());
+
+            if mode < 2 {
+                let command = if mode == 0 {
+                    audio(old, 2, 8, &handoff)
+                } else {
+                    end(old, &handoff)
+                };
+                let result = handoff.submit(command, NOW, &provider);
+                if !typed {
+                    assert!(result.unwrap_err().to_string().contains("StaleRequest"));
+                    provider.shutdown();
+                    continue;
+                }
+                result.expect("known old-session input is discarded");
+                assert_eq!(handoff.undelivered, None);
+                assert!(
+                    matches!(provider.next_output().await.unwrap(), OutputNotice::TurnLost { lineage, stage: Stage::InputOpen, .. } if lineage.request.get() == old)
+                );
+                assert!(
+                    replacement
+                        .service
+                        .try_receive(Duration::from_millis(10))
+                        .await
+                        .is_none()
+                );
+            }
+            let next = authorize(&mut owner, &mut handoff);
+            let result = handoff.submit(start(next, &handoff), NOW, &provider);
+            if !typed {
+                assert!(result.unwrap_err().to_string().contains("StaleRequest"));
+                provider.shutdown();
+                continue;
+            }
+            result.expect("new connection remains usable");
+            assert!(
+                matches!(provider.next_output().await.unwrap(), OutputNotice::Event(Event::InputStarted { lineage, .. }) if lineage.request.get() == next)
+            );
+            assert!(
+                replacement.service.receive().await["realtimeInput"]
+                    .get("activityStart")
+                    .is_some()
+            );
+            assert_eq!(handoff.undelivered, None);
+            provider.shutdown();
+        }
     }
 
     #[tokio::test]

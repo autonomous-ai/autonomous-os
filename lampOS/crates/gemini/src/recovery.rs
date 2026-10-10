@@ -11,6 +11,7 @@ use crate::{
     Connection, Error, Event, InputSender, Lineage, Recovery, RequestId, Result, ResumptionHandle,
     ResumptionPoint, SessionConfig, SessionId, State,
 };
+use futures_util::FutureExt;
 use std::{cell::Cell, collections::VecDeque, fmt, pin::Pin, time::Duration};
 // The runtime clock, so scripted tests can cover long outages exactly.
 use tokio::{sync::watch, task::JoinHandle, time::Instant};
@@ -163,6 +164,72 @@ pub enum Notice {
     },
 }
 
+/// A control-plane observation, independent of the ordered answer stream.
+/// Revisions are strictly increasing within one supervisor; `session` identifies
+/// the connection or attempt, never an answer owner. Times use the local Tokio
+/// monotonic clock and retain their source observation time across slow polling.
+/// Locally enforced budget exhaustion is stamped when actually observed, never
+/// backdated to the mathematical deadline; that deadline still bounds recovery.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LinkUpdate {
+    pub revision: u64,
+    pub session: SessionId,
+    pub observed_at: Instant,
+    pub kind: LinkUpdateKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LinkUpdateKind {
+    Ready {
+        context: Context,
+        attempts: u32,
+        started_at: Instant,
+        completed_at: Instant,
+        outage_started_at: Option<Instant>,
+        after: Option<Error>,
+    },
+    Unavailable {
+        error: Error,
+    },
+    /// Close admission now. This does not discard the old answer: its events
+    /// and turn outcome precede the terminal error from `next_output`.
+    Terminal {
+        failure: Failure,
+    },
+}
+
+/// Ordered output only. No link observation consumes output capacity.
+#[derive(Debug)]
+pub enum OutputNotice {
+    Event(Event),
+    Settled {
+        lineage: Lineage,
+        error: Error,
+    },
+    TurnLost {
+        lineage: Lineage,
+        stage: Stage,
+        error: Error,
+    },
+}
+impl From<OutputNotice> for Notice {
+    fn from(output: OutputNotice) -> Self {
+        match output {
+            OutputNotice::Event(event) => Self::Event(event),
+            OutputNotice::Settled { lineage, error } => Self::Settled { lineage, error },
+            OutputNotice::TurnLost {
+                lineage,
+                stage,
+                error,
+            } => Self::TurnLost {
+                lineage,
+                stage,
+                error,
+            },
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FailureReason {
     /// Local shutdown was requested.
@@ -228,10 +295,20 @@ struct Drain {
 /// A connection attempt running on the runtime. It must advance whether or
 /// not the caller is asking for notices: a caller playing a long buffered
 /// answer at speaking speed asks rarely.
-struct Dialing(JoinHandle<Result<Connection>>);
+struct AttemptResult {
+    result: Result<Connection>,
+    completed_at: Instant,
+}
+struct Dialing(JoinHandle<AttemptResult>);
 impl Dialing {
     fn start(attempt: Attempt) -> Self {
-        Self(tokio::spawn(attempt))
+        Self(tokio::spawn(async move {
+            let result = attempt.await;
+            AttemptResult {
+                result,
+                completed_at: Instant::now(),
+            }
+        }))
     }
 }
 impl Drop for Dialing {
@@ -265,9 +342,11 @@ enum Progress {
     },
     AttemptFailed {
         error: Error,
+        observed_at: Instant,
         number: u32,
         outage: Option<Outage>,
     },
+    Disconnected,
     Redial {
         number: u32,
         outage: Outage,
@@ -294,8 +373,8 @@ async fn progress(link: &mut Link, policy: &RecoveryPolicy) -> Progress {
                 None => (&mut attempt.0).await,
                 Some(outage) => {
                     let deadline = outage.since + policy.outage_budget;
-                    // An attempt that has already succeeded wins over a
-                    // budget that expired before anyone asked.
+                    // Harvest completed attempts before examining the current
+                    // clock; the retained completion stamp decides the budget.
                     tokio::select! {
                         biased;
                         joined = &mut attempt.0 => joined,
@@ -305,8 +384,21 @@ async fn progress(link: &mut Link, policy: &RecoveryPolicy) -> Progress {
                     }
                 }
             };
-            // An attempt that panicked or was cancelled never connected.
-            let result = joined.unwrap_or(Err(Error::Transport));
+            // A task fault has no successful source stamp. Its observation is
+            // made here and can never be backdated into the outage budget.
+            let AttemptResult {
+                result,
+                completed_at,
+            } = joined.unwrap_or(AttemptResult {
+                result: Err(Error::Transport),
+                completed_at: Instant::now(),
+            });
+            let observed_at = result.as_ref().map_or(completed_at, Connection::ready_at);
+            if let Some(outage) = outage
+                && observed_at >= outage.since + policy.outage_budget
+            {
+                return Progress::BudgetExhausted { number, outage };
+            }
             match result {
                 Ok(connection) => Progress::Connected {
                     connection,
@@ -317,6 +409,7 @@ async fn progress(link: &mut Link, policy: &RecoveryPolicy) -> Progress {
                 },
                 Err(error) => Progress::AttemptFailed {
                     error,
+                    observed_at,
                     number,
                     outage,
                 },
@@ -328,12 +421,22 @@ async fn progress(link: &mut Link, policy: &RecoveryPolicy) -> Progress {
             outage,
         } => {
             tokio::time::sleep_until(*until).await;
+            if Instant::now() >= outage.since + policy.outage_budget {
+                return Progress::BudgetExhausted {
+                    number: *number,
+                    outage: *outage,
+                };
+            }
             Progress::Redial {
                 number: *number,
                 outage: *outage,
             }
         }
-        Link::Connected(_) | Link::Failed(_) => std::future::pending().await,
+        Link::Connected(live) => {
+            let _ = live.state.wait_for(|state| *state != State::Ready).await;
+            Progress::Disconnected
+        }
+        Link::Failed(_) => std::future::pending().await,
     }
 }
 fn observe(tracked: &Cell<Option<Tracked>>, event: &Event) {
@@ -385,8 +488,12 @@ pub struct Supervisor<C> {
     retired_through: Cell<u64>,
     resume: Option<ResumptionPoint>,
     recoveries: VecDeque<Instant>,
-    /// At most the notices produced by one connection loss.
-    pending: VecDeque<Notice>,
+    /// Exactly one unconsumed control update and one ordered drain outcome.
+    pending_link: Option<LinkUpdate>,
+    pending_output: Option<OutputNotice>,
+    revision: u64,
+    failure_observed_at: Option<Instant>,
+    terminal_announced: bool,
 }
 
 impl<C: Connect> Supervisor<C> {
@@ -395,6 +502,7 @@ impl<C: Connect> Supervisor<C> {
     pub fn new(mut connector: C, policy: RecoveryPolicy) -> Result<Self> {
         policy.validate()?;
         let session = SessionId::new(1)?;
+        let started = Instant::now();
         let attempt = Dialing::start(connector.connect(session, None));
         Ok(Self {
             connector,
@@ -404,7 +512,7 @@ impl<C: Connect> Supervisor<C> {
                 attempt,
                 session,
                 number: 1,
-                started: Instant::now(),
+                started,
                 outage: None,
             },
             draining: None,
@@ -413,7 +521,11 @@ impl<C: Connect> Supervisor<C> {
             retired_through: Cell::new(0),
             resume: None,
             recoveries: VecDeque::new(),
-            pending: VecDeque::with_capacity(3),
+            pending_link: None,
+            pending_output: None,
+            revision: 0,
+            failure_observed_at: None,
+            terminal_announced: false,
         })
     }
 
@@ -459,6 +571,19 @@ impl<C: Connect> Supervisor<C> {
         }));
         Ok(())
     }
+    /// Narrow evidence for classifying a stale handoff, not an ownership grant.
+    /// True only for the exact last successfully submitted request when a ready
+    /// replacement connection now has a different session. In particular, it is
+    /// false while reconnecting and for unrelated or never-submitted requests.
+    pub fn input_belongs_to_replaced_connection(&self, request: RequestId) -> bool {
+        self.submitted.get().is_some_and(|submitted| {
+            submitted.request == request
+                && self
+                    .input()
+                    .is_ok_and(|(_, session)| session != submitted.session)
+        })
+    }
+
     fn submitted_input(&self, request: RequestId) -> Result<&InputSender> {
         let (input, session) = self.input()?;
         if self.submitted.get() != Some(Lineage { session, request }) {
@@ -515,57 +640,125 @@ impl<C: Connect> Supervisor<C> {
         if let Some(drain) = self.draining.take() {
             drain.connection.shutdown();
         }
-        self.link = Link::Failed(Failure {
-            error: Error::Closed,
-            reason: FailureReason::Shutdown,
-            attempts: 0,
-        });
+        self.tracked.set(None);
+        self.pending_link = None;
+        self.pending_output = None;
+        self.fail_at(Error::Closed, FailureReason::Shutdown, 0, Instant::now());
     }
 
-    /// Synchronous upkeep for a caller with its own service tick. Notices a
-    /// failed connection, starts its replacement and applies recovery bounds
-    /// without waiting for [`Self::next`] to be asked, which a caller playing
-    /// buffered output at speaking speed does only once per event. Whatever it
-    /// finds is reported by the following `next`. Never blocks.
+    /// Nonblocking upkeep shared by legacy and split consumers. At most one
+    /// link transition is applied. A single pending notification stops further
+    /// application of link transitions, never the already spawned dial task.
+    /// Consume it with `poll_link` or `next`; no PCM is read here.
     pub fn maintain(&mut self) {
-        let now = Instant::now();
+        // A queued Ready can become false before its consumer polls. Never
+        // reopen admission using it; retain the real failure observation instead.
+        if self
+            .pending_link
+            .is_some_and(|update| matches!(update.kind, LinkUpdateKind::Ready { .. }))
+            && matches!(&self.link, Link::Connected(live) if live.connection.state() != State::Ready)
+        {
+            self.pending_link = None;
+        }
+        if self.pending_link.is_some() {
+            return;
+        }
         match &self.link {
-            Link::Connected(live) if live.connection.state() != State::Ready => {
-                self.disconnected();
+            Link::Connected(live) if live.connection.state() != State::Ready => self.disconnected(),
+            Link::Failed(failure) if !self.terminal_announced => {
+                let failure = *failure;
+                self.terminal_announced = true;
+                self.publish(
+                    self.failure_observed_at.unwrap_or_else(Instant::now),
+                    LinkUpdateKind::Terminal { failure },
+                );
             }
-            Link::Waiting {
-                until,
-                number,
-                outage,
-            } if now >= *until => {
-                let (number, outage) = (*number, *outage);
-                self.dial(number, Some(outage));
+            _ => {
+                if let Some(step) = progress(&mut self.link, &self.policy).now_or_never() {
+                    self.apply(step);
+                }
             }
-            Link::Connecting {
-                attempt,
-                number,
-                outage: Some(outage),
-                ..
-            } if !attempt.0.is_finished() && now >= outage.since + self.policy.outage_budget => {
-                let (number, error) = (*number, outage.error);
-                self.fail(error, FailureReason::BudgetExhausted, number);
-            }
-            _ => {}
         }
     }
 
-    /// Cancellation-safe. Returns the next notice, or the terminal failure
-    /// once (and then repeatedly) when recovery is not allowed or has ended.
+    /// Take one availability update without consuming answer data. Split
+    /// consumers MUST call this regularly (for example on their bounded control
+    /// service tick), even when no PCM credit is available. Never mix `next()`
+    /// with the split `poll_link()` / `next_output()` API.
+    ///
+    /// One fixed notification slot bounds storage. While it is occupied no
+    /// further transition is applied. A stale pending Ready is superseded by
+    /// the observed failure, so revisions may skip but never regress. A remote
+    /// Close hidden behind the session's deliberate WebSocket PCM read gate is
+    /// not yet observed; this API neither bypasses that bound nor invents time.
+    pub fn poll_link(&mut self) -> Option<LinkUpdate> {
+        self.maintain();
+        self.pending_link.take()
+    }
+
+    /// Cancellation-safe ordered data plane. `poll_link` must be serviced
+    /// separately and regularly: when a control notification is pending this
+    /// future waits without consuming data or spinning. Cancel it on the next
+    /// control tick, poll the link, then ask again. A terminal link notification
+    /// does not truncate the buffered answer or its final outcome.
+    pub async fn next_output(&mut self) -> std::result::Result<OutputNotice, Failure> {
+        match self.output_step().await? {
+            Some(output) => Ok(output),
+            None => std::future::pending().await,
+        }
+    }
+
+    /// Legacy, cancellation-safe combined consumer. Preserves the existing
+    /// notice API and ordered drain semantics. Do not mix with split consumers.
     pub async fn next(&mut self) -> std::result::Result<Notice, Failure> {
         loop {
-            if let Some(notice) = self.pending.pop_front() {
-                return Ok(notice);
+            if let Some(update) = self.poll_link() {
+                match update.kind {
+                    LinkUpdateKind::Ready {
+                        context,
+                        attempts,
+                        started_at,
+                        completed_at,
+                        outage_started_at,
+                        after,
+                    } => {
+                        return Ok(Notice::Ready {
+                            session: update.session,
+                            context,
+                            attempts,
+                            elapsed: completed_at
+                                .duration_since(outage_started_at.unwrap_or(started_at)),
+                            after,
+                        });
+                    }
+                    LinkUpdateKind::Unavailable { error } => {
+                        return Ok(Notice::Unavailable { error });
+                    }
+                    LinkUpdateKind::Terminal { .. } => {}
+                }
+            }
+            if let Some(output) = self.output_step().await? {
+                return Ok(output.into());
+            }
+        }
+    }
+
+    async fn output_step(&mut self) -> std::result::Result<Option<OutputNotice>, Failure> {
+        loop {
+            self.maintain();
+            // Privacy/local stop is never blocked by a notification consumer.
+            if let Link::Failed(failure) = &self.link
+                && failure.reason == FailureReason::Shutdown
+            {
+                return Err(*failure);
+            }
+            if self.pending_link.is_some() {
+                return Ok(None);
+            }
+            if let Some(output) = self.pending_output.take() {
+                return Ok(Some(output));
             }
             if let Some(drain) = self.draining.as_mut() {
-                // Output received before the failure is delivered in order
-                // while the replacement is established. A change of link
-                // state is reported as soon as it happens; the replacement's
-                // own events wait until the old output is exhausted.
                 let step = tokio::select! {
                     biased;
                     progress = progress(&mut self.link, &self.policy) => Err(progress),
@@ -574,29 +767,23 @@ impl<C: Connect> Supervisor<C> {
                 match step {
                     Ok(Some(event)) => {
                         observe(&drain.tracked, &event);
-                        return Ok(Notice::Event(event));
+                        return Ok(Some(OutputNotice::Event(event)));
                     }
                     Ok(None) => self.settle(),
-                    Err(progress) => {
-                        if let Some(notice) = self.apply(progress) {
-                            return Ok(notice);
-                        }
-                    }
+                    Err(progress) => self.apply(progress),
                 }
                 continue;
             }
             match &mut self.link {
                 Link::Failed(failure) => return Err(*failure),
                 Link::Connected(live) => {
-                    // Checked before waiting for events: a long buffered
-                    // answer must not delay noticing that its connection died.
                     if live.connection.state() == State::Ready {
                         tokio::select! {
                             biased;
                             event = live.connection.next_event() => {
                                 if let Some(event) = event {
                                     observe(&self.tracked, &event);
-                                    return Ok(Notice::Event(event));
+                                    return Ok(Some(OutputNotice::Event(event)));
                                 }
                             }
                             _ = live.state.wait_for(|state| *state != State::Ready) => {}
@@ -606,15 +793,13 @@ impl<C: Connect> Supervisor<C> {
                 }
                 _ => {
                     let progress = progress(&mut self.link, &self.policy).await;
-                    if let Some(notice) = self.apply(progress) {
-                        return Ok(notice);
-                    }
+                    self.apply(progress);
                 }
             }
         }
     }
 
-    fn apply(&mut self, progress: Progress) -> Option<Notice> {
+    fn apply(&mut self, progress: Progress) {
         match progress {
             Progress::Connected {
                 connection,
@@ -622,43 +807,95 @@ impl<C: Connect> Supervisor<C> {
                 number,
                 started,
                 outage,
-            } => return Some(self.connected(connection, session, number, started, outage)),
+            } => {
+                self.connected(connection, session, number, started, outage);
+            }
             Progress::AttemptFailed {
                 error,
+                observed_at,
                 number,
                 outage,
-            } => self.attempt_failed(error, number, outage),
+            } => {
+                self.attempt_failed(error, observed_at, number, outage);
+            }
+            Progress::Disconnected => self.disconnected(),
             Progress::Redial { number, outage } => self.dial(number, Some(outage)),
             Progress::BudgetExhausted { number, outage } => {
-                self.fail(outage.error, FailureReason::BudgetExhausted, number);
+                self.fail_at(
+                    outage.error,
+                    FailureReason::BudgetExhausted,
+                    number,
+                    Instant::now(),
+                );
             }
         }
-        None
     }
 
-    fn fail(&mut self, error: Error, reason: FailureReason, attempts: u32) {
+    fn publish(&mut self, observed_at: Instant, kind: LinkUpdateKind) -> bool {
+        debug_assert!(self.pending_link.is_none());
+        let Some(revision) = self.revision.checked_add(1) else {
+            self.fail_at(
+                Error::InvalidConfiguration,
+                FailureReason::Lifecycle,
+                0,
+                Instant::now(),
+            );
+            // No revision can represent another update. Refuse input and end
+            // the ordered stream; never reuse a status identity.
+            self.terminal_announced = true;
+            return false;
+        };
+        self.revision = revision;
+        self.pending_link = Some(LinkUpdate {
+            revision,
+            session: SessionId::new(self.sessions).expect("nonzero session counter"),
+            observed_at,
+            kind,
+        });
+        true
+    }
+
+    fn fail_at(
+        &mut self,
+        error: Error,
+        reason: FailureReason,
+        attempts: u32,
+        observed_at: Instant,
+    ) {
         self.link = Link::Failed(Failure {
             error,
             reason,
             attempts,
         });
+        self.failure_observed_at = Some(observed_at);
+        self.terminal_announced = false;
     }
 
     fn dial(&mut self, number: u32, outage: Option<Outage>) {
-        self.sessions += 1;
-        let Ok(session) = SessionId::new(self.sessions) else {
-            return self.fail(
+        let Some(next) = self.sessions.checked_add(1) else {
+            return self.fail_at(
                 Error::InvalidConfiguration,
                 FailureReason::Lifecycle,
                 number,
+                Instant::now(),
             );
         };
+        let Ok(session) = SessionId::new(next) else {
+            return self.fail_at(
+                Error::InvalidConfiguration,
+                FailureReason::Lifecycle,
+                number,
+                Instant::now(),
+            );
+        };
+        self.sessions = next;
         let handle = self.resume.as_ref().map(|point| point.handle().clone());
+        let started = Instant::now();
         self.link = Link::Connecting {
             attempt: Dialing::start(self.connector.connect(session, handle)),
             session,
             number,
-            started: Instant::now(),
+            started,
             outage,
         };
     }
@@ -670,13 +907,14 @@ impl<C: Connect> Supervisor<C> {
         number: u32,
         started: Instant,
         outage: Option<Outage>,
-    ) -> Notice {
+    ) {
+        let completed_at = connection.ready_at();
         let input = connection.input();
         if let Ok(retired) = RequestId::new(self.retired_through.get()) {
             input.retire(retired);
         }
         if outage.is_some() {
-            self.recoveries.push_back(Instant::now());
+            self.recoveries.push_back(completed_at);
         }
         let state = connection.subscribe_state();
         self.link = Link::Connected(Live {
@@ -685,18 +923,32 @@ impl<C: Connect> Supervisor<C> {
             session,
             state,
         });
-        Notice::Ready {
-            session,
-            context: outage.map_or(Context::Initial, |outage| outage.context),
-            attempts: number,
-            elapsed: outage.map_or(started, |outage| outage.since).elapsed(),
-            after: outage.map(|outage| outage.error),
+        if !self.is_connected() {
+            self.disconnected();
+            return;
         }
+        self.publish(
+            completed_at,
+            LinkUpdateKind::Ready {
+                context: outage.map_or(Context::Initial, |outage| outage.context),
+                attempts: number,
+                started_at: started,
+                completed_at,
+                outage_started_at: outage.map(|outage| outage.since),
+                after: outage.map(|outage| outage.error),
+            },
+        );
     }
 
-    fn attempt_failed(&mut self, error: Error, number: u32, outage: Option<Outage>) {
+    fn attempt_failed(
+        &mut self,
+        error: Error,
+        observed_at: Instant,
+        number: u32,
+        outage: Option<Outage>,
+    ) {
         let Some(mut outage) = outage else {
-            return self.fail(error, FailureReason::InitialConnect, 0);
+            return self.fail_at(error, FailureReason::InitialConnect, 0, observed_at);
         };
         // A refusal while presenting a handle may be the handle being refused.
         // Only a policy that tolerates a session without context may drop it.
@@ -710,7 +962,7 @@ impl<C: Connect> Supervisor<C> {
             Recovery::Reconnect => {}
             Recovery::Fatal if drop_handle => {}
             Recovery::Fatal | Recovery::Unavailable => {
-                return self.fail(error, FailureReason::NotRecoverable, number);
+                return self.fail_at(error, FailureReason::NotRecoverable, number, observed_at);
             }
         }
         if drop_handle {
@@ -718,11 +970,11 @@ impl<C: Connect> Supervisor<C> {
             outage.context = Context::Fresh;
         }
         if number >= self.policy.max_attempts {
-            return self.fail(error, FailureReason::AttemptsExhausted, number);
+            return self.fail_at(error, FailureReason::AttemptsExhausted, number, observed_at);
         }
-        let until = Instant::now() + self.policy.backoff(number);
+        let until = observed_at + self.policy.backoff(number);
         if until >= outage.since + self.policy.outage_budget {
-            return self.fail(error, FailureReason::BudgetExhausted, number);
+            return self.fail_at(error, FailureReason::BudgetExhausted, number, observed_at);
         }
         self.link = Link::Waiting {
             until,
@@ -742,15 +994,24 @@ impl<C: Connect> Supervisor<C> {
         let Link::Connected(live) = std::mem::replace(&mut self.link, placeholder) else {
             return;
         };
-        let error = match live.connection.state() {
+        let (state, observed_at) = live.connection.observed_state();
+        let error = match state {
             State::Disconnected(error) => error,
             State::Closed => {
                 self.tracked.set(None);
-                return self.fail(Error::Closed, FailureReason::Shutdown, 0);
+                return self.fail_at(Error::Closed, FailureReason::Shutdown, 0, observed_at);
             }
             // The stream ended with no terminal state: already a lifecycle
             // fault through the placeholder above.
-            State::Ready => return,
+            State::Ready => {
+                self.fail_at(
+                    Error::Transport,
+                    FailureReason::Lifecycle,
+                    0,
+                    Instant::now(),
+                );
+                return;
+            }
         };
         if let Some(point) = live.connection.resumption() {
             self.resume = Some(point);
@@ -761,7 +1022,7 @@ impl<C: Connect> Supervisor<C> {
             // announcing that the current state cannot be resumed.
             point.invalidate();
         }
-        self.pending.push_back(Notice::Unavailable { error });
+        let announced = self.publish(observed_at, LinkUpdateKind::Unavailable { error });
         let tracked = self.tracked.take();
         // A replacement can fail before accepting input, while the original
         // answer is still being consumed. Keep that answer and its terminal
@@ -780,7 +1041,9 @@ impl<C: Connect> Supervisor<C> {
                 tracked: Cell::new(tracked),
             });
         }
-        self.recover(error);
+        if announced {
+            self.recover(error, observed_at);
+        }
     }
 
     /// Every event the failed connection produced has been returned. Say what
@@ -802,12 +1065,13 @@ impl<C: Connect> Supervisor<C> {
         if let Link::Connected(live) = &self.link {
             live.input.retire(tracked.lineage.request);
         }
-        self.pending.push_back(match tracked.stage {
-            Stage::Generated => Notice::Settled {
+        debug_assert!(self.pending_output.is_none());
+        self.pending_output = Some(match tracked.stage {
+            Stage::Generated => OutputNotice::Settled {
                 lineage: tracked.lineage,
                 error: drain.error,
             },
-            stage => Notice::TurnLost {
+            stage => OutputNotice::TurnLost {
                 lineage: tracked.lineage,
                 stage,
                 error: drain.error,
@@ -815,9 +1079,9 @@ impl<C: Connect> Supervisor<C> {
         });
     }
 
-    fn recover(&mut self, error: Error) {
+    fn recover(&mut self, error: Error, observed_at: Instant) {
         if self.policy.max_attempts == 0 || error.recovery() != Recovery::Reconnect {
-            return self.fail(error, FailureReason::NotRecoverable, 0);
+            return self.fail_at(error, FailureReason::NotRecoverable, 0, observed_at);
         }
         let context = match &self.resume {
             Some(point)
@@ -831,7 +1095,7 @@ impl<C: Connect> Supervisor<C> {
             }
             Some(_) => Context::ResumedBeforeLatest,
             None if self.policy.require_context => {
-                return self.fail(error, FailureReason::NoResumableContext, 0);
+                return self.fail_at(error, FailureReason::NoResumableContext, 0, observed_at);
             }
             None => Context::Fresh,
         };
@@ -844,12 +1108,15 @@ impl<C: Connect> Supervisor<C> {
             self.recoveries.pop_front();
         }
         if self.recoveries.len() >= self.policy.max_recoveries as usize {
-            return self.fail(error, FailureReason::Unstable, 0);
+            return self.fail_at(error, FailureReason::Unstable, 0, observed_at);
+        }
+        if now >= observed_at + self.policy.outage_budget {
+            return self.fail_at(error, FailureReason::BudgetExhausted, 0, now);
         }
         self.dial(
             1,
             Some(Outage {
-                since: now,
+                since: observed_at,
                 error,
                 context,
             }),
