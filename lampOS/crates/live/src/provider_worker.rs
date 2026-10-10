@@ -2348,6 +2348,13 @@ mod tests {
 
     #[tokio::test]
     async fn fast_provider_burst_is_held_by_flow_control_and_arrives_complete_in_order() {
+        // Built before anything is on a real-time lease: encoding megabytes of
+        // scripted audio must not be what makes this harness miss a heartbeat.
+        const MESSAGES: usize = 40;
+        const FRAMES: usize = lamp_gemini::MAX_OUTPUT_SAMPLES;
+        let burst: Vec<_> = (0..MESSAGES)
+            .map(|index| provider_audio(index as i16, FRAMES))
+            .collect();
         let mut rig = LiveRig::start(quick_policy());
         let mut dial = rig.ready().await;
         let request = rig.speak(&mut dial, false, true).await;
@@ -2356,13 +2363,9 @@ mod tests {
         // tick, so its backlog would pass the 512-packet bound that used to
         // end it. The IPC freshness rule means the coordinator side must keep
         // reading; it does, as fast as packets arrive.
-        const MESSAGES: usize = 40;
-        const FRAMES: usize = lamp_gemini::MAX_OUTPUT_SAMPLES;
         let mut service = dial.service;
         let script = tokio::spawn(async move {
-            service
-                .burst((0..MESSAGES).map(|index| provider_audio(index as i16, FRAMES)))
-                .await;
+            service.burst(burst).await;
             service.send(idle_complete()).await;
             service
         });
@@ -2632,12 +2635,15 @@ mod tests {
 
     #[tokio::test]
     async fn interrupting_a_credit_paced_answer_is_not_delayed_by_its_queued_audio() {
+        let answer: Vec<_> = (0..20)
+            .map(|index| provider_audio(index, LARGEST))
+            .collect();
         let (mut rig, granted) = credited(quick_policy(), Reporting::Legacy);
         let mut dial = rig.ready().await;
         let old = rig.speak(&mut dial, false, true).await;
         // Forty seconds generated at once; the worker holds its full backlog.
-        for index in 0..20 {
-            dial.service.send(provider_audio(index, LARGEST)).await;
+        for message in answer {
+            dial.service.send(message).await;
             rig.publish();
         }
         // Two seconds are played at speaking speed.
