@@ -8,6 +8,7 @@
 //! twice. See `docs/gemini-session-reliability.md`.
 use crate::{
     config::ProviderConfig,
+    provider_flow::{OutputSender, PACKET_SAMPLES},
     transport::{Channel, WorkerChannels},
     wire::{Control, WorkerEvent},
 };
@@ -22,10 +23,6 @@ use std::{
     collections::VecDeque,
     io,
     path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
     time::{Duration, Instant},
 };
 
@@ -264,23 +261,8 @@ pub enum Reporting {
     Typed,
 }
 
-/// Provisional seam for the coordinator's cumulative packet credits: the total
-/// number of audio packets it has had room for since this worker started.
-/// Absent, audio is not held here, which is the contract today. The wire form
-/// belongs to the coordinator's owner and is not defined in this file.
-#[derive(Clone, Default)]
-pub(crate) struct AudioCredit(Option<Arc<AtomicU64>>);
-impl AudioCredit {
-    fn granted(&self) -> u64 {
-        self.0
-            .as_ref()
-            .map_or(u64::MAX, |granted| granted.load(Ordering::Acquire))
-    }
-}
-
 pub(crate) struct Options {
     pub(crate) reporting: Reporting,
-    pub(crate) credit: AudioCredit,
 }
 
 #[derive(Debug, Serialize)]
@@ -289,23 +271,26 @@ enum Outbound {
     Output(ProviderOutput),
     Status(ProviderStatus),
 }
-impl Outbound {
-    fn is_audio(&self) -> bool {
-        matches!(self, Self::Output(ProviderOutput::Audio { .. }))
-    }
-    /// Output of a cancelled request that the coordinator would only discard.
-    fn cancelled(&self, retired_through: u64) -> bool {
-        match self {
-            Self::Output(
-                ProviderOutput::Audio { request, .. }
-                | ProviderOutput::Transcript {
-                    request: Some(request),
-                    ..
-                },
-            ) => *request <= retired_through,
-            _ => false,
-        }
-    }
+
+/// Unsent output of retired requests is dropped, as the capacity contract
+/// requires: at playback pace it would delay the next answer by seconds.
+/// Survivors keep their order. Link and failure statuses are never dropped.
+fn prune_retired_output(output: &mut VecDeque<Outbound>, retired_through: u64) {
+    output.retain(|item| {
+        let Outbound::Output(event) = item else {
+            return true;
+        };
+        let request = match event {
+            ProviderOutput::Ready { .. } => None,
+            ProviderOutput::Transcript { request, .. } => *request,
+            ProviderOutput::Started { request, .. }
+            | ProviderOutput::Audio { request, .. }
+            | ProviderOutput::GenerationComplete { request }
+            | ProviderOutput::Interrupted { request }
+            | ProviderOutput::TurnComplete { request, .. } => Some(*request),
+        };
+        request.is_none_or(|request| request > retired_through)
+    });
 }
 
 pub async fn run(channels: WorkerChannels, boot: BootId, config_path: &Path) -> Result<()> {
@@ -316,7 +301,6 @@ pub async fn run(channels: WorkerChannels, boot: BootId, config_path: &Path) -> 
     let provider = Supervisor::new(Dialer::new(config), RecoveryPolicy::default())?;
     let options = Options {
         reporting: Reporting::Legacy,
-        credit: AudioCredit::default(),
     };
     serve(channels, boot, provider, options).await
 }
@@ -337,8 +321,6 @@ async fn serve<C: Connect>(
     let mut urgent: VecDeque<Outbound> = VecDeque::with_capacity(4);
     let mut output = VecDeque::with_capacity(MAX_QUEUED_OUTPUT);
     let mut output_sequence = 0u64;
-    let mut audio_sent = 0u64;
-    let mut purged_through = 0u64;
     let mut failed_through = 0u64;
     let mut discards = DiscardLog::default();
     loop {
@@ -356,12 +338,7 @@ async fn serve<C: Connect>(
                 provider.maintain();
                 // Local retirement cannot wait behind a full control slice.
                 intake.handoff.synchronize(&provider)?;
-                if intake.handoff.retired_through > purged_through {
-                    // A cancelled answer must not delay the next one: at
-                    // playback pace its queued audio would take seconds to send.
-                    purged_through = intake.handoff.retired_through;
-                    output.retain(|item: &Outbound| !item.cancelled(purged_through));
-                }
+                prune_retired_output(&mut output, intake.handoff.retired_through);
                 if control == ControlDrain::Deferred { continue; }
                 let received = intake.receive_inputs(&mut monotonic_us, &mut || channels.control.receive(), &mut channels.data, &provider, &mut control_budget);
                 match received {
@@ -379,18 +356,16 @@ async fn serve<C: Connect>(
                     failed_through = request;
                     output.push_back(Outbound::Status(ProviderStatus::TurnFailed { request, stage: FailedStage::NotDelivered, reason: Fault::Local }));
                 }
-                let granted = options.credit.granted();
+                // receive_inputs can observe a newer authority too.
+                prune_retired_output(&mut output, intake.handoff.retired_through);
                 for _ in 0..8 {
+                    // Link status goes first; it still needs capacity like
+                    // every other packet.
                     let queue = if urgent.is_empty() { &mut output } else { &mut urgent };
                     let Some(front)=queue.front() else {break;};
-                    // Everything behind a held audio packet waits with it, so
-                    // lifecycle never overtakes the audio it describes.
-                    if front.is_audio() && audio_sent >= granted { break; }
-                    match channels.data.send(front) {
-                        Ok(())=>{ if front.is_audio() { audio_sent += 1; } queue.pop_front(); },
-                        Err(error) if error.kind()==io::ErrorKind::WouldBlock=>break,
-                        Err(error)=>return Err(error.into()),
-                    }
+                    if intake.output_flow.try_send(|| channels.data.send(front))? {
+                        queue.pop_front();
+                    } else { break; }
                 }
             },
             notice=provider.next(), if output.len() < OUTPUT_HIGH_WATER=>{
@@ -474,7 +449,7 @@ fn forward(
         Event::Audio { lineage, pcm, .. } => {
             let provider_event_at_us = monotonic_us();
             let source_frames = pcm.len();
-            for (index, part) in pcm.chunks(960).enumerate() {
+            for (index, part) in pcm.chunks(PACKET_SAMPLES).enumerate() {
                 *output_sequence = output_sequence
                     .checked_add(1)
                     .ok_or_else(|| io::Error::other("provider output counter exhausted"))?;
@@ -483,7 +458,7 @@ fn forward(
                     sequence: *output_sequence,
                     provider_event_at_us,
                     source_frames,
-                    source_offset: index * 960,
+                    source_offset: index * PACKET_SAMPLES,
                     samples: part.to_vec(),
                 });
             }
@@ -591,6 +566,7 @@ struct RetainedInput {
 struct ProviderIntake {
     guard: BoundaryGuard,
     handoff: InputHandoff,
+    output_flow: OutputSender,
     last_control_us: u64,
     saw_allowed: bool,
     retained: Option<RetainedInput>,
@@ -601,6 +577,7 @@ impl ProviderIntake {
         Self {
             guard: BoundaryGuard::new(boot, MonoTime::from_micros(now_us)),
             handoff: InputHandoff::default(),
+            output_flow: OutputSender::default(),
             last_control_us: now_us,
             saw_allowed: false,
             retained: None,
@@ -678,6 +655,9 @@ impl ProviderIntake {
                         return Ok(ControlDrain::Stopped);
                     }
                     self.saw_allowed |= snapshot.microphone_permission() == Permission::Allowed;
+                }
+                Control::ProviderOutputCapacity { through } => {
+                    self.output_flow.grant(through)?;
                 }
                 Control::StartCapture | Control::ConnectReference { .. } => {
                     return Err(io::Error::other("invalid provider command").into());
@@ -998,6 +978,78 @@ mod tests {
     use std::cell::{Cell, RefCell};
 
     const NOW: u64 = 10_000_000;
+
+    #[test]
+    fn output_capacity_cannot_renew_authority_or_controller_heartbeat() {
+        let mut intake = ProviderIntake::new(BootId::new([9; 16]).unwrap(), NOW);
+        let mut budget = CONTROL_SLICE;
+        let mut command = Some(Control::ProviderOutputCapacity { through: 2 });
+        let error = intake
+            .drain_control(
+                &mut || NOW + 250_001,
+                &mut || Ok(command.take()),
+                &mut budget,
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("heartbeat expired"));
+        assert_eq!(intake.last_control_us, NOW);
+        assert!(intake.guard.state().is_none());
+        assert!(intake.stopped);
+    }
+
+    #[test]
+    fn retired_output_is_removed_before_new_output_without_changing_survivor_order() {
+        let mut queue = VecDeque::new();
+        for sequence in 0..MAX_QUEUED_OUTPUT - 4 {
+            queue.push_back(Outbound::Output(ProviderOutput::Audio {
+                request: 1,
+                sequence: sequence as u64 + 1,
+                provider_event_at_us: NOW,
+                source_frames: PACKET_SAMPLES,
+                source_offset: 0,
+                samples: vec![1; PACKET_SAMPLES],
+            }));
+        }
+        queue.push_back(Outbound::Output(ProviderOutput::TurnComplete {
+            request: 1,
+            idle: true,
+        }));
+        // A failure report is never dropped, even for a request since retired.
+        queue.push_back(Outbound::Status(ProviderStatus::TurnFailed {
+            request: 1,
+            stage: FailedStage::Responding,
+            reason: Fault::Transport,
+        }));
+        queue.push_back(Outbound::Output(ProviderOutput::Started {
+            request: 2,
+            waiting_for_barrier: true,
+        }));
+        queue.push_back(Outbound::Output(ProviderOutput::Transcript {
+            request: None,
+            text: "unattributed".into(),
+            finished: true,
+        }));
+        prune_retired_output(&mut queue, 1);
+        assert_eq!(queue.len(), 3);
+        assert!(matches!(
+            queue.pop_front(),
+            Some(Outbound::Status(ProviderStatus::TurnFailed {
+                request: 1,
+                ..
+            }))
+        ));
+        assert!(matches!(
+            queue.pop_front(),
+            Some(Outbound::Output(ProviderOutput::Started { request: 2, .. }))
+        ));
+        assert!(matches!(
+            queue.pop_front(),
+            Some(Outbound::Output(ProviderOutput::Transcript {
+                request: None,
+                ..
+            }))
+        ));
+    }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum Call {
@@ -1933,6 +1985,7 @@ mod tests {
     struct LiveRig {
         _directory: crate::process::SessionDirectory,
         parent: WorkerChannels,
+        output_flow: crate::provider_flow::OutputReceiver,
         owner: Controller,
         snapshot: Snapshot,
         dials: UnboundedReceiver<Dial>,
@@ -1947,7 +2000,6 @@ mod tests {
                 policy,
                 Options {
                     reporting: Reporting::Legacy,
-                    credit: AudioCredit::default(),
                 },
             )
         }
@@ -1969,6 +2021,7 @@ mod tests {
             let mut rig = Self {
                 _directory: directory,
                 parent,
+                output_flow: crate::provider_flow::OutputReceiver::default(),
                 owner,
                 snapshot,
                 dials,
@@ -2009,11 +2062,21 @@ mod tests {
                 Wire::Status(status) => panic!("unexpected provider status: {status:?}"),
             }
         }
+        /// One packet, if one has arrived, counted against output capacity
+        /// and its capacity returned as an empty reply buffer would.
+        fn take(&mut self) -> Option<Wire> {
+            let wire = self.parent.data.receive::<Wire>().unwrap()?;
+            self.output_flow.received().unwrap();
+            self.output_flow
+                .replenish(0, &mut self.parent.control)
+                .unwrap();
+            Some(wire)
+        }
         async fn wire(&mut self) -> Wire {
             let deadline = Instant::now() + Duration::from_secs(5);
             loop {
                 self.publish();
-                if let Some(wire) = self.parent.data.receive::<Wire>().unwrap() {
+                if let Some(wire) = self.take() {
                     return wire;
                 }
                 assert!(!self.worker.is_finished(), "worker ended before output");
@@ -2136,6 +2199,87 @@ mod tests {
     }
     fn idle_complete() -> serde_json::Value {
         json!({"serverContent":{"turnComplete":true,"interactionStatus":"IDLE"}})
+    }
+
+    #[tokio::test]
+    async fn exhausted_output_credit_preserves_input_and_priority_stop() {
+        let mut rig = LiveRig::start(quick_policy());
+        let mut dial = rig.ready().await;
+        let request = rig.speak(&mut dial, false, true).await;
+        dial.service
+            .send(provider_audio(5, lamp_gemini::MAX_OUTPUT_SAMPLES))
+            .await;
+        // Consume the two already-reserved packets without returning capacity.
+        // Nothing else may be timestamped/sent while playback has no space.
+        for _ in 0..2 {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            loop {
+                rig.publish();
+                if let Some(output) = rig.parent.data.receive::<ProviderOutput>().unwrap() {
+                    rig.output_flow.received().unwrap();
+                    assert!(
+                        matches!(output, ProviderOutput::Audio { request: current, .. } if current == request)
+                    );
+                    break;
+                }
+                assert!(Instant::now() < deadline);
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        }
+        rig.pump(Duration::from_millis(150)).await;
+        assert!(
+            rig.parent
+                .data
+                .receive::<ProviderOutput>()
+                .unwrap()
+                .is_none()
+        );
+        assert!(!rig.worker.is_finished());
+
+        let next = rig
+            .owner
+            .admit(real_time(), AdmittedInput::Interruption)
+            .unwrap();
+        rig.publish();
+        let privacy_generation = rig.snapshot.microphone_generation();
+        rig.parent
+            .data
+            .send(ProviderInput::Start {
+                request: next.turn(),
+                privacy_generation,
+            })
+            .unwrap();
+        rig.parent
+            .data
+            .send(ProviderInput::Audio {
+                request: next.turn(),
+                privacy_generation,
+                sequence: 1,
+                read_completed_at_us: monotonic_us(),
+                samples: vec![9; 160],
+            })
+            .unwrap();
+        // The new microphone activity reaches the scripted service even while
+        // all provider-output credits are exhausted. No old audio is relabelled.
+        let start = rig.service_message(&mut dial).await;
+        assert!(start["realtimeInput"].get("activityStart").is_some());
+        let audio = rig.service_message(&mut dial).await;
+        assert!(audio["realtimeInput"].get("audio").is_some());
+        assert!(
+            rig.parent
+                .data
+                .receive::<ProviderOutput>()
+                .unwrap()
+                .is_none()
+        );
+        rig.parent.control.send(Control::Stop).unwrap();
+        let (result, elapsed) = rig.exit().await;
+        assert!(result.is_ok());
+        println!(
+            "MEASURED stop_during_zero_output_credit_us={} (host control send to worker task end)",
+            elapsed.as_micros()
+        );
+        assert!(elapsed < Duration::from_millis(100));
     }
 
     #[tokio::test]
@@ -2359,8 +2503,8 @@ mod tests {
         let mut dial = rig.ready().await;
         let request = rig.speak(&mut dial, false, true).await;
         // 80 s of speech offered at once: 40 provider messages of 2 s each,
-        // 2,000 IPC packets. This worker forwards at most 8 packets per 2 ms
-        // tick, so its backlog would pass the 512-packet bound that used to
+        // 2,000 IPC packets. The coordinator now grants at most two packets
+        // in flight, so its backlog would pass the 512-packet bound that used to
         // end it. The IPC freshness rule means the coordinator side must keep
         // reading; it does, as fast as packets arrive.
         let mut service = dial.service;
@@ -2463,61 +2607,139 @@ mod tests {
         assert!(samples.iter().all(|sample| *sample == 7));
     }
 
-    // ---- Speaking speed with packet credits -----------------------------
+    // ---- Speaking speed through the output capacity contract ------------
     //
-    // Real time: the IPC and authority clocks cannot be paused. One packet
-    // is 960 frames, so 25 packets per second is 24,000 samples per second.
+    // Real time: the IPC and authority clocks cannot be paused. The harness
+    // plays the coordinator exactly as `provider-flow-control.md` specifies:
+    // every received packet is counted, and capacity is granted from the free
+    // space of a reply buffer that drains at 24,000 samples per second.
 
-    const PACKETS_PER_SECOND: u64 = 25;
     const LARGEST: usize = lamp_gemini::MAX_OUTPUT_SAMPLES;
+    const REPLY_BUFFER: usize = crate::provider_flow::MAX_REPLY_SAMPLES;
 
-    fn credited(policy: RecoveryPolicy, reporting: Reporting) -> (LiveRig, Arc<AtomicU64>) {
-        let granted = Arc::new(AtomicU64::new(0));
-        let rig = LiveRig::start_with(
-            policy,
-            Options {
-                reporting,
-                credit: AudioCredit(Some(granted.clone())),
-            },
-        );
-        (rig, granted)
+    /// The coordinator's reply buffer and speaker, reduced to their arithmetic.
+    /// Playback advances by measured time only: time spent held or with
+    /// nothing to play is never made up afterwards.
+    struct Speaker {
+        /// Samples the buffer may hold. The real coordinator has 30 s; a test
+        /// may give it less so a short answer still exhausts capacity.
+        room: usize,
+        received: u64,
+        played: u64,
+        /// When playback was last advanced; set by the first audio.
+        at: Option<Instant>,
+        /// Microsecond-samples not yet amounting to a whole sample.
+        fraction: u64,
+        held: Duration,
+        /// Samples of playing time lost with an empty buffer.
+        starved: u64,
+        /// The largest backlog ever held.
+        peak: usize,
+    }
+    impl Speaker {
+        fn new(room: usize) -> Self {
+            Self {
+                room,
+                received: 0,
+                played: 0,
+                at: None,
+                fraction: 0,
+                held: Duration::ZERO,
+                starved: 0,
+                peak: 0,
+            }
+        }
+        fn hear(&mut self, samples: usize) {
+            self.at.get_or_insert_with(Instant::now);
+            self.received += samples as u64;
+        }
+        /// Advance playback to now, unless it is on `hold`, and return the
+        /// backlog.
+        fn backlog(&mut self, hold: bool) -> usize {
+            if let Some(last) = self.at {
+                let now = Instant::now();
+                self.at = Some(now);
+                let elapsed = now - last;
+                if hold {
+                    self.held += elapsed;
+                } else {
+                    self.fraction += elapsed.as_micros() as u64 * 24_000;
+                    let due = self.fraction / 1_000_000;
+                    self.fraction %= 1_000_000;
+                    let waiting = self.received - self.played;
+                    self.played += due.min(waiting);
+                    self.starved += due.saturating_sub(waiting);
+                }
+            }
+            let backlog = (self.received - self.played) as usize;
+            self.peak = self.peak.max(backlog);
+            backlog
+        }
+        /// Cancel what is queued, as the coordinator does on a new admission.
+        fn flush(&mut self) {
+            self.played = self.received;
+        }
+    }
+    impl LiveRig {
+        /// One coordinator tick: heartbeat, then capacity from the speaker's
+        /// free space. A smaller `room` is expressed as space already taken.
+        fn grant(&mut self, speaker: &mut Speaker, hold: bool) {
+            self.publish();
+            let backlog = speaker.backlog(hold);
+            assert!(backlog <= speaker.room, "reply buffer overran: {backlog}");
+            self.output_flow
+                .replenish(
+                    REPLY_BUFFER - speaker.room + backlog,
+                    &mut self.parent.control,
+                )
+                .unwrap();
+        }
+        /// Every packet that has arrived, each counted against capacity. An
+        /// excess over what was granted fails here.
+        fn arrived(&mut self) -> Vec<Wire> {
+            let mut all = Vec::new();
+            while let Some(wire) = self.parent.data.receive::<Wire>().unwrap() {
+                self.output_flow.received().unwrap();
+                all.push(wire);
+            }
+            all
+        }
     }
     struct Playback {
         packets: u64,
         frames: usize,
-        took: Duration,
-        /// Largest lead of delivered packets over granted credit. Never positive.
-        over_credit: i64,
+        /// First tick to the idle completion arriving.
+        completed: Duration,
+        /// First tick to the last sample leaving the speaker.
+        finished: Duration,
+        held: Duration,
+        starved: Duration,
+        peak: usize,
     }
     impl LiveRig {
-        /// Take one answer as a coordinator with packet credits would: room for
-        /// one more packet every 40 ms, packets read as soon as they arrive.
-        /// Playback stops once, for `pause`, after `pause_after` packets.
-        async fn play_with_credit(
+        /// Take one answer of `total` samples at speaking speed, to the end of
+        /// its playback. Playback stops once, for `pause`, after `pause_after`
+        /// samples have been played.
+        async fn play_at_speaking_speed(
             &mut self,
-            granted: &AtomicU64,
             request: u64,
+            room: usize,
+            total: u64,
             pause_after: u64,
             pause: Duration,
         ) -> Playback {
-            let base = granted.load(Ordering::Acquire);
+            let mut speaker = Speaker::new(room);
             let started = Instant::now();
-            let mut paused: Option<Instant> = None;
-            let mut pause_spent = Duration::ZERO;
-            let (mut packets, mut frames, mut over_credit) = (0u64, 0usize, i64::MIN);
+            let (mut packets, mut frames) = (0u64, 0usize);
+            let mut completed = None;
+            // When the last sample left the speaker, and the playing time
+            // lost to an empty buffer up to then.
+            let mut finished = None;
             loop {
-                self.publish();
-                if packets >= pause_after && pause_spent < pause {
-                    let since = *paused.get_or_insert_with(Instant::now);
-                    if since.elapsed() >= pause {
-                        pause_spent = pause;
-                    }
-                } else {
-                    let playing = started.elapsed() - pause_spent;
-                    let room = playing.as_millis() as u64 * PACKETS_PER_SECOND / 1_000 + 1;
-                    granted.fetch_max(base + room, Ordering::AcqRel);
-                }
-                while let Some(wire) = self.parent.data.receive::<Wire>().unwrap() {
+                let hold = speaker.played >= pause_after && speaker.held < pause;
+                self.grant(&mut speaker, hold);
+                for wire in self.arrived() {
+                    assert!(completed.is_none(), "output after completion: {wire:?}");
                     match wire {
                         Wire::Output(ProviderOutput::Audio {
                             request: owner,
@@ -2533,40 +2755,65 @@ mod tests {
                             assert!(samples.iter().all(|sample| *sample == expected));
                             frames += samples.len();
                             packets += 1;
-                            let lead =
-                                (base + packets) as i64 - granted.load(Ordering::Acquire) as i64;
-                            over_credit = over_credit.max(lead);
+                            speaker.hear(samples.len());
                         }
                         Wire::Output(ProviderOutput::GenerationComplete { .. }) => {}
                         Wire::Output(ProviderOutput::TurnComplete { idle: true, .. }) => {
-                            return Playback {
-                                packets,
-                                frames,
-                                took: started.elapsed(),
-                                over_credit,
-                            };
+                            completed = Some(started.elapsed());
                         }
                         other => panic!("unexpected at speaking speed: {other:?}"),
                     }
                 }
+                if finished.is_none() && speaker.played == total {
+                    finished = Some((started.elapsed(), speaker.starved));
+                }
+                if let (Some(completed), Some((finished, starved))) = (completed, finished) {
+                    return Playback {
+                        packets,
+                        frames,
+                        completed,
+                        finished,
+                        held: speaker.held,
+                        starved: Duration::from_micros(starved * 1_000_000 / 24_000),
+                        peak: speaker.peak,
+                    };
+                }
                 assert!(!self.worker.is_finished(), "worker ended mid-answer");
+                assert!(
+                    started.elapsed() < Duration::from_secs(total / 24_000 + 120),
+                    "answer never finished"
+                );
                 tokio::time::sleep(Duration::from_millis(2)).await;
             }
         }
     }
+    /// How long the scripted network stalls inside a long answer, and how many
+    /// largest messages then arrive with no gap between them.
+    const STALL: Duration = Duration::from_secs(3);
+    const BURST: u64 = 5;
+
     /// The service side of one long answer: largest messages at ten times
-    /// speaking speed, pings answered throughout, idle completion withheld
-    /// until playback is assumed over. Returns how long the writing took, and
-    /// the service: dropping it would be a connection loss.
+    /// speaking speed, a network stall a third of the way in followed by a
+    /// ten-second burst, pings answered throughout, and idle completion
+    /// withheld for the answer's own duration, as the service assumes
+    /// playback. Returns how long the writing took, and the service: dropping
+    /// it would be a connection loss.
     fn long_answer(
         mut service: lamp_gemini::testing::FakeService,
         seconds: u64,
     ) -> JoinHandle<(Duration, lamp_gemini::testing::FakeService)> {
         tokio::spawn(async move {
             let started = Instant::now();
-            for index in 0..seconds / 2 {
+            let messages = seconds / 2;
+            let stall_at = messages / 3;
+            for index in 0..messages {
+                if index == stall_at {
+                    service.rest(STALL).await;
+                }
                 service.send(provider_audio(index as i16, LARGEST)).await;
-                service.rest(Duration::from_millis(200)).await;
+                if !(stall_at..stall_at + BURST - 1).contains(&index) {
+                    service.rest(Duration::from_millis(200)).await;
+                }
             }
             let written = started.elapsed();
             service
@@ -2579,36 +2826,56 @@ mod tests {
             (written, service)
         })
     }
-    async fn speaking_speed(seconds: u64, pause: Duration) {
-        let (mut rig, granted) = credited(quick_policy(), Reporting::Legacy);
+    /// A `seconds` long answer through a reply buffer of `room` samples, with
+    /// playback held for `pause` once five seconds have been played.
+    async fn speaking_speed(seconds: u64, room: usize, pause: Duration) {
+        let mut rig = LiveRig::start(quick_policy());
         let mut dial = rig.ready().await;
         let request = rig.speak(&mut dial, false, true).await;
         let script = long_answer(dial.service, seconds);
+        let total = seconds * 24_000;
         let played = rig
-            .play_with_credit(&granted, request, 5 * PACKETS_PER_SECOND, pause)
+            .play_at_speaking_speed(request, room, total, 5 * 24_000, pause)
             .await;
         let (written, _service) = script.await.unwrap();
-        assert_eq!(played.packets, seconds * PACKETS_PER_SECOND);
-        assert_eq!(played.frames as u64, seconds * 24_000);
-        // Never ahead of the credit it was given.
-        assert!(played.over_credit <= 0, "{}", played.over_credit);
-        let expected = Duration::from_secs(seconds) + pause;
+        assert_eq!(played.frames as u64, total);
+        assert_eq!(played.packets, seconds * 25);
         println!(
-            "MEASURED speaking_speed seconds={seconds} pause_ms={} played_in_ms={} service_wrote_in_ms={} packets={} (scripted service to credited local IPC reader, host)",
-            pause.as_millis(),
-            played.took.as_millis(),
+            "MEASURED speaking_speed seconds={seconds} reply_buffer_s={:.1} hold_ms={} playback_finished_ms={} completion_received_ms={} starved_ms={} service_wrote_in_ms={} packets={} peak_backlog_s={:.2} (scripted service through output capacity to a local IPC reader and a modeled speaker, host)",
+            room as f64 / 24_000.0,
+            played.held.as_millis(),
+            played.finished.as_millis(),
+            played.completed.as_millis(),
+            played.starved.as_millis(),
             written.as_millis(),
-            played.packets
+            played.packets,
+            played.peak as f64 / 24_000.0
         );
+        // Playback was held for the whole pause and never ran dry: the stall
+        // and the pause were both absorbed by what was already buffered.
+        assert!(played.held >= pause, "{:?}", played.held);
         assert!(
-            played.took >= expected.saturating_sub(Duration::from_millis(200))
-                && played.took <= expected + Duration::from_secs(2),
+            played.starved < Duration::from_millis(100),
             "{:?}",
-            played.took
+            played.starved
         );
+        // So the answer took its own length plus the pause, and no longer.
+        let expected = Duration::from_secs(seconds) + played.held + played.starved;
+        assert!(
+            played.finished >= expected && played.finished <= expected + Duration::from_secs(1),
+            "{:?} against {expected:?}",
+            played.finished
+        );
+        // Its completion needs capacity like any packet and still arrives.
+        assert!(played.completed <= played.finished + Duration::from_secs(1));
+        // Capacity really was exhausted: the buffer filled and stayed bounded.
+        assert!(played.peak <= room);
+        if total as usize > room {
+            assert!(played.peak + 2 * PACKET_SAMPLES >= room, "{}", played.peak);
+        }
         // The service was not slowed to playback speed.
         assert!(
-            written <= Duration::from_secs(seconds / 4 + 3),
+            written <= STALL + Duration::from_secs(seconds / 4 + 3),
             "{written:?}"
         );
         rig.parent.control.send(Control::Stop).unwrap();
@@ -2616,63 +2883,70 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn twenty_second_answer_in_largest_messages_follows_packet_credit() {
-        // Playback also stops for four seconds: a temporarily full buffer.
-        speaking_speed(20, Duration::from_secs(4)).await;
+    async fn twenty_second_answer_through_a_five_second_reply_buffer_follows_capacity() {
+        // A small buffer so a short answer exhausts capacity for most of its
+        // length. Playback also stops for four seconds with the buffer full.
+        speaking_speed(20, 5 * 24_000, Duration::from_secs(4)).await;
     }
 
     #[tokio::test]
     #[ignore = "one minute of real time; run explicitly"]
-    async fn sixty_second_answer_follows_packet_credit() {
-        speaking_speed(60, Duration::from_secs(10)).await;
+    async fn sixty_second_answer_follows_output_capacity() {
+        speaking_speed(60, REPLY_BUFFER, Duration::from_secs(10)).await;
     }
 
     #[tokio::test]
     #[ignore = "three minutes of real time; run explicitly"]
-    async fn three_minute_answer_follows_packet_credit() {
-        speaking_speed(180, Duration::from_secs(20)).await;
+    async fn three_minute_answer_follows_output_capacity() {
+        speaking_speed(180, REPLY_BUFFER, Duration::from_secs(20)).await;
     }
 
     #[tokio::test]
-    async fn interrupting_a_credit_paced_answer_is_not_delayed_by_its_queued_audio() {
+    async fn interrupting_a_capacity_paced_answer_is_not_delayed_by_its_queued_audio() {
         let answer: Vec<_> = (0..20)
             .map(|index| provider_audio(index, LARGEST))
             .collect();
-        let (mut rig, granted) = credited(quick_policy(), Reporting::Legacy);
+        let mut rig = LiveRig::start(quick_policy());
         let mut dial = rig.ready().await;
         let old = rig.speak(&mut dial, false, true).await;
-        // Forty seconds generated at once; the worker holds its full backlog.
+        // Forty seconds generated at once into a two-second reply buffer: the
+        // worker holds its full backlog and the transport holds the rest.
+        let mut speaker = Speaker::new(2 * 24_000);
+        // One coordinator tick while only the old answer may arrive.
+        let hear = |rig: &mut LiveRig, speaker: &mut Speaker| {
+            rig.grant(speaker, false);
+            for wire in rig.arrived() {
+                let Wire::Output(ProviderOutput::Audio {
+                    request, samples, ..
+                }) = wire
+                else {
+                    panic!("audio only");
+                };
+                assert_eq!(request, old);
+                speaker.hear(samples.len());
+            }
+        };
         for message in answer {
             dial.service.send(message).await;
-            rig.publish();
+            hear(&mut rig, &mut speaker);
         }
-        // Two seconds are played at speaking speed.
         let started = Instant::now();
-        let mut heard = 0u64;
-        while heard < 2 * PACKETS_PER_SECOND {
-            rig.publish();
-            let room = started.elapsed().as_millis() as u64 * PACKETS_PER_SECOND / 1_000 + 1;
-            granted.fetch_max(room, Ordering::AcqRel);
-            while let Some(wire) = rig.parent.data.receive::<Wire>().unwrap() {
-                assert!(matches!(
-                    wire,
-                    Wire::Output(ProviderOutput::Audio { request, .. }) if request == old
-                ));
-                heard += 1;
-            }
+        while speaker.played < 2 * 24_000 {
+            hear(&mut rig, &mut speaker);
             assert!(
-                started.elapsed() < Duration::from_secs(6),
-                "heard {heard} packets"
+                started.elapsed() < Duration::from_secs(8),
+                "playback stalled"
             );
             tokio::time::sleep(Duration::from_millis(2)).await;
         }
-        // The person interrupts. Credit keeps arriving at speaking speed only.
+        // The person interrupts. The coordinator drops what it had queued.
         let owner = rig
             .owner
             .admit(real_time(), AdmittedInput::Interruption)
             .unwrap();
         let new = owner.turn();
-        rig.publish();
+        speaker.flush();
+        rig.grant(&mut speaker, false);
         let interrupted_at = Instant::now();
         let privacy_generation = rig.snapshot.microphone_generation();
         rig.parent
@@ -2701,54 +2975,56 @@ mod tests {
                 privacy_generation: rig.snapshot.microphone_generation(),
             })
             .unwrap();
-        for field in ["activityStart", "audio"] {
-            let message = rig.service_message(&mut dial).await;
-            assert!(message["realtimeInput"].get(field).is_some(), "{message}");
-        }
-        dial.service
-            .send(json!({"serverContent":{"interrupted":true}}))
-            .await;
-        dial.service.send(idle_complete()).await;
-        let message = rig.service_message(&mut dial).await;
-        assert!(message["realtimeInput"].get("activityEnd").is_some());
-        dial.service.send(provider_audio(99, 960)).await;
-        // Count what still arrives for the cancelled answer on the way.
+        // The scripted service confirms the interruption and answers. Packets
+        // keep being counted and capacity granted while it does.
         let mut stale = 0u64;
-        let first_new = loop {
-            rig.publish();
-            let room = started.elapsed().as_millis() as u64 * PACKETS_PER_SECOND / 1_000 + 1;
-            granted.fetch_max(room, Ordering::AcqRel);
-            let mut answered = None;
-            while let Some(wire) = rig.parent.data.receive::<Wire>().unwrap() {
+        let mut first_new = None;
+        let mut step = 0;
+        while first_new.is_none() {
+            rig.grant(&mut speaker, false);
+            for wire in rig.arrived() {
                 match wire {
                     Wire::Output(ProviderOutput::Audio {
                         request, samples, ..
                     }) if request == new => {
                         assert!(samples.iter().all(|sample| *sample == 99));
-                        answered = Some(interrupted_at.elapsed());
+                        first_new.get_or_insert(interrupted_at.elapsed());
                     }
+                    // Already sent before the interruption: at most the two
+                    // packets of outstanding capacity. Discarded on arrival.
                     Wire::Output(ProviderOutput::Audio { .. }) => stale += 1,
                     Wire::Output(_) => {}
                     Wire::Status(status) => panic!("unexpected status: {status:?}"),
                 }
             }
-            if let Some(after) = answered {
-                break after;
+            if let Some(message) = dial.service.try_receive(Duration::from_millis(2)).await {
+                let input = &message["realtimeInput"];
+                let expected = ["activityStart", "audio", "activityEnd"][step];
+                assert!(input.get(expected).is_some(), "{message}");
+                step += 1;
+                if step == 2 {
+                    dial.service
+                        .send(json!({"serverContent":{"interrupted":true}}))
+                        .await;
+                    dial.service.send(idle_complete()).await;
+                } else if step == 3 {
+                    dial.service.send(provider_audio(99, 960)).await;
+                }
             }
             assert!(
                 interrupted_at.elapsed() < Duration::from_secs(5),
                 "new answer delayed"
             );
-            tokio::time::sleep(Duration::from_millis(2)).await;
-        };
+        }
+        let first_new = first_new.unwrap();
         println!(
-            "MEASURED interruption_under_credit new_answer_first_packet_ms={} stale_packets_after_interruption={stale} (admission to first packet of the new answer at a local IPC reader, scripted service, host)",
+            "MEASURED interruption_under_capacity new_answer_first_packet_ms={} stale_packets_after_interruption={stale} (admission to first packet of the new answer at a local IPC reader, scripted service, host)",
             first_new.as_millis()
         );
-        // The cancelled answer still had about 38 s queued: 15 s of it in this
-        // worker. At speaking-speed credit that would have come first.
+        // The cancelled answer still had about 36 s queued, 15 s of it in this
+        // worker. At playback pace that would have come first.
         assert!(first_new < Duration::from_secs(1), "{first_new:?}");
-        assert!(stale <= 8, "{stale} stale packets");
+        assert!(stale <= 2, "{stale} stale packets");
     }
 
     // ---- Proposed typed outage events ------------------------------------
@@ -2824,7 +3100,6 @@ mod tests {
             quick_policy(),
             Options {
                 reporting: Reporting::Typed,
-                credit: AudioCredit::default(),
             },
         );
         let mut dial = rig.ready().await;
@@ -2847,7 +3122,8 @@ mod tests {
                 redial = Some(attempt);
             }
             rig.publish();
-            match rig.parent.data.receive::<Wire>().unwrap() {
+            // Statuses are packets too: each is counted and capacity returned.
+            match rig.take() {
                 Some(Wire::Output(ProviderOutput::Audio {
                     request, samples, ..
                 })) => {
@@ -2916,7 +3192,6 @@ mod tests {
             },
             Options {
                 reporting: Reporting::Typed,
-                credit: AudioCredit::default(),
             },
         );
         let mut dial = rig.ready().await;
@@ -2995,13 +3270,7 @@ mod tests {
         // The person continues after the endpointer cut the question. The
         // service says nothing about the cut-off request for the whole bound.
         for reporting in [Reporting::Legacy, Reporting::Typed] {
-            let mut rig = LiveRig::start_with(
-                quick_policy(),
-                Options {
-                    reporting,
-                    credit: AudioCredit::default(),
-                },
-            );
+            let mut rig = LiveRig::start_with(quick_policy(), Options { reporting });
             let mut dial = rig.ready().await;
             let cut = rig.speak(&mut dial, false, true).await;
             let resumed_at = Instant::now();

@@ -274,7 +274,14 @@ target/release/lamp-live directed /absolute/private/provider.json 60 /new/privat
 target/release/lamp-live directed /absolute/private/provider.json 45 /new/private/diagnostic-run --diagnostics
 target/release/lamp-live directed /absolute/private/provider.json 45 /new/private/aec-only-run --diagnostics --noise-suppression off
 target/release/lamp-live directed /absolute/private/provider.json 45 /new/private/ring-run --diagnostics --ring-channel-ceiling 24
+target/release/lamp-live directed /absolute/private/provider.json 45 /new/private/observed-run --cue-socket /absolute/private/session/cue.sock
 ```
+
+`--cue-socket` enables the bounded local [conversation lifecycle cues](live-session-cues.md)
+for event-triggered qualification. The consumer binds the private socket first.
+This metadata-only option is independent of PCM recording and does not change
+voice ownership or admission. A scheduling fault is recorded without blocking
+capture or cancellation.
 
 `--noise-suppression on|off` selects a controlled software-processing experiment
 before capture starts. The default is `on`, preserving `EchoProcessor::new(true)`;
@@ -324,8 +331,11 @@ operator deployment duties; the command does not stop services itself.
 
 The runtime writes a fresh private `events.jsonl` after a finite run, including
 failed trials. Trace storage is bounded at 20,000 events. Runtime output audio
-is bounded at 30 seconds of 24 kHz PCM, input handoff at 64 commands, and provider
-transport/IPC queues have separate limits. A trace failure cannot become a valid
+is bounded at 30 seconds of queued 24 kHz PCM through
+[provider output credits](provider-flow-control.md). This is a backlog limit,
+not an answer-duration limit. Input handoff stays at 64 commands, and provider
+transport/IPC queues have separate limits. Sustained playback-paced upstream
+delivery still needs qualification against Gemini's delivery watchdog. A trace failure cannot become a valid
 benchmark. A complete report with `completed_unscored` still needs a valid room
 recording, acoustic annotation and correctness review.
 
