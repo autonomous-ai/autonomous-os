@@ -1,4 +1,4 @@
-use crate::{Error, MAX_HANDLE_BYTES, MAX_TEXT_BYTES, Result};
+use crate::{Error, MAX_HANDLE_BYTES, MAX_TEXT_BYTES, OUTPUT_BUFFER_BYTES, OUTPUT_RATE, Result};
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr, sync::Arc, time::Duration};
 use tokio_tungstenite::tungstenite::{
@@ -51,8 +51,9 @@ pub struct Timeouts {
     pub setup: Duration,
     pub write: Duration,
     pub read: Duration,
-    /// Interruption request to the superseded response's idle completion. Only
-    /// the successor's activityEnd waits for it; its audio is never held.
+    /// Longest silence of an earlier response, after it was asked to stop,
+    /// before its idle completion. Only the next request's activityEnd waits
+    /// for it; that request's audio is never held.
     pub barrier: Duration,
     /// Ended input to the first output of its response.
     pub response: Duration,
@@ -63,8 +64,10 @@ pub struct Timeouts {
     pub completion: Duration,
     /// Ended input to idle completion, whatever progress is observed.
     pub turn: Duration,
-    /// How long decoded events may wait for the consumer before the session
-    /// fails. The socket is not read meanwhile, so nothing accumulates.
+    /// How long the consumer may accept no event at all while output waits.
+    /// A consumer paced by real-time playback takes one event per event's
+    /// worth of audio, so this must exceed the longest event (2 s) plus any
+    /// pause in playback that should be survived.
     pub deliver: Duration,
     pub keepalive: Duration,
 }
@@ -80,7 +83,7 @@ impl Default for Timeouts {
             stall: Duration::from_secs(10),
             completion: Duration::from_secs(15),
             turn: Duration::from_secs(300),
-            deliver: Duration::from_secs(2),
+            deliver: Duration::from_secs(30),
             keepalive: Duration::from_secs(15),
         }
     }
@@ -97,7 +100,7 @@ impl Timeouts {
             (self.stall, Duration::from_secs(60)),
             (self.completion, Duration::from_secs(60)),
             (self.turn, Duration::from_secs(600)),
-            (self.deliver, Duration::from_secs(10)),
+            (self.deliver, Duration::from_secs(120)),
             (self.keepalive, Duration::from_secs(60)),
         ] {
             if duration < Duration::from_millis(1) || duration > max {
@@ -146,16 +149,18 @@ pub enum Resumption {
     Request,
 }
 
-/// What to do when an interrupted request produced no output and the service
-/// sends no terminal event for it before `Timeouts::barrier`.
+/// What to do when the service, asked to interrupt a response, sends neither
+/// further output nor an idle completion for it within `Timeouts::barrier`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum UnansweredInterruption {
+pub enum BarrierPolicy {
     /// Fail the connection rather than guess which request owns later output.
     #[default]
-    Fail,
-    /// Treat the silent request as cancelled and let its successor proceed.
-    /// Unverified against the live service; see the session reliability notes.
-    AssumeCancelled,
+    Require,
+    /// Treat the silent response as over and let the next request proceed,
+    /// reporting [`crate::Event::BarrierAssumed`]. Output of the earlier
+    /// response that arrives before the next request is committed re-arms the
+    /// barrier. Unverified against the live service.
+    AssumeAfterQuiet,
 }
 
 /// Opaque server token for resuming conversation state on a new connection.
@@ -188,7 +193,8 @@ pub struct SessionConfig {
     pub(crate) timeouts: Timeouts,
     pub(crate) resumption: Resumption,
     pub(crate) resume: Option<ResumptionHandle>,
-    pub(crate) unanswered: UnansweredInterruption,
+    pub(crate) barrier: BarrierPolicy,
+    pub(crate) output_buffer: usize,
 }
 impl SessionConfig {
     /// Custom proxies are explicit WSS endpoints. Authentication belongs only in
@@ -206,7 +212,8 @@ impl SessionConfig {
             timeouts: Timeouts::default(),
             resumption: Resumption::Off,
             resume: None,
-            unanswered: UnansweredInterruption::Fail,
+            barrier: BarrierPolicy::Require,
+            output_buffer: OUTPUT_BUFFER_BYTES,
         })
     }
     pub fn google(credential: Credential) -> Result<Self> {
@@ -265,9 +272,18 @@ impl SessionConfig {
         self.resume = handle;
         self
     }
-    pub fn unanswered_interruption(mut self, policy: UnansweredInterruption) -> Self {
-        self.unanswered = policy;
+    pub fn barrier_policy(mut self, policy: BarrierPolicy) -> Self {
+        self.barrier = policy;
         self
+    }
+    /// Seconds of generated audio held for a consumer slower than the network
+    /// before the socket goes unread. The default holds 300 s.
+    pub fn output_buffer_seconds(mut self, seconds: u32) -> Result<Self> {
+        if !(1..=600).contains(&seconds) {
+            return Err(Error::InvalidConfiguration);
+        }
+        self.output_buffer = seconds as usize * 2 * OUTPUT_RATE as usize;
+        Ok(self)
     }
     pub(crate) fn request(&self) -> Result<Request> {
         let mut request = self

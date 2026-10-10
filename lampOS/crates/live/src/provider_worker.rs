@@ -250,6 +250,15 @@ fn forward(
             time_left.map(|left| left.as_millis())
         ),
         Event::Discarded { reason, .. } => discards.note(reason),
+        Event::BarrierAssumed {
+            superseded,
+            successor,
+            ..
+        } => eprintln!(
+            "lamp-live provider: no confirmation that request {:?} stopped; request {:?} proceeds on that assumption (unqualified ownership)",
+            superseded.map(RequestId::get),
+            successor.map(RequestId::get)
+        ),
     }
     Ok(())
 }
@@ -258,7 +267,7 @@ fn forward(
 /// once per worker so a recurring pattern is visible without unbounded output.
 #[derive(Default)]
 struct DiscardLog {
-    seen: [bool; 5],
+    seen: [bool; 4],
 }
 impl DiscardLog {
     fn note(&mut self, reason: Discard) {
@@ -267,7 +276,6 @@ impl DiscardLog {
             Discard::LateTerminal => 1,
             Discard::LateOutput => 2,
             Discard::UnownedOutput => 3,
-            Discard::UnansweredBarrier => 4,
         };
         if !std::mem::replace(&mut self.seen[index], true) {
             eprintln!(
@@ -2091,11 +2099,11 @@ mod tests {
         // The person starts a follow-up. The interruption that its explicit
         // activityStart requested, and a duplicate completion, arrive late.
         let second = rig.speak(&mut dial, false, false).await;
+        dial.service.send(provider_audio(66, 240)).await;
         dial.service
             .send(json!({"serverContent":{"interrupted":true}}))
             .await;
         dial.service.send(idle_complete()).await;
-        dial.service.send(provider_audio(66, 240)).await;
         rig.pump(Duration::from_millis(120)).await;
         assert!(
             rig.parent

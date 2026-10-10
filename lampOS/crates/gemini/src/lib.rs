@@ -14,8 +14,8 @@ pub mod testing;
 pub mod wire;
 
 pub use config::{
-    Credential, GOOGLE_ENDPOINT, Resumption, ResumptionHandle, SessionConfig, ThinkingLevel,
-    Timeouts, UnansweredInterruption,
+    BarrierPolicy, Credential, GOOGLE_ENDPOINT, Resumption, ResumptionHandle, SessionConfig,
+    ThinkingLevel, Timeouts,
 };
 pub use recovery::{
     Attempt, Connect, Context, Dialer, Failure, FailureReason, Notice, RecoveryPolicy, Stage,
@@ -31,9 +31,9 @@ pub const MAX_INPUT_SAMPLES: usize = 320;
 pub const MAX_INPUT_AGE: Duration = Duration::from_secs(1);
 pub const INPUT_QUEUE_CAPACITY: usize = 32;
 pub const EVENT_QUEUE_CAPACITY: usize = 16;
-/// Decoded events of the message being delivered while the event queue is full.
-/// The socket is not read while any remain, so this never grows with traffic.
-pub const OUTBOX_CAPACITY: usize = 32;
+/// Decoded output held for a consumer slower than the network, as real-time
+/// playback always is: 300 s of 24 kHz PCM. Past this the socket is not read.
+pub const OUTPUT_BUFFER_BYTES: usize = 300 * 2 * OUTPUT_RATE as usize;
 pub const MAX_HANDLE_BYTES: usize = 8_192;
 pub const MAX_OUTPUT_SAMPLES: usize = 48_000;
 pub const MAX_WIRE_BYTES: usize = 262_144;
@@ -143,6 +143,16 @@ pub enum Event {
         session: SessionId,
         reason: Discard,
     },
+    /// [`BarrierPolicy::AssumeAfterQuiet`] treated an earlier response as over
+    /// because the service, asked to interrupt it, stayed silent for
+    /// `Timeouts::barrier` without confirming. The service never said so:
+    /// ownership of `successor`'s answer rests on that assumption and is not
+    /// qualified evidence.
+    BarrierAssumed {
+        session: SessionId,
+        superseded: Option<RequestId>,
+        successor: Option<RequestId>,
+    },
 }
 
 /// Why a server message was dropped instead of being attached to a request.
@@ -158,9 +168,6 @@ pub enum Discard {
     LateOutput,
     /// Output or lifecycle with no request in progress.
     UnownedOutput,
-    /// Opt-in [`UnansweredInterruption::AssumeCancelled`] released a barrier
-    /// for a request that never produced output or a terminal event.
-    UnansweredBarrier,
 }
 
 /// What a caller may do about a connection that ended with this error.
