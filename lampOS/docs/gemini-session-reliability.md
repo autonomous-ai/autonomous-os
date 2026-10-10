@@ -56,9 +56,12 @@ its design and are covered by tests of the new one:
   would have lost the rest. Now the whole answer plays out and the link is
   replaced meanwhile.
 - The worker's queue of up to 384 packets (15 s) was not purged on
-  interruption, so under playback-paced credit the next answer would have
-  waited behind it. Now the first packet of the new answer follows admission
-  by 34-36 ms with 0 stale packets (host, scripted service).
+  interruption, so once output is paced by playback the next answer would
+  have waited behind it. Unsent output of a retired request is now pruned
+  (the shared output-capacity change) and cancelled output is purged from the
+  transport's buffer. The first packet of the new answer follows admission by
+  5 ms (host, scripted service); at most the two packets already
+  sent under outstanding capacity arrive late and are discarded.
 
 V1 measured the service closing a session nobody talks to after 86-198 s with
 WebSocket code 1008. That alone ended a V2 run after any long pause.
@@ -143,7 +146,7 @@ is evidence of correct ownership.
 | Event queue to the worker | 16 events | Events wait in the output buffer |
 | Consumer accepts nothing while output waits (`deliver`) | 30 s (was 2 s) | `Backpressure` |
 | Worker IPC backlog | high-water 384 packets, hard bound 512 | Worker stops taking provider events |
-| Worker packets per 2 ms tick | 8, and never beyond granted audio credit | Remainder waits |
+| Worker packets per 2 ms tick | 8, and never beyond granted output capacity | Remainder waits |
 | Silence of an earlier response after an interruption request (`barrier`) | 2 s | Policy above |
 | Earlier response still producing after an interruption request | 30 s (`response`) | `BarrierTimeout` |
 | Ended input to first output (`response`) | 30 s | `ResponseTimeout` |
@@ -179,19 +182,44 @@ retired, so the next answer is not delayed by audio nobody will hear.
 Timing relies on the service answering WebSocket pings during the long quiet
 period between generation and its idle completion.
 
-### Packet credit
+### Output capacity
 
-The coordinator's cumulative packet credit is not defined here; it belongs to
-the coordinator's owner. The worker has a provisional seam, `AudioCredit`: the
-total number of audio packets the coordinator has had room for since the
-worker started. The worker never sends audio beyond it. Lifecycle events wait
-behind the audio they follow; link status does not. With no credit source the
-worker behaves as before. What the provider side needs from the final design:
+The coordinator and the worker share the cumulative packet limit defined in
+[provider output capacity](provider-flow-control.md), which belongs to the
+coordinator's owner: `Control::ProviderOutputCapacity { through }`, granted
+from the free space of the coordinator's 30 s reply buffer, with at most two
+packets outstanding. The provisional `AudioCredit` seam this worker carried
+before that contract existed is gone.
 
-- Monotonic and cumulative, so a lost or repeated grant cannot double-count.
-- Counts audio packets only. Purged packets were never sent and never count.
-- Granted at playback pace, because the worker's own queue is 15 s deep.
-- IPC freshness (100 ms) still applies to every packet once sent.
+What the worker does with it:
+
+- Every packet consumes capacity: audio, lifecycle events, transcripts,
+  `Ready` and the proposed statuses alike. Nothing is sent without it.
+- Link status (`unavailable`, `recovered`) is queued ahead of audio but still
+  waits for capacity. At playback speed that is at most one packet, 40 ms. With
+  a full reply buffer and stopped playback it waits as long as playback does.
+- Unsent output of a retired request is pruned on every tick, before anything
+  is sent. Failure and link statuses are never pruned.
+
+A long answer therefore sits in four places, each bounded, from the speaker
+back to the service:
+
+| Holder | Bound |
+|---|---|
+| Coordinator reply buffer | 30 s (720,000 samples) |
+| Worker queue | 512 packets (20.5 s); stops taking events above 384 (15.4 s) |
+| Event queue to the worker | 16 events |
+| Transport output buffer | 300 s; beyond it the socket goes unread |
+
+At speaking speed the worker's queue falls below its high-water mark, and so
+takes one more event from the transport, about every 2 s: the playing time of
+the largest message. The `deliver` bound of 30 s therefore tolerates playback
+stopping for up to about 28 s with every holder full. Longer than that is
+treated as a consumer that has stopped: the connection ends with
+`Backpressure`, which is not recovered, and audio the transport still held is
+dropped. Holds of 4, 10 and 20 s are tested through the worker in real time.
+The 30 s bound itself is tested in the transport on a paused clock; the
+derived 28 s figure is not.
 
 ## Connection loss
 
@@ -276,10 +304,11 @@ later session.
 
 Also needed from the coordinator's side:
 
-- Cumulative audio packet credit, as described above.
-- `MAX_REPLY_SAMPLES` is a 30 s backlog. Without credit the worker still hands
-  a long answer over as fast as the IPC allows, so an answer generated more than
-  30 s ahead of playback reaches that bound.
+- When the statuses are adopted they are packets like any other: the
+  coordinator must count each one with `OutputReceiver::received` or the
+  capacity counters diverge.
+- A decision on whether `unavailable` should be able to pass a full reply
+  buffer. Today it cannot, by the rule that every packet reserves space.
 - A `ProviderConfig` option for `Resumption::Request` and the barrier policy.
 - A recovery during startup sends a second `Ready` that the startup poll
   rejects.
@@ -318,9 +347,9 @@ From `lampOS/`, with a fresh target directory:
 cargo fmt --all -- --check
 cargo clippy --locked --offline --workspace --all-targets -- -D warnings
 cargo test --locked --offline --workspace --no-fail-fast -- --test-threads=1
-cargo build --locked --offline --release -p lamp-live
+cargo build --locked --offline --release -p lamp-live -p lamp-voice-eval
 cargo test --locked --offline -p lamp-gemini --lib soak -- --ignored --nocapture
-cargo test --locked --offline -p lamp-live --lib provider_worker -- --ignored --nocapture --test-threads=1
+cargo test --locked --offline -p lamp-live --lib follows_output_capacity -- --ignored --nocapture --test-threads=1
 ```
 
 The last two are the prolonged conversations (about 150 s of CPU) and the
@@ -330,24 +359,37 @@ Transport scenarios run on a paused runtime clock, so their timings are exact
 rather than load-dependent. Worker scenarios run in real time, because the IPC
 and authority clocks cannot be paused.
 
+In the speaking-speed tests the harness stands in for the coordinator. It
+counts every packet with the shared `OutputReceiver`, grants capacity with the
+shared formula from the free space of a reply buffer, and drains that buffer
+at 24,000 samples per second of measured time. Time spent on hold or with
+nothing to play is never made up. The scripted service writes 2 s messages at
+ten times speaking speed, stalls for 3 s a third of the way in, then sends
+10 s with no gap, and withholds its idle completion for the answer's own
+length. The test fails if a block is lost, repeated or reordered, if a packet
+exceeds granted capacity, if the buffer overruns or never fills, if playback
+runs dry for 100 ms, or if playback ends at any time other than the answer's
+length plus the hold. **The real coordinator loop and speaker are not in these
+tests.**
+
 ### Host results
 
-macOS x86_64, Rust 1.96.0, source-only export of commit `7a556b3ff` outside
-the repository, fresh target directory:
+macOS x86_64, Rust 1.96.0, source-only export of merge commit `a09b305bc`
+outside the repository, fresh target directory:
 
 | Gate | Result |
 |---|---|
 | Formatting | pass |
 | Strict Clippy, workspace, all targets | pass |
-| Workspace tests, serial | 636 passed, 0 failed, 3 ignored |
-| Release build of `lamp-live` | pass |
-| Prolonged conversations (ignored by default) | pass: 4 seeds x 400 turns |
-| 60 s and 180 s real-time answers (ignored by default) | pass, run on `55193bb3c`; the worker is unchanged since except for two test scripts |
+| Workspace tests, serial | 755 passed, 0 failed, 3 ignored |
+| Release build of `lamp-live` and `lamp-voice-eval` | pass |
+| Prolonged conversations (ignored by default) | pass: 4 seeds x 400 turns, tallies unchanged |
+| 60 s and 180 s real-time answers (ignored by default) | pass, run in the working tree on the same source |
 
 `lamp-gemini` contributes 99 of those tests (81 unit, 6 setup, 12 codec) and
-the provider worker 33. The same gates also passed on `a7b575918` (635 tests)
-and `0489ef5d7` (635), and the first two code commits were each built, linted
-and tested for both crates on their own export before the next was made.
+the provider worker 36. The count is higher than the 636 recorded for
+`7a556b3ff` because the merge brought in the voice evaluator's suites.
+`crates/gemini/**` is byte-identical to `7a556b3ff`.
 
 ### Linux/ARM64 results
 
@@ -358,36 +400,43 @@ run under `qemu-aarch64` 7.2 user-mode emulation. **This is not the device**: it
 shows that the target builds, type-checks and behaves the same, and nothing
 about device timing, ALSA hardware or audio.
 
-| Gate | Commit | Result |
-|---|---|---|
-| Strict Clippy, workspace, all targets, ARM64 target | `7a556b3ff` | pass |
-| Release build of `lamp-live` | `7a556b3ff` | pass: ELF 64-bit ARM aarch64, dynamically linked |
-| `lamp-gemini` tests, debug and release builds | `7a556b3ff` | 99 passed, 0 failed, each |
-| Provider worker tests, release build | `7a556b3ff` | 33 passed, 0 failed |
-| Prolonged conversations, 4 seeds x 400 turns | `55193bb3c` | pass in 1,209 s; every tally identical to the host run |
-| Provider worker tests, debug build | `55193bb3c`, `0489ef5d7` | 31 and 30 of 33 passed |
-| Workspace tests, debug build, serial | `55193bb3c` | 672 passed, 2 failed, 3 ignored |
+All on merge commit `a09b305bc`:
+
+| Gate | Result |
+|---|---|
+| Strict Clippy, workspace, all targets, ARM64 target | pass |
+| Release build of `lamp-live` and `lamp-voice-eval` | pass: `lamp-live` is ELF 64-bit ARM aarch64, dynamically linked |
+| `lamp-gemini` tests, debug and release builds | 99 passed, 0 failed, each |
+| Provider worker tests, release build | 36 passed, 0 failed |
+| 60 s real-time answer, release build | pass: playback ended at 70.02 s after a 10.00 s hold; backlog peaked at 30.00 s |
+| Prolonged conversations, 4 seeds x 400 turns, release build | pass in 46 s; every tally identical to the host run |
+| Provider worker tests, debug build | 33 of 36 passed |
+| Workspace tests, release build, serial | 793 passed, 1 failed, 3 ignored |
 
 The workspace count is higher than on the host because Linux-only suites run
-there. Its two failures are provider worker tests, and they are the debug-build
-failures in the row above it.
+there. Its one failure is outside this work:
+`a_transport_that_closes_mid_trace_invalidates_the_attempt` in the voice
+evaluator's `physical_loopback` suite expected an abort naming a partial
+trace and got `session start failed: Broken pipe`. It passes on the host. It
+has not been investigated here and belongs to that crate's owner.
 
-Those failures are the test harness missing real-time deadlines, not a wrong
-result from the worker. The harness plays the coordinator: it must renew a
-100 ms input lease and a 250 ms heartbeat while the same single-threaded test
-process decodes megabytes of scripted audio in unoptimized emulated code. When
-the lease lapses the interaction controller revokes the turn, and the worker
-correctly drops that turn's audio (observed: completion with no audio). When
-the heartbeat lapses the worker exits (observed: broken pipe, connection
-refused). Which tests miss varies between runs; the 20 s credit-paced answer
-passed in one debug run and failed in the other. The same binaries built with
-optimization pass all 33 under the same emulation, and the debug build passes
-on the host. Whether a debug build keeps these deadlines on the device itself
-is not known.
+The three debug-build failures are the test harness missing real-time
+deadlines, not a wrong result from the worker. The harness plays the
+coordinator: it must renew a 100 ms input lease and a 250 ms heartbeat while
+the same single-threaded test process decodes megabytes of scripted audio in
+unoptimized emulated code. When the heartbeat lapses the worker exits
+(observed: broken pipe, connection refused); when output is not read in time
+the harness gives up (observed: no provider output within 5 s). They are the
+three tests that carry the most audio: the 80 s burst, the 20 s answer and
+the interruption of a 40 s answer. Earlier commits failed two or three of the
+same kind, varying between runs. The same binaries built with optimization
+pass all 36 under the same emulation, and the debug build passes on the host.
+Whether a debug build keeps these deadlines on the device itself is not known.
 
 Measured under emulation, release build, same boundaries as the host table
-below: interruption to first packet of the new answer 37 ms with 0 stale
-packets; 80 s burst in 1.2 s; 20 s answer with a 4 s pause in 23.97 s.
+below: interruption to first packet of the new answer 9 ms with 1 stale
+packet; 80 s burst in 4.0 s; 20 s answer with a 4 s hold played out in
+24.01 s.
 
 ### Measured on the host
 
@@ -396,14 +445,19 @@ None of these is a network, answer-latency or audible measurement.
 
 | Measurement | Boundary | Result |
 |---|---|---|
-| 20 s answer, 4 s playback pause | First credit to idle completion at a local IPC reader | 23.97 s; service wrote it in 2.1 s; 500 packets |
-| 60 s answer, 10 s pause | Same | 69.96 s; written in 6.3 s; 1,500 packets |
-| 180 s answer, 20 s pause | Same | 199.97 s; written in 18.9 s; 4,500 packets |
-| Interruption under credit | Admission to first packet of the new answer | 34-36 ms; 0 stale packets |
-| 80 s of audio with no credit limit | Service write to local IPC reader | 1.5 s for 2,000 packets |
-| Stop during a hung reconnect | Control datagram to worker task end | 2.4-24.2 ms over 10 runs |
+| 20 s answer, 5 s reply buffer, 4 s playback hold | First tick to the last sample leaving a modeled speaker | 24.03 s; completion received at 20.00 s; service wrote it in 4.3 s; 500 packets; backlog peaked at 5.00 s; 3 ms run dry |
+| 60 s answer, 30 s reply buffer, 10 s hold | Same | 70.03 s; completion at 60.01 s; written in 8.5 s; 1,500 packets; peak 30.00 s; 1 ms run dry |
+| 180 s answer, 30 s reply buffer, 20 s hold | Same | 200.05 s; completion at 180.01 s; written in 21.2 s; 4,500 packets; peak 30.00 s; 1 ms run dry |
+| Interruption of a 40 s answer under capacity | Admission to first packet of the new answer | 5 ms in each of 2 runs; 1 stale packet each, of at most 2 possible |
+| 80 s of audio, capacity returned on receipt | Service write to local IPC reader | 4.0-4.3 s for 2,000 packets over 3 runs |
+| Stop during a hung reconnect | Control datagram to worker task end | 2.6-3.8 ms over 3 runs; 2.4-24.2 ms over 10 runs before the merge |
 | 60 turns with injected failures (virtual) | Seed 1 | 5.3 min; 27 completed, 14 cancelled, 5 settled, 13 lost, 27 recoveries |
 | 4 x 400 turns with injected failures (virtual) | Seeds 2, 3, 5, 8 | 52-70 min each; 843 completed, 417 cancelled, 107 settled, 232 lost, 477 recoveries, 145 assumed barriers in total |
+
+The 80 s burst took 1.5 s before the merge. The difference is the capacity
+contract doing its job: with two packets outstanding and a reader on a 2 ms
+cadence, delivery to the coordinator is limited to about twenty times speaking
+speed in this harness.
 
 In every scripted conversation each request ended in exactly one outcome, no
 audio was delivered under another request's name, and the service received
@@ -411,22 +465,39 @@ each request's input exactly once across all sessions.
 
 ## Integration notes
 
-Branch `gemini-voice`, on top of shared checkpoint `23bde4873`:
+Branch `gemini-voice`. It contains shared checkpoint `4b8436d23` of
+`lamp-v2-chat` by merge:
 
 | Commit | Content |
 |---|---|
 | `fbf9ecc3c` | First round: ownership rules, delivery, bounded recovery |
 | `9f22e541d` | Output buffer for speaking speed, drain after failure, barrier model and policy |
-| `55193bb3c` | Supervisor recovers while output drains; worker purge, credit seam, typed statuses |
+| `55193bb3c` | Supervisor recovers while output drains; worker purge, typed statuses |
 | `a7b575918` | Service probe tool |
 | `0489ef5d7` | Scripted audio built outside the real-time window in two worker tests |
 | `7a556b3ff` | Bound on an interrupted response that keeps producing |
-| the commit after it | This document |
+| `93a30b3cd` | This document, first version |
+| the merge after it | `lamp-v2-chat` `4b8436d23`; the worker moves from its provisional seam to the shared output-capacity contract |
+| the commit after that | This document, for the merged tree |
 
 Changed files: `crates/gemini/**`, `crates/live/src/provider_worker.rs`, this
 document, and the barrier sentence in `docs/live-runtime.md`. No shared
 manifest, lock file, coordinator, admission, audio or choreography file is
 touched, and `ProviderInput` / `ProviderOutput` are unchanged on the wire.
+
+The merge conflicted only in `provider_worker.rs`. Everything the shared
+change added there is kept as it was: the capacity sender, the packet-size
+constant, the pruning rule and its tests. Two things differ from the shared
+version, both because this worker's queue also carries statuses: the pruning
+rule runs over that queue and never removes a status, and its unit test
+checks that. The worker's own speaking-speed tests now use the shared
+`OutputReceiver` exactly as the coordinator does.
+
+`docs/provider-flow-control.md` still says this transport has a two-second
+no-consumption watchdog and that playback-paced delivery is unqualified until
+an integrated real-time test passes. That was true of `fbf9ecc3c`. The bound is
+now 30 s and the 60 s and 180 s real-time tests below pass on the host. That
+document belongs to the coordinator's owner and is left for them to update.
 
 What an integrator will notice:
 
